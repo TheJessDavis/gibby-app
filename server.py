@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.6-slots-ui"
+VERSION = "1.7-consecutive"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -64,7 +64,7 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
-                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0")):
+                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.commit()
@@ -91,6 +91,9 @@ def seed_registrations(c, cls):
 
 def enrollment(c, class_id):
     return c.execute("SELECT COUNT(*) FROM registrations WHERE class_id=? AND refunded=0",(class_id,)).fetchone()[0]
+
+def tmin(s):
+    dt = datetime.datetime.strptime(s.strip(), "%I:%M %p"); return dt.hour*60 + dt.minute
 
 def hash_pw(pw, salt=None):
     salt = salt or secrets.token_hex(16)
@@ -474,27 +477,37 @@ class H(http.server.BaseHTTPRequestHandler):
             if not b.get("photo"): miss.append("photo")
             if miss: return self.send_json({"error":"Missing required fields","fields":miss},400)
             c=db()
-            sid = b.get("slot_id")
-            # RACE-SAFE claim: atomically flip the slot from available->claimed in a
-            # single conditional UPDATE. SQLite serializes writers, so of two
-            # simultaneous claims exactly one gets rowcount==1; the other gets 0 and
-            # is rejected here, before any class row is created. No double-booking.
-            if sid is not None:
-                claimed = c.execute(
-                    "UPDATE slots SET status='claimed' WHERE id=? AND status='available'", (sid,)).rowcount
-                if claimed != 1:
-                    c.close()
-                    return self.send_json({"error":"That slot was just claimed by someone else. Please pick another time."}, 409)
+            ids = b.get("slot_ids") or ([b["slot_id"]] if b.get("slot_id") else [])
+            ids = [int(x) for x in ids]
+            slot_date, slot_time, room = b.get("slot_date"), b.get("slot_time"), b.get("room")
+            if ids:
+                ph = ",".join("?"*len(ids))
+                rows = [dict(r) for r in c.execute(f"SELECT * FROM slots WHERE id IN ({ph})", ids).fetchall()]
+                if len(rows) != len(ids):
+                    c.close(); return self.send_json({"error":"One of those slots no longer exists."},400)
+                if len({r["date"] for r in rows}) != 1 or len({r["room"] for r in rows}) != 1:
+                    c.close(); return self.send_json({"error":"Slots must be the same day and same room."},400)
+                rows.sort(key=lambda r: tmin(r["start"]))
+                for a, nxt in zip(rows, rows[1:]):
+                    if tmin(a["end"]) != tmin(nxt["start"]):
+                        c.close(); return self.send_json({"error":"Slots must be back-to-back (consecutive)."},400)
+                # RACE-SAFE: claim ALL selected slots atomically; if any got taken
+                # first, rowcount < N, we roll back (no commit) and reject.
+                claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available'", ids).rowcount
+                if claimed != len(ids):
+                    c.close(); return self.send_json({"error":"One of those slots was just claimed by someone else. Please reselect."},409)
+                slot_date, room = rows[0]["date"], rows[0]["room"]
+                slot_time = rows[0]["start"] + " – " + rows[-1]["end"]
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
-                length,pre_class,own_materials,material_cost,needs_volunteer,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
-                (b.get("title"),u["id"],b.get("slot_date"),b.get("slot_time"),b.get("room"),
+                length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,status,created)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?, 'pending', ?)""",
+                (b.get("title"),u["id"],slot_date,slot_time,room,
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline"),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
-                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, now()))
+                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), now()))
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
             mailer.send(admins, "New class submission",
@@ -625,9 +638,10 @@ class H(http.server.BaseHTTPRequestHandler):
             approve_and_publish(c, cls)
         else:
             c.execute("UPDATE classes SET status='incomplete', admin_note=? WHERE id=?",(b.get("note",""),cid))
-            # release the slot back to available
-            c.execute("UPDATE slots SET status='available' WHERE date=? AND start=? AND room=?",
-                      (cls["slot_date"], (cls["slot_time"] or "").split(" ")[0], cls["room"]))
+            # release all claimed slots back to available
+            sids = json.loads(cls.get("slot_ids") or "[]")
+            if sids:
+                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(sids))})", sids)
             subj, body = mailer.tmpl_incomplete(cls, instr, b.get("note","")); mailer.send(instr["email"], subj, body)
         c.commit(); c.close()
         return self.send_json({"ok":True})

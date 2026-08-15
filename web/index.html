@@ -96,6 +96,10 @@
   .slotcard .st{font-size:14.5px;font-weight:800;letter-spacing:-.01em;line-height:1.1}
   .slotcard .sr{font-size:10.5px;font-weight:700;opacity:.68;margin-top:5px}
   .sc-y{background:#F7D64B}.sc-p{background:#F4A9C8}.sc-b{background:#A9C7EB}.sc-g{background:#AFD0A6}.sc-v{background:#C6B4F0}
+  .slotcard.sel{box-shadow:0 0 0 3px var(--ink),0 6px 14px rgba(30,22,10,.14)}
+  .selbar{position:fixed;bottom:16px;left:16px;right:16px;max-width:408px;margin:0 auto;background:var(--ink);color:#fff;border-radius:18px;padding:12px 12px 12px 18px;display:flex;align-items:center;gap:12px;z-index:30;box-shadow:0 12px 26px rgba(0,0,0,.28)}
+  .selbar .a{font-size:14px;font-weight:800}.selbar .b{font-size:11px;color:rgba(255,255,255,.62);font-weight:700;margin-top:2px}
+  .selbar button{margin-left:auto;flex:none;border:none;background:var(--yellow);color:var(--ink);font-weight:800;font-size:14px;padding:11px 16px;border-radius:12px;cursor:pointer;font-family:inherit}
 </style>
 </head>
 <body>
@@ -550,21 +554,44 @@ async function renderInstr(tab){
   return instrMine();
 }
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
+let DAYSLOTS=[], SEL=[];
+function tmin(t){ const m=(t||'').trim().match(/(\d+):(\d+)\s*(AM|PM)/i); if(!m)return 0; let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12; return h*60 + +m[2]; }
 async function instrOpen(){
   const {slots} = await api('/api/slots');
   if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
   const days=[...new Set(slots.map(s=>s.date))];
-  if(!days.includes(SLOTDAY)) SLOTDAY=days[0];
-  const dayslots=slots.filter(s=>s.date===SLOTDAY);
+  if(!days.includes(SLOTDAY)){ SLOTDAY=days[0]; SEL=[]; }
+  DAYSLOTS = slots.filter(s=>s.date===SLOTDAY).sort((a,b)=>tmin(a.start)-tmin(b.start));
+  const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).filter(Boolean).sort((a,b)=>tmin(a.start)-tmin(b.start));
+  const range = sel.length ? sel[0].start+' – '+sel[sel.length-1].end : '';
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
-    <p class="sub">Slots are set by admin. Pick one, then fill the class form.</p>
+    <p class="sub">Tap a slot, or tap a run of back-to-back slots in the same room for a longer class.</p>
     <div class="daytabs">${days.map(d=>{const p=d.split(', ');return `<button class="daytab ${d===SLOTDAY?'on':''}" onclick="pickDay('${d}')">${esc(p[1]||d)}<small>${esc(p[0]||'')}</small></button>`;}).join('')}</div>
     <div class="tip">🕒 <span>Book an extra 30-minute slot before <b>and</b> after your class for setup and cleanup.</span></div>
-    <div class="slotgrid">${dayslots.map((s,i)=>`<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]}" onclick='openForm(${JSON.stringify(s)})'>
-      <span class="sg">${SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
-      <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`).join('')}</div>`;
+    <div class="slotgrid">${DAYSLOTS.map((s,i)=>{const on=SEL.includes(s.id);return `<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]} ${on?'sel':''}" onclick="toggleSlot(${s.id})">
+      <span class="sg">${on?'✓':SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
+      <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`;}).join('')}</div>
+    ${sel.length?`<div class="selbar"><div><div class="a">${sel.length} slot${sel.length>1?'s':''} · ${esc(range)}</div><div class="b">${esc(sel[0].room)}${sel.length>1?' · consecutive':''}</div></div><button onclick="confirmSel()">Continue →</button></div>`:''}`;
 }
-function pickDay(d){ SLOTDAY=d; instrOpen(); }
+function pickDay(d){ SLOTDAY=d; SEL=[]; instrOpen(); }
+function toggleSlot(id){
+  const s=DAYSLOTS.find(x=>x.id===id);
+  if(SEL.length===0){ SEL=[id]; }
+  else {
+    const sel=SEL.map(x=>DAYSLOTS.find(y=>y.id===x)).sort((a,b)=>tmin(a.start)-tmin(b.start));
+    const first=sel[0], last=sel[sel.length-1];
+    if(SEL.includes(id)) SEL = (id===first.id||id===last.id) ? SEL.filter(x=>x!==id) : [id];
+    else if(s.room===first.room && tmin(s.start)===tmin(last.end)) SEL.push(id);
+    else if(s.room===first.room && tmin(s.end)===tmin(first.start)) SEL.push(id);
+    else SEL=[id];
+  }
+  instrOpen();
+}
+function confirmSel(){
+  const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).sort((a,b)=>tmin(a.start)-tmin(b.start));
+  openForm({ date:sel[0].date, room:sel[0].room, start:sel[0].start, end:sel[sel.length-1].end,
+    time:sel[0].start+' – '+sel[sel.length-1].end, ids:SEL.slice() });
+}
 async function instrMine(){
   const {classes} = await api('/api/classes/mine'); window.__classes=classes;
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2><p class="sub">${classes.length} submitted.</p>
@@ -663,11 +690,10 @@ async function submitClass(){
     alcohol:alc, max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     headline:$('#f_head').value, subtitle:$('#f_sub').value, photo:PHOTO,
-    slot_id:SUBMIT_SLOT.id, slot_date:SUBMIT_SLOT.date,
-    slot_time:SUBMIT_SLOT.start+' – '+SUBMIT_SLOT.end, room:SUBMIT_SLOT.room,
+    slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date, room:SUBMIT_SLOT.room,
     supplies:[]
   };
-  try{ await api('/api/classes','POST',body); renderInstr('mine'); }
+  try{ await api('/api/classes','POST',body); SEL=[]; renderInstr('mine'); }
   catch(e){ const x=$('#ferr'); x.textContent=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message); x.classList.add('show'); window.scrollTo(0,0); }
 }
 
