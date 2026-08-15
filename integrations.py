@@ -96,8 +96,8 @@ def _eastern_offset(dt):
     """US Eastern offset (hours, negative) for a naive local datetime. EDT (-4)
     from the 2nd Sunday of March 02:00 to the 1st Sunday of November 02:00, else EST (-5)."""
     y = dt.year
-    second_sun_mar = [d for d in range(1, 32) if datetime.date(y, 3, d).weekday() == 6][1]
-    first_sun_nov  = [d for d in range(1, 32) if datetime.date(y, 11, d).weekday() == 6][0]
+    second_sun_mar = [d for d in range(1, 15) if datetime.date(y, 3, d).weekday() == 6][1]
+    first_sun_nov  = [d for d in range(1, 8)  if datetime.date(y, 11, d).weekday() == 6][0]
     start = datetime.datetime(y, 3, second_sun_mar, 2)
     end   = datetime.datetime(y, 11, first_sun_nov, 2)
     return -4 if start <= dt < end else -5

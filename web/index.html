@@ -44,6 +44,10 @@
   input:focus,select:focus,textarea:focus{border-color:var(--purple-deep)}
   textarea{min-height:80px;resize:vertical;line-height:1.4}
   .two{display:flex;gap:10px}.two>div{flex:1}
+  .chkgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px}
+  .chk{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;background:var(--white);border:2px solid var(--line);border-radius:12px;padding:10px 12px;cursor:pointer;margin:0}
+  .chk input{width:auto;margin:0;accent-color:var(--purple-deep)}
+  .volbox{background:#EAE0FA;border-radius:12px;padding:11px 13px;margin-top:10px;font-size:12px;font-weight:700;color:#5B3FB0;line-height:1.5}
   .seg{display:flex;gap:8px}
   .seg button{flex:1;border:2px solid var(--line);background:#fff;border-radius:14px;padding:11px;font-weight:800;cursor:pointer;color:var(--ink)}
   .seg button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
@@ -87,7 +91,10 @@
 <div class="app">
   <div class="top" id="top" style="display:none">
     <div><div class="brand">The Gibby</div><div class="who" id="who"></div></div>
-    <button class="out" onclick="logout()">Sign out</button>
+    <div style="display:flex;gap:8px">
+      <button class="out" id="switchbtn" style="display:none;background:var(--purple);color:#fff" onclick="switchMode()"></button>
+      <button class="out" onclick="logout()">Sign out</button>
+    </div>
   </div>
   <div class="view" id="view"></div>
 </div>
@@ -105,8 +112,10 @@ async function api(path, method='GET', body){
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
 
-let ME=null;
+let ME=null, VIEWAS=null;
 function showErr(id,msg){ const x=$('#'+id); if(x){x.textContent=msg; x.classList.add('show');} }
+function actingRole(){ return (ME && ME.role==='admin') ? (VIEWAS||'admin') : (ME?ME.role:null); }
+function switchMode(){ VIEWAS = (VIEWAS==='admin'?'instructor':'admin'); boot(); }
 async function boot(){
   const params=new URLSearchParams(location.search);
   if(params.get('reset')){ $('#top').style.display='none'; return renderReset(params.get('reset')); }
@@ -115,8 +124,12 @@ async function boot(){
   if(!user){ renderLogin(); $('#top').style.display='none'; return; }
   if(user.must_change_pw){ $('#top').style.display='flex'; $('#who').textContent=user.name; return renderChangePw(); }
   $('#top').style.display='flex';
-  $('#who').textContent = user.name+' · '+user.role;
-  if(user.role==='admin') renderAdmin('dashboard'); else renderInstr('open');
+  if(VIEWAS===null) VIEWAS = user.role;
+  const sb=$('#switchbtn');
+  if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = VIEWAS==='admin'?'Instructor view':'Admin view'; }
+  else sb.style.display='none';
+  $('#who').textContent = user.name+' · '+(user.role==='admin' ? (VIEWAS==='admin'?'admin':'instructor mode') : user.role);
+  if(actingRole()==='admin') renderAdmin('dashboard'); else renderInstr('open');
 }
 function renderChangePw(){
   $('#view').innerHTML=`<div class="login-wrap">
@@ -184,7 +197,7 @@ function renderLogin(){
   $('#top').style.display='none';
   $('#view').innerHTML = `
    <div class="login-wrap">
-     <div class="logo"><img src="opening.png" alt="The Gibby"></div>
+     <div class="logo"><img src="opening.png?v=2" alt="The Gibby"></div>
      <h2 style="font-size:34px">The Gibby</h2>
      <p class="sub">Class Manager. Sign in to continue.</p>
      <div style="text-align:left;max-width:340px;margin:0 auto">
@@ -203,7 +216,7 @@ async function doLogin(){
     boot();
   }catch(e){ const x=$('#lerr'); x.textContent=e.message; x.classList.add('show'); }
 }
-async function logout(){ await api('/api/logout','POST'); ME=null; boot(); }
+async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; boot(); }
 
 /* ---------------- admin ---------------- */
 async function renderAdmin(tab){
@@ -388,6 +401,8 @@ async function adminAll(){
 }
 const STMAP={approved:['appr','approved'],incomplete:['inc','sent back'],cancelled:['inc','cancelled'],
   instructor_review:['ir','instructor review'],pending:['pend','pending']};
+const VOLUNTEERS=[['Maya Alvarez','maya.a@example.com'],['Theo Brandt','theo.b@example.com'],
+  ['Priya Nair','priya.n@example.com'],['Sam Okafor','sam.o@example.com']];
 function cardCls(c){
   const [pc,pt]=STMAP[c.status]||STMAP.pending;
   const pill = `<span class="pill ${pc}">${pt}</span>`;
@@ -397,18 +412,22 @@ function cardCls(c){
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
     <div class="meta" style="margin-top:8px">${esc(c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
-    ${c.status==='pending' && ME.role==='admin' ? `
+    ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
+    ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
+    ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
+    ${c.needs_volunteer && actingRole()==='instructor' ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Volunteer requested</div>`:''}
+    ${c.status==='pending' && actingRole()==='admin' ? `
       <div class="two" style="margin-top:14px">
         <button class="btn warn" onclick="markIncomplete(${c.id})">Send back</button>
         <button class="btn green" onclick="approve(${c.id})">Approve</button></div>
       <button class="btn ghost" style="margin-top:8px" onclick="openEditForm(${c.id})">Edit &amp; return to instructor</button>`:''}
-    ${c.status==='instructor_review' && ME.role==='instructor' ? `
+    ${c.status==='instructor_review' && actingRole()==='instructor' ? `
       <div class="ok-note" style="margin-top:12px;background:#DCE8F5;color:#2c5b8a">An admin edited this class. Review the details above, then approve to publish or send it back.</div>
       ${c.admin_note?`<div class="meta" style="margin-top:6px">Admin note: ${esc(c.admin_note)}</div>`:''}
       <div class="two" style="margin-top:10px">
         <button class="btn warn" onclick="instrDecline(${c.id})">Send back</button>
         <button class="btn green" onclick="instrApprove(${c.id})">Approve &amp; publish</button></div>`:''}
-    ${c.status==='instructor_review' && ME.role==='admin' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Waiting on ${esc(c.instructor_name)} to approve your edits</div>`:''}
+    ${c.status==='instructor_review' && actingRole()==='admin' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Waiting on ${esc(c.instructor_name)} to approve your edits</div>`:''}
     ${c.status==='approved' ? `<div class="ok-note" style="margin-top:12px">✓ Published. Eventbrite ID ${esc((c.external_ids||{}).eventbrite_id||'—')}</div>`:''}
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
@@ -416,7 +435,7 @@ function cardCls(c){
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <div id="roster${c.id}"></div>`:''}
-    ${ME.role==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
+    ${actingRole()==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
@@ -482,7 +501,8 @@ async function loadTplOptions(){
   const sel=$('#f_tpl'); if(sel) sel.innerHTML='<option value="">None, start blank</option>'+templates.map((t,i)=>`<option value="${i}">${esc(t.title)}</option>`).join('');
 }
 function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+i];
-  $('#f_title').value=t.title; $('#f_desc').value=t.description; $('#f_age').value=t.age; $('#f_head').value=t.title.toUpperCase(); }
+  $('#f_title').value=t.title; $('#f_desc').value=t.description; $('#f_head').value=t.title.toUpperCase();
+  const c=document.querySelector('#f_ages input[value="'+t.age+'"]'); if(c){c.checked=true; ageChanged();} }
 async function renderInstr(tab){
   $('#view').innerHTML = `
     <div class="tabs">
@@ -515,12 +535,27 @@ function openForm(slot){
     <label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select>
     <label>Class title</label><input id="f_title">
     <label>Description</label><textarea id="f_desc"></textarea>
-    <label>Age range</label>
-    <select id="f_age"><option>All Ages</option><option>Toddlers</option><option>Ages 7–9</option>
-      <option>Ages 9–12</option><option>Ages 16+</option><option>Ages 21+</option></select>
+
+    <label>Class length</label>
+    <select id="f_len"><option value="">Select length…</option>
+      <option>30 minutes</option><option>1 hour</option><option>1.5 hours</option><option>2 hours</option>
+      <option>2.5 hours</option><option>3 hours</option><option>3.5 hours</option><option>4 hours</option></select>
+
+    <label>Age range (choose all that apply)</label>
+    <div class="chkgrid" id="f_ages">${['All Ages','Toddlers','Ages 7–9','Ages 9–12','Ages 16+','Ages 21+'].map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
+
+    <div id="f_volwrap" class="hidden">
+      <label>Do you need a volunteer to assist with this class?</label>
+      <div class="seg" id="f_vol"><button class="on" data-v="no" onclick="segPick(this)">No</button><button data-v="yes" onclick="segPick(this)">Yes</button></div>
+    </div>
+
     <label>Will alcohol be available for purchase?</label>
     <div class="seg" id="f_alc"><button class="on" data-v="no" onclick="alcSel(this)">No</button>
       <button data-v="yes" onclick="alcSel(this)">Yes</button></div>
+
+    <label>Anything students need to bring or do before class? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+    <textarea id="f_pre" placeholder="e.g. Email a photo of your pet at least 3 days before class."></textarea>
+
     <div class="two"><div><label>Max</label><input id="f_max" type="number" value="16" oninput="calc()"></div>
       <div><label>Min</label><input id="f_min" type="number" value="6" oninput="calc()"></div></div>
 
@@ -530,10 +565,14 @@ function openForm(slot){
     <label>Graphic headline</label><input id="f_head" placeholder="e.g. STAINED GLASS">
     <label>Script subtitle (optional)</label><input id="f_sub" placeholder="e.g. Mini Terrarium">
 
+    <label style="margin-top:16px">Materials</label>
+    <label class="chk" style="margin:4px 0"><input type="checkbox" id="f_own" onchange="calc()"> I'm providing my own materials</label>
+    <label>Material cost per student ($)</label><input id="c_mat" type="number" value="8" oninput="calc()">
+    <div class="hint" id="matnote"></div>
+
     <label style="margin-top:16px">Pricing</label>
     <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc()"></div>
       <div><label style="margin-top:0">Planned</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
-    <label>Supply cost / student ($)</label><input id="c_mat" type="number" value="8" oninput="calc()">
     <div class="calc">
       <div class="o"><span>Recommended ticket</span><b class="hero" id="o_t">$0</b></div>
       <div class="o"><span>Your pay @ planned</span><b id="o_p">$0</b></div>
@@ -546,22 +585,37 @@ function openForm(slot){
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   calc(); loadTplOptions();
 }
-function alcSel(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
-  if(b.dataset.v==='yes') $('#f_age').value='Ages 21+'; }
+const KID_AGES=['Toddlers','Ages 7–9','Ages 9–12'];
+function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
+function ageChanged(){ const kid=selectedAges().some(a=>KID_AGES.includes(a)); $('#f_volwrap').classList.toggle('hidden', !kid); }
+function alcSel(b){ segPick(b);
+  if(b.dataset.v==='yes'){ const c=document.querySelector('#f_ages input[value="Ages 21+"]'); if(c){c.checked=true; ageChanged();} } }
 function onPhoto(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
   r.onload=ev=>{PHOTO=ev.target.result; $('#f_photo').innerHTML='<img src="'+PHOTO+'">';}; r.readAsDataURL(f); }
 function calc(){
   const pay=+$('#c_pay').value||0, plan=Math.max(1,+$('#c_plan').value||1), mat=+$('#c_mat').value||0;
+  const own=$('#f_own') && $('#f_own').checked;
   const ticket=Math.ceil(mat + (pay/0.6)/plan);
-  const rev=ticket*plan, pool=Math.max(0,rev-mat*plan), yourPay=pool*0.6;
+  const rev=ticket*plan, pool=Math.max(0,rev-mat*plan);
+  const reimb = own ? mat*plan : 0;             // instructor providing materials -> reimbursed
+  const yourPay = pool*0.6 + reimb;
   $('#o_t').textContent=money(ticket); $('#o_p').textContent=money(yourPay);
-  if(!$('#f_ticket').dataset.t)$('#f_ticket').value=ticket;
-  if(!$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
+  const note=$('#matnote');
+  if(note) note.textContent = own
+    ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is added to your pay.`
+    : 'The Gibby provides materials; the ticket price covers them.';
+  if($('#f_ticket') && !$('#f_ticket').dataset.t)$('#f_ticket').value=ticket;
+  if($('#f_pay') && !$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
 }
 async function submitClass(){
   const alc = $('#f_alc').querySelector('.on').dataset.v==='yes';
+  const ages = selectedAges();
+  const kid = ages.some(a=>KID_AGES.includes(a));
+  const vol = kid && $('#f_vol').querySelector('.on').dataset.v==='yes';
   const body = {
-    title:$('#f_title').value, description:$('#f_desc').value, age_range:$('#f_age').value,
+    title:$('#f_title').value, description:$('#f_desc').value,
+    age_range: ages.join(', '), length:$('#f_len').value, pre_class:$('#f_pre').value,
+    needs_volunteer: vol, own_materials: $('#f_own').checked, material_cost:+$('#c_mat').value,
     alcohol:alc, max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     headline:$('#f_head').value, subtitle:$('#f_sub').value, photo:PHOTO,
