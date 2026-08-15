@@ -317,7 +317,15 @@ async function adminConnections(){
       <button class="btn ${it.status==='connected'?'warn':'dark'}" style="margin-top:12px"
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
         ${it.status==='connected'?'Disconnect':'Connect'}</button></div>`).join('')}
+    <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
+      <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
+}
+async function testEmail(){
+  const r=await api('/api/test-email','POST',{});
+  alert(r.live
+    ? 'Test email SENT to '+r.to+' from '+r.from+'.\nCheck your inbox (and spam).'
+    : 'Email is still in DRY-RUN, so nothing was actually sent.\nAdd SMTP settings + EMAIL_LIVE=true to send for real.\n(Would have gone to '+r.to+' from '+r.from+'.)');
 }
 async function toggleInteg(id,action){ await api('/api/integrations/'+id+'/'+action,'POST'); adminConnections(); }
 

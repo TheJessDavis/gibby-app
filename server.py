@@ -413,6 +413,15 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("UPDATE users SET pw_hash=?, pw_salt=?, must_change_pw=0 WHERE id=?",(h,s,row["user_id"]))
             c.execute("DELETE FROM password_resets WHERE token=?",(tok,)); c.commit(); c.close()
             return self.send_json({"ok":True})
+        if p == "/api/test-email":
+            u = self.require("admin")
+            if not u: return
+            to = (self.read_json().get("to") or u["email"]).strip()
+            cfg = mailer.load_email_config()
+            mailer.send(to, "Gibby Class Manager test email",
+                "This is a test from your Gibby Class Manager. If you received this, email is working.", cfg)
+            return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
+                "live": bool(cfg["email_live"] and cfg["smtp_host"])})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return
