@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.3-email-guards"
+VERSION = "2.4-error-boundaries"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -64,6 +64,10 @@ def init_db():
       email_type TEXT NOT NULL, sent_at TEXT NOT NULL,
       recipients INTEGER DEFAULT 0, delivered INTEGER DEFAULT 0);
     CREATE UNIQUE INDEX IF NOT EXISTS email_log_once ON email_log(class_id, email_type);
+    -- Browser-side render/action failures reported by the UI error boundaries.
+    CREATE TABLE IF NOT EXISTS client_errors(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, section TEXT, message TEXT,
+      stack TEXT, path TEXT, email TEXT, role TEXT, agent TEXT);
     CREATE TABLE IF NOT EXISTS audit_log(
       id INTEGER PRIMARY KEY AUTOINCREMENT, class_id INTEGER,
       prev_status TEXT, new_status TEXT, actor_id INTEGER,
@@ -496,6 +500,14 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json({"classes": self._classes("")})
+        if p == "/api/client-errors":   # what the UI error boundaries have caught
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM client_errors ORDER BY id DESC LIMIT 100").fetchall()]
+            c.close()
+            return self.send_json({"errors": rows})
         if p == "/api/email-log":   # read-only record of which automated emails went out
             u = self.require("admin")
             if not u: return
@@ -590,6 +602,23 @@ class H(http.server.BaseHTTPRequestHandler):
             if "gibby_session" in ck:
                 c=db(); c.execute("DELETE FROM sessions WHERE token=?",(ck["gibby_session"].value,)); c.commit(); c.close()
             return self.send_json({"ok":True}, cookie="gibby_session=; Path=/; Max-Age=0")
+        if p == "/api/client-error":
+            # Deliberately unauthenticated: boundaries must be able to report a
+            # failure that happened before or during sign-in. Fields are truncated
+            # and the table is capped so this cannot be used to fill the disk.
+            b = self.read_json()
+            def cut(k, n): return (str(b.get(k) or ""))[:n]
+            c = db()
+            c.execute("""INSERT INTO client_errors(at,section,message,stack,path,email,role,agent)
+                         VALUES(?,?,?,?,?,?,?,?)""",
+                      (now(), cut("section",80), cut("message",500), cut("stack",4000),
+                       cut("path",200), cut("email",120), cut("role",20), cut("agent",200)))
+            c.execute("""DELETE FROM client_errors WHERE id NOT IN
+                         (SELECT id FROM client_errors ORDER BY id DESC LIMIT 500)""")
+            c.commit(); c.close()
+            print(f"[client error] {cut('section',80)}: {cut('message',300)} "
+                  f"(user={cut('email',120) or 'anonymous'} path={cut('path',200)})")
+            return self.send_json({"ok": True})
         if p == "/api/run-scheduler":
             u = self.require("admin")
             if not u: return

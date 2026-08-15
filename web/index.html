@@ -128,10 +128,63 @@ const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'
 const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
 
 let ME=null, VIEWAS=null, LOGIN_CHOICE=null, SLOTDAY=null;
+
+/* ---------------- error boundaries ----------------
+   This app renders with template strings + innerHTML, so there are no React
+   components to hang componentDidCatch on. A "boundary" here is a wrapper that
+   runs one section's render inside try/catch and, if it throws, paints a fallback
+   into THAT SECTION'S container only. Every other section keeps working, and a
+   single bad record can never blank the screen. */
+let LAST_SECTION=null;                       // re-run target for the Retry button
+function logClientError(section, err, extra){
+  const e = err || {};
+  console.error('[boundary:'+section+']', e);
+  const payload = {section, message:String(e.message||e), stack:String(e.stack||''),
+    path:location.pathname+location.search, email:(ME&&ME.email)||null,
+    role:(ME?actingRole():null), agent:navigator.userAgent, at:new Date().toISOString(), ...(extra||{})};
+  // fire-and-forget; never let reporting an error throw another one
+  try{ fetch('/api/client-error',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload), keepalive:true}).catch(()=>{}); }catch(_){}
+}
+function boundaryHTML(canRetry){
+  return `<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
+    <h3 style="font-size:1rem">This section failed to load.</h3>
+    <div class="meta" style="margin-top:4px">Try refreshing, or contact support.</div>
+    ${canRetry?`<button class="btn ghost" style="margin-top:10px" onclick="retrySection()">Try again</button>`:''}
+  </div>`;
+}
+/* Run a section render inside its own boundary. target = the element this section
+   owns; only that element is replaced if the render fails. */
+async function boundary(section, target, fn, retry){
+  if(retry!==false) LAST_SECTION={section, target, fn};
+  try{
+    await fn();
+  }catch(e){
+    logClientError(section, e);
+    const host=$(target);
+    if(host) host.innerHTML = boundaryHTML(retry!==false);
+  }
+}
+function retrySection(){ if(LAST_SECTION) boundary(LAST_SECTION.section, LAST_SECTION.target, LAST_SECTION.fn); }
+/* Wrap a click handler so a failed action reports itself instead of dying silently
+   as an unhandled rejection. Does not replace any UI. */
+function guard(section, fn){
+  return async function(...a){
+    try{ return await fn.apply(this, a); }
+    catch(e){ logClientError(section, e); alert('That action could not be completed.\n\n'+(e&&e.message||e)); }
+  };
+}
+/* Last-resort nets: anything that escapes a boundary still gets reported. */
+window.addEventListener('error', ev=>logClientError('window.onerror', ev.error||{message:ev.message}));
+window.addEventListener('unhandledrejection', ev=>logClientError('unhandledrejection', ev.reason||{message:'unhandled rejection'}));
+
 function showErr(id,msg){ const x=$('#'+id); if(x){x.textContent=msg; x.classList.add('show');} }
 function actingRole(){ return (ME && ME.role==='admin') ? (VIEWAS||'admin') : (ME?ME.role:null); }
 function switchMode(){ VIEWAS = (VIEWAS==='admin'?'instructor':'admin'); boot(); }
-async function boot(){
+// The top-level boundary. If startup itself fails (e.g. /api/me is unreachable),
+// the user gets the fallback instead of a blank white page.
+function boot(){ return boundary('boot', '#view', bootInner); }
+async function bootInner(){
   const params=new URLSearchParams(location.search);
   if(params.get('reset')){ $('#top').style.display='none'; return renderReset(params.get('reset')); }
   const {user} = await api('/api/me');
@@ -264,14 +317,13 @@ async function renderAdmin(tab){
   const v=$('#view');
   const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
   v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('audit','Audit')}</div><div id="tab"></div>`;
-  if(tab==='dashboard') return adminDashboard();
-  if(tab==='slots') return adminSlots();
-  if(tab==='approvals') return adminApprovals();
-  if(tab==='templates') return adminTemplates();
-  if(tab==='calendar') return adminCalendar();
-  if(tab==='connections') return adminConnections();
-  if(tab==='all') return adminAll();
-  if(tab==='audit') return adminAudit();
+  // Each section renders inside its own boundary, into #tab. If one throws, the
+  // nav and the rest of the app stay intact; only this panel shows the fallback.
+  const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
+    all:adminAll, audit:adminAudit};
+  const fn=SECTIONS[tab]||adminDashboard;
+  return boundary('admin:'+tab, '#tab', fn);
 }
 async function adminDashboard(){
   const d = await api('/api/dashboard');
@@ -412,8 +464,21 @@ async function adminAudit(){
     <div id="auditrows" style="margin-top:14px"></div>
     <label style="margin-top:22px">Automated emails sent</label>
     <p class="sub" style="margin-top:2px">One row per class per email type. The app refuses to send any of these twice.</p>
-    <div id="emailrows"></div>`;
-  renderAuditRows(); renderEmailLog();
+    <div id="emailrows"></div>
+    <label style="margin-top:22px">Caught interface errors</label>
+    <p class="sub" style="margin-top:2px">Sections that failed to render. The rest of the app kept working.</p>
+    <div id="errrows"></div>`;
+  renderAuditRows(); renderEmailLog(); renderClientErrors();
+}
+async function renderClientErrors(){
+  const {errors}=await api('/api/client-errors');
+  $('#errrows').innerHTML = errors.map(e=>`<div class="card">
+    <div class="row"><div><h3 style="font-size:1rem">${esc(e.section)}</h3>
+      <div class="meta">${esc(e.at)}${e.email?' · '+esc(e.email):' · not signed in'}</div></div></div>
+    <div class="meta" style="margin-top:6px;color:#B4442C">${esc(e.message)}</div>
+    ${e.stack?`<button class="btn ghost" style="margin-top:8px" onclick="this.nextElementSibling.classList.toggle('hidden')">Stack trace</button>
+      <pre class="hidden" style="margin-top:8px;background:#f6f4ef;border-radius:12px;padding:12px;overflow:auto;font-size:.7rem;white-space:pre-wrap">${esc(e.stack)}</pre>`:''}
+  </div>`).join('') || '<div class="muted">No interface errors recorded.</div>';
 }
 const ETYPE={reminder:'48h reminder',followup:'day-after follow-up',cancel:'cancellation notice',
   cancel_instructor:'cancellation (instructor)',low_alert:'low-enrollment alert'};
@@ -619,7 +684,10 @@ async function emailClass(id,kind){
   if(!r.ok){ alert(what+' NOT sent.\n\nReason: '+r.reason); return; }
   alert(what+' emailed to '+r.sent+' students.\n(Dry-run and logged unless email is set live in config.json.)');
 }
-async function viewRoster(id){
+// Registration view: its own boundary, scoped to this class's roster container, so a
+// bad registration record cannot take down the class card or the list around it.
+function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
+async function rosterInner(id){
   const {registrations} = await api('/api/class/'+id+'/registrations');
   $('#roster'+id).innerHTML = '<div style="margin-top:8px">'+(registrations.length?registrations.map(r=>
     `<div class="meta" style="padding:7px 0;border-top:1px solid var(--line)">${esc(r.name)} · ${esc(r.email)} · ${esc(r.phone)}${r.refunded?' · refunded':''}</div>`).join('')
@@ -641,8 +709,7 @@ async function renderInstr(tab){
       <button class="${tab==='open'?'on':''}" onclick="renderInstr('open')">Open slots</button>
       <button class="${tab==='mine'?'on':''}" onclick="renderInstr('mine')">My classes</button>
     </div><div id="tab"></div>`;
-  if(tab==='open') return instrOpen();
-  return instrMine();
+  return boundary('instructor:'+tab, '#tab', tab==='open'?instrOpen:instrMine);
 }
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
 let DAYSLOTS=[], SEL=[];
@@ -817,6 +884,16 @@ async function submitClass(){
   try{ await api('/api/classes','POST',body); SEL=[]; renderInstr('mine'); }
   catch(e){ const x=$('#ferr'); x.textContent=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message); x.classList.add('show'); window.scrollTo(0,0); }
 }
+
+/* Actions are not sections: a failure here should report itself, not repaint a
+   panel. Wrapping them at definition keeps every inline onclick= unchanged, and
+   stops a failed click from vanishing into an unhandled rejection. */
+['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
+ 'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
+ 'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
+ 'testEventbrite','runScheduler','previewGraphic','openEditForm','confirmSel',
+ 'submitChangePw','submitForgot','submitReset','doLogin','logout'
+].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
 </script>
