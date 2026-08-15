@@ -53,7 +53,11 @@ def init_db():
       refunded INTEGER DEFAULT 0, created TEXT);
     CREATE TABLE IF NOT EXISTS integrations(
       id TEXT PRIMARY KEY, name TEXT, method TEXT, status TEXT);
+    CREATE TABLE IF NOT EXISTS password_resets(
+      token TEXT PRIMARY KEY, user_id INTEGER, expires TEXT);
     """)
+    try: c.execute("ALTER TABLE users ADD COLUMN must_change_pw INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
     for col in ("promoted","reminded","followed_up","low_alerted"):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
@@ -256,7 +260,9 @@ class H(http.server.BaseHTTPRequestHandler):
     def api_get(self, p):
         if p == "/api/me":
             u = self.current_user()
-            return self.send_json({"user": {k:u[k] for k in("id","name","email","role")} if u else None})
+            if not u: return self.send_json({"user": None})
+            return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
+                "role":u["role"],"must_change_pw":u.get("must_change_pw",0)}})
         if p == "/api/slots":
             u = self.require()
             if not u: return
@@ -363,15 +369,50 @@ class H(http.server.BaseHTTPRequestHandler):
             pw    = b.get("password","")
             if not (email and pw):
                 return self.send_json({"error":"email and password required"},400)
+            mc = 1 if b.get("must_change_pw", True) else 0
             h, s = hash_pw(pw); c = db()
             if c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone():
-                c.execute("UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=? WHERE email=?",(name,role,h,s,email))
+                c.execute("UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=?, must_change_pw=? WHERE email=?",(name,role,h,s,mc,email))
                 action = "updated"
             else:
-                c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt) VALUES(?,?,?,?,?)",(name,email,role,h,s))
+                c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt,must_change_pw) VALUES(?,?,?,?,?,?)",(name,email,role,h,s,mc))
                 action = "created"
             c.commit(); c.close()
             return self.send_json({"ok":True,"action":action,"email":email,"role":role})
+        if p == "/api/change-password":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            npw = self.read_json().get("new_password","")
+            if len(npw) < 8: return self.send_json({"error":"Use at least 8 characters."},400)
+            h, s = hash_pw(npw); c = db()
+            c.execute("UPDATE users SET pw_hash=?, pw_salt=?, must_change_pw=0 WHERE id=?",(h,s,u["id"]))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
+        if p == "/api/forgot":
+            email = (self.read_json().get("email","") or "").strip().lower()
+            c = db(); row = c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone()
+            if row:
+                tok = secrets.token_urlsafe(24)
+                exp = (datetime.datetime.now()+datetime.timedelta(hours=1)).isoformat()
+                c.execute("INSERT INTO password_resets(token,user_id,expires) VALUES(?,?,?)",(tok,row["id"],exp))
+                c.commit()
+                proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+                link = f"{proto}://{host}/?reset={tok}"
+                mailer.send(email, "Reset your Gibby Class Manager password",
+                    f"We received a request to reset your password. Click the link below (valid for 1 hour):\n\n{link}\n\n"
+                    f"If you did not request this, you can ignore this email.")
+            c.close()
+            return self.send_json({"ok":True})   # always success, so we never reveal which emails exist
+        if p == "/api/reset":
+            b = self.read_json(); tok = b.get("token",""); npw = b.get("new_password","")
+            if len(npw) < 8: return self.send_json({"error":"Use at least 8 characters."},400)
+            c = db(); row = c.execute("SELECT * FROM password_resets WHERE token=?",(tok,)).fetchone()
+            if not row or row["expires"] < datetime.datetime.now().isoformat():
+                c.close(); return self.send_json({"error":"This reset link is invalid or has expired."},400)
+            h, s = hash_pw(npw)
+            c.execute("UPDATE users SET pw_hash=?, pw_salt=?, must_change_pw=0 WHERE id=?",(h,s,row["user_id"]))
+            c.execute("DELETE FROM password_resets WHERE token=?",(tok,)); c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return

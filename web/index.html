@@ -104,17 +104,82 @@ const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'
 const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
 
 let ME=null;
+function showErr(id,msg){ const x=$('#'+id); if(x){x.textContent=msg; x.classList.add('show');} }
 async function boot(){
+  const params=new URLSearchParams(location.search);
+  if(params.get('reset')){ $('#top').style.display='none'; return renderReset(params.get('reset')); }
   const {user} = await api('/api/me');
   ME=user;
   if(!user){ renderLogin(); $('#top').style.display='none'; return; }
+  if(user.must_change_pw){ $('#top').style.display='flex'; $('#who').textContent=user.name; return renderChangePw(); }
   $('#top').style.display='flex';
   $('#who').textContent = user.name+' · '+user.role;
   if(user.role==='admin') renderAdmin('dashboard'); else renderInstr('open');
 }
+function renderChangePw(){
+  $('#view').innerHTML=`<div class="login-wrap">
+    <h2>Choose a <em>new password</em></h2>
+    <p class="sub">For security, please set your own password before continuing.</p>
+    <div style="text-align:left;max-width:340px;margin:0 auto">
+      <div class="err" id="cerr"></div>
+      <label>New password</label><input id="np1" type="password" autocomplete="new-password">
+      <label>Confirm password</label><input id="np2" type="password" autocomplete="new-password">
+      <div style="height:14px"></div>
+      <button class="btn dark" onclick="submitChangePw()">Save &amp; continue →</button>
+    </div></div>`;
+}
+async function submitChangePw(){
+  const a=$('#np1').value, b=$('#np2').value;
+  if(a.length<8) return showErr('cerr','Use at least 8 characters.');
+  if(a!==b) return showErr('cerr','Passwords do not match.');
+  try{ await api('/api/change-password','POST',{new_password:a}); boot(); }
+  catch(e){ showErr('cerr',e.message); }
+}
+function renderForgot(){
+  $('#top').style.display='none';
+  $('#view').innerHTML=`<div class="login-wrap">
+    <h2>Reset your <em>password</em></h2>
+    <p class="sub">Enter your email and we'll send a reset link.</p>
+    <div style="text-align:left;max-width:340px;margin:0 auto">
+      <div class="ok-note" id="fmsg" style="display:none"></div>
+      <label>Email</label><input id="fe" placeholder="you@everetttheatre.com" autocomplete="username">
+      <div style="height:14px"></div>
+      <button class="btn dark" onclick="submitForgot()">Send reset link</button>
+      <div style="text-align:center;margin-top:14px"><a href="#" onclick="renderLogin();return false" style="font-size:12.5px;color:var(--purple-deep);font-weight:800;text-decoration:none">Back to sign in</a></div>
+    </div></div>`;
+}
+async function submitForgot(){
+  await api('/api/forgot','POST',{email:$('#fe').value});
+  const m=$('#fmsg'); m.style.display='block';
+  m.textContent='If an account exists for that email, a reset link is on its way. Check your inbox.';
+}
+function renderReset(token){
+  $('#view').innerHTML=`<div class="login-wrap">
+    <h2>Set a <em>new password</em></h2>
+    <p class="sub">Enter a new password for your account.</p>
+    <div style="text-align:left;max-width:340px;margin:0 auto">
+      <div class="err" id="rerr"></div>
+      <label>New password</label><input id="rp1" type="password" autocomplete="new-password">
+      <label>Confirm password</label><input id="rp2" type="password" autocomplete="new-password">
+      <div style="height:14px"></div>
+      <button class="btn dark" onclick="submitReset('${token}')">Reset password →</button>
+    </div></div>`;
+}
+async function submitReset(token){
+  const a=$('#rp1').value, b=$('#rp2').value;
+  if(a.length<8) return showErr('rerr','Use at least 8 characters.');
+  if(a!==b) return showErr('rerr','Passwords do not match.');
+  try{
+    await api('/api/reset','POST',{token,new_password:a});
+    history.replaceState({},'',location.pathname);
+    alert('Password reset. Please sign in with your new password.');
+    renderLogin();
+  }catch(e){ showErr('rerr',e.message); }
+}
 
 /* ---------------- login ---------------- */
 function renderLogin(){
+  $('#top').style.display='none';
   $('#view').innerHTML = `
    <div class="login-wrap">
      <div class="logo">🖌️</div>
@@ -126,8 +191,7 @@ function renderLogin(){
        <label>Password</label><input id="lp" type="password" autocomplete="current-password">
        <div style="height:14px"></div>
        <button class="btn dark" onclick="doLogin()">Sign in →</button>
-       <p class="hint" style="text-align:center;margin-top:14px">Demo: <b>jess@theeverett.org</b> / gibby123 (admin) ·
-       <b>christin.smiertka@theeverett.org</b> / gibby123 (instructor)</p>
+       <div style="text-align:center;margin-top:14px"><a href="#" onclick="renderForgot();return false" style="font-size:12.5px;color:var(--purple-deep);font-weight:800;text-decoration:none">Forgot password?</a></div>
      </div>
    </div>`;
 }
