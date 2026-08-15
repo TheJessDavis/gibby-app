@@ -323,9 +323,9 @@ async function adminConnections(){
 }
 async function testEmail(){
   const r=await api('/api/test-email','POST',{});
-  alert(r.live
-    ? 'Test email SENT to '+r.to+' from '+r.from+'.\nCheck your inbox (and spam).'
-    : 'Email is still in DRY-RUN, so nothing was actually sent.\nAdd SMTP settings + EMAIL_LIVE=true to send for real.\n(Would have gone to '+r.to+' from '+r.from+'.)');
+  if(!r.live) alert('Email is still in DRY-RUN, so nothing was sent.\nAdd SMTP settings + EMAIL_LIVE=true to send for real.\n(Would have gone to '+r.to+' from '+r.from+'.)');
+  else if(r.delivered) alert('Test email SENT to '+r.to+' from '+r.from+'.\nCheck your inbox (and spam).');
+  else alert('Email is set live but the send FAILED (bad SMTP host/user/password, most likely).\nDouble-check the SMTP settings.');
 }
 async function toggleInteg(id,action){ await api('/api/integrations/'+id+'/'+action,'POST'); adminConnections(); }
 

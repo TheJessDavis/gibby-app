@@ -418,10 +418,10 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             to = (self.read_json().get("to") or u["email"]).strip()
             cfg = mailer.load_email_config()
-            mailer.send(to, "Gibby Class Manager test email",
+            delivered = mailer.send(to, "Gibby Class Manager test email",
                 "This is a test from your Gibby Class Manager. If you received this, email is working.", cfg)
             return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
-                "live": bool(cfg["email_live"] and cfg["smtp_host"])})
+                "live": bool(cfg["email_live"] and cfg["smtp_host"]), "delivered": bool(delivered)})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return
