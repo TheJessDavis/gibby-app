@@ -18,6 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
+VERSION = "persist-test-1"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -258,6 +259,8 @@ class H(http.server.BaseHTTPRequestHandler):
 
     # -- GET api --
     def api_get(self, p):
+        if p == "/api/version":
+            return self.send_json({"version": VERSION})
         if p == "/api/me":
             u = self.current_user()
             if not u: return self.send_json({"user": None})
