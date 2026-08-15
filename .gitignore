@@ -1,0 +1,4 @@
+config.json
+gibby.db
+__pycache__/
+*.pyc

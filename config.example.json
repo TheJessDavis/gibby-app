@@ -1,0 +1,26 @@
+{
+  "_comment": "Copy this file to config.json and fill in real values. config.json is gitignored. Keep every platform's block; leave a key blank to skip that platform. Set live to true ONLY when you are ready to actually post.",
+
+  "live": false,
+  "timezone": "America/New_York",
+  "year": 2027,
+
+  "eventbrite_token": "",
+  "eventbrite_org_id": "",
+
+  "fb_page_id": "",
+  "fb_page_token": "",
+
+  "wix_api_key": "",
+  "wix_site_id": "",
+
+  "canva_token": "",
+  "canva_template_id": "",
+
+  "email_live": false,
+  "smtp_host": "",
+  "smtp_port": 587,
+  "smtp_user": "",
+  "smtp_pass": "",
+  "mail_from": "gibby@theeverett.org"
+}

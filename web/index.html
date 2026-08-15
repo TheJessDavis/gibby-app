@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Gibby Class Manager</title>
+<style>
+  :root{
+    --cream:#F5EFE3;--paper:#FBF7EF;--ink:#171512;--ink-soft:#5A554C;--line:#E7DECB;
+    --yellow:#F7D64B;--pink:#F4A9C8;--purple:#C6B4F0;--purple-deep:#7C5CD6;--blue:#A9C7EB;
+    --mint:#AFD0A6;--coral:#F2765C;--green:#3F7A32;--white:#fff;
+    --disp:"Helvetica Neue",Arial,"Segoe UI",system-ui,sans-serif;--serif:Georgia,serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--disp);color:var(--ink);
+    background:radial-gradient(120% 80% at 15% 0%,#EFE7D6,transparent 60%),var(--cream);min-height:100vh}
+  .app{max-width:440px;margin:0 auto;min-height:100vh;background:var(--paper);
+    box-shadow:0 0 60px rgba(0,0,0,.06);display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;position:sticky;top:0;
+    background:var(--paper);z-index:5;border-bottom:1px solid var(--line)}
+  .top .brand{font-weight:800;font-size:17px;letter-spacing:-.02em}
+  .top .who{font-size:12px;color:var(--ink-soft);font-weight:700}
+  .top button.out{border:none;background:rgba(0,0,0,.06);border-radius:10px;padding:7px 12px;font-weight:800;font-size:12px;cursor:pointer;color:var(--ink)}
+  .view{flex:1;padding:20px;padding-bottom:90px}
+  h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
+  h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
+  .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4}
+  .tabs{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
+  .tabs button{flex:1 1 auto;min-width:60px;border:none;background:var(--white);padding:11px 8px;border-radius:14px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--ink);box-shadow:0 3px 9px rgba(0,0,0,.05)}
+  .tabs button.on{background:var(--ink);color:#fff}
+
+  .card{background:var(--white);border-radius:18px;padding:16px;margin-bottom:12px;box-shadow:0 6px 16px rgba(0,0,0,.05)}
+  .card h3{margin:0 0 4px;font-size:16px;font-weight:800;letter-spacing:-.01em}
+  .card .meta{font-size:12px;color:var(--ink-soft);font-weight:700}
+  .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
+  .pill{font-size:10.5px;font-weight:800;padding:5px 10px;border-radius:999px;white-space:nowrap}
+  .pill.pend{background:#EAE0FA;color:#5B3FB0}.pill.appr{background:#DCEFD6;color:#3F7A32}
+  .pill.inc{background:#FCE4CE;color:#B45309}.pill.alc{background:var(--coral);color:#fff}
+
+  label{display:block;font-size:12.5px;font-weight:800;margin:12px 0 6px}
+  input,select,textarea{width:100%;border:2px solid var(--line);background:var(--white);border-radius:14px;
+    padding:12px 14px;font-size:14px;font-family:inherit;font-weight:600;color:var(--ink);outline:none}
+  input:focus,select:focus,textarea:focus{border-color:var(--purple-deep)}
+  textarea{min-height:80px;resize:vertical;line-height:1.4}
+  .two{display:flex;gap:10px}.two>div{flex:1}
+  .seg{display:flex;gap:8px}
+  .seg button{flex:1;border:2px solid var(--line);background:#fff;border-radius:14px;padding:11px;font-weight:800;cursor:pointer;color:var(--ink)}
+  .seg button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .btn{border:none;border-radius:16px;padding:15px;font-weight:800;font-size:15px;cursor:pointer;font-family:inherit;width:100%}
+  .btn.dark{background:var(--ink);color:#fff}.btn.green{background:#5a9c4d;color:#fff}
+  .btn.warn{background:#fff;color:#C4442A;box-shadow:inset 0 0 0 2px rgba(242,118,92,.5)}
+  .btn.ghost{background:rgba(0,0,0,.06);color:var(--ink)}
+  .hint{font-size:11px;color:var(--ink-soft);margin-top:6px;line-height:1.35}
+  .err{background:var(--coral);color:#fff;border-radius:12px;padding:10px 14px;font-size:12.5px;font-weight:800;margin:10px 0;display:none}
+  .err.show{display:block}
+  .ok-note{background:#DCEFD6;color:#2f6a26;border-radius:12px;padding:10px 14px;font-size:12.5px;font-weight:700;margin:10px 0}
+  .muted{color:var(--ink-soft);font-size:13px;text-align:center;padding:30px 10px}
+  .photo{border:2px dashed var(--line);border-radius:14px;padding:18px;text-align:center;cursor:pointer;background:#fff;font-weight:700;font-size:13px;color:var(--ink-soft)}
+  .photo img{max-width:100%;border-radius:10px;display:block}
+  .fab{position:fixed;bottom:0;left:0;right:0;max-width:440px;margin:0 auto;padding:14px 20px 20px;
+    background:linear-gradient(180deg,transparent,var(--paper) 40%)}
+  .login-wrap{padding:40px 24px;text-align:center}
+  .logo{font-size:40px}
+  .hidden{display:none!important}
+  .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:8px 0}
+  .cal-h{text-align:center;font-size:10px;font-weight:800;color:var(--ink-soft)}
+  .cal-d{aspect-ratio:1/1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--ink-soft);gap:3px}
+  .cal-d.has{background:#fff;box-shadow:0 3px 9px rgba(0,0,0,.06);color:var(--ink);cursor:pointer}
+  .cal-d.has i{width:5px;height:5px;border-radius:50%;background:var(--coral)}
+  .navm{border:none;background:rgba(0,0,0,.06);border-radius:10px;padding:6px 13px;font-weight:800;cursor:pointer;margin-left:6px;color:var(--ink)}
+  .poster{position:relative;width:100%;aspect-ratio:3/4;border-radius:14px;overflow:hidden;margin-top:10px;background-size:cover;background-position:center;background-color:#b9a48a;box-shadow:0 8px 20px rgba(0,0,0,.15)}
+  .poster-body{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;text-align:center;padding:24px 18px;color:#fff}
+  .poster .p-title{font-weight:900;font-size:30px;line-height:.95;text-transform:uppercase;letter-spacing:-.01em;margin-top:auto;text-shadow:-1.5px -1.5px 0 #182742,1.5px -1.5px 0 #182742,-1.5px 1.5px 0 #182742,1.5px 1.5px 0 #182742,0 2px 5px rgba(0,0,0,.45)}
+  .poster .p-script{font-family:"Snell Roundhand","Brush Script MT",cursive;font-size:30px;margin-top:4px;text-shadow:-1px -1px 0 #182742,1px -1px 0 #182742,-1px 1px 0 #182742,1px 1px 0 #182742}
+  .poster .p-when{margin-top:18px}
+  .poster .p-day,.poster .p-time,.poster .p-ages{font-weight:900;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+  .poster .p-day{font-size:15px}.poster .p-time{font-size:14px;margin-top:2px}.poster .p-ages{font-size:15px;margin-top:14px}
+  .poster .p-logos{margin-top:auto;font-size:8px;font-weight:800;letter-spacing:.05em;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+  .calc{background:var(--ink);color:#fff;border-radius:16px;padding:16px;margin-top:8px}
+  .calc .o{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.12);font-size:13px}
+  .calc .o:last-child{border-bottom:none}.calc .o b{font-weight:800}.calc .o .hero{color:var(--yellow);font-size:16px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top" id="top" style="display:none">
+    <div><div class="brand">The Gibby</div><div class="who" id="who"></div></div>
+    <button class="out" onclick="logout()">Sign out</button>
+  </div>
+  <div class="view" id="view"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (h)=>{const d=document.createElement('div');d.innerHTML=h;return d.firstElementChild;};
+async function api(path, method='GET', body){
+  const r = await fetch(path,{method,headers:body?{'Content-Type':'application/json'}:{},
+    body:body?JSON.stringify(body):undefined});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw Object.assign(new Error(j.error||'error'), {data:j});
+  return j;
+}
+const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
+
+let ME=null;
+async function boot(){
+  const {user} = await api('/api/me');
+  ME=user;
+  if(!user){ renderLogin(); $('#top').style.display='none'; return; }
+  $('#top').style.display='flex';
+  $('#who').textContent = user.name+' · '+user.role;
+  if(user.role==='admin') renderAdmin('dashboard'); else renderInstr('open');
+}
+
+/* ---------------- login ---------------- */
+function renderLogin(){
+  $('#view').innerHTML = `
+   <div class="login-wrap">
+     <div class="logo">🖌️</div>
+     <h2 style="font-size:34px">The Gibby</h2>
+     <p class="sub">Class Manager. Sign in to continue.</p>
+     <div style="text-align:left;max-width:340px;margin:0 auto">
+       <div class="err" id="lerr"></div>
+       <label>Email</label><input id="le" placeholder="you@theeverett.org" autocomplete="username">
+       <label>Password</label><input id="lp" type="password" autocomplete="current-password">
+       <div style="height:14px"></div>
+       <button class="btn dark" onclick="doLogin()">Sign in →</button>
+       <p class="hint" style="text-align:center;margin-top:14px">Demo: <b>jess@theeverett.org</b> / gibby123 (admin) ·
+       <b>christin.smiertka@theeverett.org</b> / gibby123 (instructor)</p>
+     </div>
+   </div>`;
+}
+async function doLogin(){
+  try{
+    await api('/api/login','POST',{email:$('#le').value,password:$('#lp').value});
+    boot();
+  }catch(e){ const x=$('#lerr'); x.textContent=e.message; x.classList.add('show'); }
+}
+async function logout(){ await api('/api/logout','POST'); ME=null; boot(); }
+
+/* ---------------- admin ---------------- */
+async function renderAdmin(tab){
+  const v=$('#view');
+  const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
+  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}</div><div id="tab"></div>`;
+  if(tab==='dashboard') return adminDashboard();
+  if(tab==='slots') return adminSlots();
+  if(tab==='approvals') return adminApprovals();
+  if(tab==='templates') return adminTemplates();
+  if(tab==='calendar') return adminCalendar();
+  if(tab==='connections') return adminConnections();
+  if(tab==='all') return adminAll();
+}
+async function adminDashboard(){
+  const d = await api('/api/dashboard');
+  $('#tab').innerHTML = `
+    <h2>Needs <em>you</em></h2>
+    <p class="sub">${d.pending.length} pending · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
+    <div class="card"><div class="row"><div><h3>Automations</h3><div class="meta">Reminders, low-enroll alerts, auto-cancel &amp; follow-ups run daily on their own.</div></div></div>
+      <button class="btn ghost" style="margin-top:10px" onclick="runScheduler()">Run scheduler now</button></div>
+    <label>Pending approval (${d.pending.length})</label>
+    ${d.pending.map(c=>`<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill pend">pending</span></div>
+      <div class="meta">${esc(c.instructor_name)}</div>
+      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review →</button></div>`).join('') || '<div class="muted">Nothing pending.</div>'}
+    <label style="margin-top:16px">Low enrollment (${d.low.length})</label>
+    ${d.low.map(lowCard).join('') || '<div class="muted">No low-enrollment classes.</div>'}
+    <label style="margin-top:16px">Setup</label>
+    <div class="card"><div class="row"><h3>Platform connections</h3></div>
+      <div class="meta">Eventbrite, Facebook, Wix, Descene, Canva</div>
+      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('connections')">Manage →</button></div>`;
+}
+function lowCard(c){
+  return `<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill inc">${c.enrolled}/${c.min_p}</span></div>
+    <div class="meta">${esc(c.instructor_name)} · below the minimum of ${c.min_p}</div>
+    <div class="two" style="margin-top:12px">
+      <button class="btn ghost" onclick="promote(${c.id})">Promote</button>
+      <button class="btn warn" onclick="cancelClass(${c.id})">Cancel &amp; refund</button></div></div>`;
+}
+async function runScheduler(){
+  const asof=prompt("Run the daily scheduler as of which date? (YYYY-MM-DD, blank = today)","2027-01-15");
+  if(asof===null) return;
+  const r=await api('/api/run-scheduler','POST', asof?{asof}:{});
+  alert('Scheduler ran'+(asof?' as of '+asof:'')+'.\n\n'+(r.actions.length?r.actions.join('\n'):'Nothing was due.'));
+  adminDashboard();
+}
+async function promote(id){ await api('/api/classes/'+id+'/promote','POST'); adminDashboard(); }
+async function cancelClass(id){ if(!confirm('Cancel this class and refund all students? This cannot be undone.'))return;
+  await api('/api/classes/'+id+'/cancel','POST'); adminDashboard(); }
+async function adminTemplates(){
+  const {templates} = await api('/api/templates/all');
+  $('#tab').innerHTML = `<h2>Class <em>templates</em></h2><p class="sub">${templates.length} templates. Instructors pick from these.</p>
+    <div class="card">
+      <label style="margin-top:0">New template title</label><input id="tt">
+      <div class="two"><div><label>Category</label><input id="tc" placeholder="Painting"></div>
+        <div><label>Age</label><select id="ta"><option>All Ages</option><option>Toddlers</option><option>Ages 7–9</option><option>Ages 9–12</option><option>Ages 16+</option><option>Ages 21+</option></select></div></div>
+      <label>Description</label><textarea id="td"></textarea>
+      <div style="height:10px"></div><button class="btn dark" onclick="addTemplate()">Add template</button>
+    </div>
+    ${templates.map(t=>`<div class="card"><div class="row"><div><h3>${esc(t.title)}</h3>
+       <div class="meta">${esc(t.category)} · ${esc(t.age)}</div></div>
+       <span class="pill ${t.archived?'inc':'appr'}">${t.archived?'archived':'active'}</span></div>
+       <button class="btn ghost" style="margin-top:10px" onclick="archiveTpl(${t.id})">${t.archived?'Unarchive':'Archive'}</button></div>`).join('')}`;
+}
+async function addTemplate(){ await api('/api/templates','POST',{title:$('#tt').value,category:$('#tc').value,age:$('#ta').value,description:$('#td').value,supplies:[]}); adminTemplates(); }
+async function archiveTpl(id){ await api('/api/templates/'+id+'/archive','POST'); adminTemplates(); }
+
+/* ---------------- calendar ---------------- */
+const MONIDX={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+const MONNAME=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function parseDate(s){ if(!s)return null; const p=s.split(', '); const md=(p[1]||p[0]).trim().split(' ');
+  const m=MONIDX[md[0]], d=parseInt(md[1]); if(m==null||isNaN(d))return null; return {m,d}; }
+let CAL_M=0;
+async function adminCalendar(){
+  const {classes}=await api('/api/classes/all');
+  const items=classes.map(c=>({...c,pd:parseDate(c.slot_date)})).filter(c=>c.pd);
+  const months=[...new Set(items.map(c=>c.pd.m))].sort((a,b)=>a-b);
+  if(!months.length){ $('#tab').innerHTML='<h2>Calendar</h2><div class="muted">No scheduled classes yet.</div>'; return; }
+  if(!months.includes(CAL_M)) CAL_M=months[0];
+  window.__cal={months,items}; renderCal(CAL_M);
+}
+function renderCal(m){
+  const {months,items}=window.__cal, year=2027;
+  const first=new Date(year,m,1).getDay(), days=new Date(year,m+1,0).getDate();
+  const withCls=new Set(items.filter(c=>c.pd.m===m).map(c=>c.pd.d));
+  let cells=['S','M','T','W','T','F','S'].map(x=>`<div class="cal-h">${x}</div>`).join('');
+  for(let i=0;i<first;i++)cells+='<div></div>';
+  for(let d=1;d<=days;d++){ const has=withCls.has(d);
+    cells+=`<div class="cal-d ${has?'has':''}" ${has?`onclick="calDay(${m},${d})"`:''}>${d}${has?'<i></i>':''}</div>`; }
+  const idx=months.indexOf(m);
+  $('#tab').innerHTML=`<div class="row"><h2 style="margin:0">${MONNAME[m]} <em>${year}</em></h2><div>
+      ${idx>0?`<button class="navm" onclick="renderCal(${months[idx-1]})">‹</button>`:''}
+      ${idx<months.length-1?`<button class="navm" onclick="renderCal(${months[idx+1]})">›</button>`:''}</div></div>
+    <p class="sub">Days with classes are highlighted. Tap one.</p>
+    <div class="calgrid">${cells}</div>
+    <div id="agenda"><label>All ${MONNAME[m]}</label>${items.filter(c=>c.pd.m===m).sort((a,b)=>a.pd.d-b.pd.d).map(agendaRow).join('')}</div>`;
+  CAL_M=m;
+}
+function calDay(m,d){ const {items}=window.__cal; const list=items.filter(c=>c.pd.m===m&&c.pd.d===d);
+  $('#agenda').innerHTML=`<label>${MONNAME[m]} ${d}</label>`+list.map(agendaRow).join(''); }
+function agendaRow(c){ const pill=c.status==='approved'?'appr':c.status==='cancelled'?'inc':'pend';
+  return `<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill ${pill}">${esc(c.status)}</span></div>
+    <div class="meta">${esc(c.instructor_name)} · ${esc(c.slot_date)} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div></div>`; }
+
+/* ---------------- connections ---------------- */
+async function adminConnections(){
+  const d=await api('/api/integrations'); const integrations=d.integrations;
+  const pill=s=>s==='connected'?'<span class="pill appr">connected</span>':s==='attention'?'<span class="pill inc">needs attention</span>':'<span class="pill pend">not connected</span>';
+  $('#tab').innerHTML=`<h2>Platform <em>connections</em></h2>
+    <p class="sub">${integrations.filter(i=>i.status==='connected').length} of ${integrations.length} connected. Posting is currently <b>${d.live?'LIVE':'dry-run (safe)'}</b>.</p>
+    ${integrations.map(it=>`<div class="card"><div class="row"><div><h3>${esc(it.name)}</h3><div class="meta">${esc(it.method)}</div></div>${pill(it.status)}</div>
+      <div class="meta" style="margin-top:8px">API keys: <b style="color:${it.configured?'#3F7A32':'#B45309'}">${it.id==='descene'?'no API (manual)':(it.configured?'present':'missing')}</b></div>
+      <button class="btn ${it.status==='connected'?'warn':'dark'}" style="margin-top:12px"
+        onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
+        ${it.status==='connected'?'Disconnect':'Connect'}</button></div>`).join('')}
+    <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
+}
+async function toggleInteg(id,action){ await api('/api/integrations/'+id+'/'+action,'POST'); adminConnections(); }
+
+/* ---------------- graphic preview ---------------- */
+function previewGraphic(id){
+  const c=(window.__classes||[]).find(x=>x.id===id); if(!c)return;
+  const box=$('#gfx'+id); if(box.innerHTML){box.innerHTML='';return;}
+  const bg = (c.photo && c.photo.startsWith('data:')) ? `background-image:url('${c.photo}')` : '';
+  const ages=(c.age_range||'').toUpperCase()+(c.alcohol?' · ID REQUIRED':'');
+  box.innerHTML=`<div class="poster" style="${bg}">
+    <div class="poster-body">
+      <div class="p-title">${esc((c.headline||c.title||'').toUpperCase())}</div>
+      ${c.subtitle?`<div class="p-script">${esc(c.subtitle)}</div>`:''}
+      <div class="p-when"><div class="p-day">${esc(c.slot_date||'')}</div><div class="p-time">${esc(c.slot_time||'')}</div></div>
+      <div class="p-ages">${esc(ages)}</div>
+      <div class="p-logos">DELAWARE DIV. OF THE ARTS · GIBBY · THE EVERETT</div>
+    </div></div>`;
+}
+async function adminSlots(){
+  const {slots} = await api('/api/slots');
+  $('#tab').innerHTML = `
+    <h2>Open <em>slots</em></h2>
+    <p class="sub">Create time slots instructors can claim.</p>
+    <div class="card">
+      <div class="two"><div><label>Date</label><input id="sd" placeholder="Sat, Feb 7"></div>
+      <div><label>Room</label><select id="sr"><option>Large Room</option><option>Studio</option></select></div></div>
+      <div class="two"><div><label>Start</label><input id="ss" placeholder="10:00 AM"></div>
+      <div><label>End</label><input id="se" placeholder="10:30 AM"></div></div>
+      <div style="height:12px"></div>
+      <button class="btn dark" onclick="addSlot()">Add slot</button>
+    </div>
+    <label style="margin-top:8px">Available (${slots.length})</label>
+    ${slots.map(s=>`<div class="card"><div class="row"><div><h3>${esc(s.date)}</h3>
+      <div class="meta">${esc(s.start)} – ${esc(s.end)} · ${esc(s.room)}</div></div>
+      <span class="pill appr">open</span></div></div>`).join('') || '<div class="muted">No open slots yet.</div>'}`;
+}
+async function addSlot(){
+  await api('/api/slots','POST',{date:$('#sd').value,start:$('#ss').value,end:$('#se').value,room:$('#sr').value});
+  adminSlots();
+}
+async function adminApprovals(){
+  const {classes} = await api('/api/classes/pending'); window.__classes=classes;
+  $('#tab').innerHTML = `<h2>Pending <em>approval</em></h2>
+    <p class="sub">${classes.length} waiting. Approve to publish, or send back with a note.</p>
+    ${classes.map(cardCls).join('') || '<div class="muted">Nothing pending. Nice.</div>'}`;
+}
+async function adminAll(){
+  const {classes} = await api('/api/classes/all'); window.__classes=classes;
+  $('#tab').innerHTML = `<h2>All <em>classes</em></h2><p class="sub">${classes.length} total.</p>
+    ${classes.map(cardCls).join('') || '<div class="muted">No classes yet.</div>'}`;
+}
+function cardCls(c){
+  const pill = c.status==='approved'?'<span class="pill appr">approved</span>'
+    : c.status==='incomplete'?'<span class="pill inc">sent back</span>'
+    : '<span class="pill pend">pending</span>';
+  return `<div class="card">
+    <div class="row"><h3>${esc(c.title)}</h3>${pill}</div>
+    <div class="meta">${esc(c.instructor_name)} · ${esc(c.slot_date||'')} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div>
+    ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
+    <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
+    <div class="meta" style="margin-top:8px">${esc(c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
+    ${c.status==='pending' && ME.role==='admin' ? `
+      <div class="two" style="margin-top:14px">
+        <button class="btn warn" onclick="markIncomplete(${c.id})">Send back</button>
+        <button class="btn green" onclick="approve(${c.id})">Approve</button></div>`:''}
+    ${c.status==='approved' ? `<div class="ok-note" style="margin-top:12px">✓ Published. Eventbrite ID ${esc((c.external_ids||{}).eventbrite_event_id||'')}</div>`:''}
+    ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
+    ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
+    ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
+      <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
+      <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
+      <div id="roster${c.id}"></div>`:''}
+    ${ME.role==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
+      <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
+      <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>`:''}
+    <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
+    <div id="gfx${c.id}"></div>
+  </div>`;
+}
+async function approve(id){ await api(`/api/classes/${id}/approve`,'POST'); adminApprovals(); }
+async function markIncomplete(id){
+  const note = prompt("What needs fixing? (the instructor sees this)");
+  if(note===null) return;
+  await api(`/api/classes/${id}/incomplete`,'POST',{note}); adminApprovals();
+}
+
+async function emailClass(id,kind){
+  const r=await api('/api/classes/'+id+'/'+kind,'POST');
+  alert((kind==='remind'?'Reminder':'Follow-up')+' emailed to '+r.sent+' students.\n(Dry-run and logged unless email is set live in config.json.)');
+}
+async function viewRoster(id){
+  const {registrations} = await api('/api/class/'+id+'/registrations');
+  $('#roster'+id).innerHTML = '<div style="margin-top:8px">'+(registrations.length?registrations.map(r=>
+    `<div class="meta" style="padding:7px 0;border-top:1px solid var(--line)">${esc(r.name)} · ${esc(r.email)} · ${esc(r.phone)}${r.refunded?' · refunded':''}</div>`).join('')
+    :'<div class="meta" style="padding:8px 0">No registrations yet.</div>')+'</div>';
+}
+
+/* ---------------- instructor ---------------- */
+let SUBMIT_SLOT=null, PHOTO=null, TPLS=[];
+async function loadTplOptions(){
+  const {templates}=await api('/api/templates'); TPLS=templates;
+  const sel=$('#f_tpl'); if(sel) sel.innerHTML='<option value="">None, start blank</option>'+templates.map((t,i)=>`<option value="${i}">${esc(t.title)}</option>`).join('');
+}
+function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+i];
+  $('#f_title').value=t.title; $('#f_desc').value=t.description; $('#f_age').value=t.age; $('#f_head').value=t.title.toUpperCase(); }
+async function renderInstr(tab){
+  $('#view').innerHTML = `
+    <div class="tabs">
+      <button class="${tab==='open'?'on':''}" onclick="renderInstr('open')">Open slots</button>
+      <button class="${tab==='mine'?'on':''}" onclick="renderInstr('mine')">My classes</button>
+    </div><div id="tab"></div>`;
+  if(tab==='open') return instrOpen();
+  return instrMine();
+}
+async function instrOpen(){
+  const {slots} = await api('/api/slots');
+  $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
+    <p class="sub">Pick a slot, then fill the class form.</p>
+    ${slots.map(s=>`<div class="card"><div class="row"><div><h3>${esc(s.start)} – ${esc(s.end)}</h3>
+      <div class="meta">${esc(s.date)} · ${esc(s.room)}</div></div>
+      <button class="btn dark" style="width:auto;padding:10px 16px" onclick='openForm(${JSON.stringify(s)})'>Claim</button>
+      </div></div>`).join('') || '<div class="muted">No open slots right now.</div>'}`;
+}
+async function instrMine(){
+  const {classes} = await api('/api/classes/mine'); window.__classes=classes;
+  $('#tab').innerHTML = `<h2>Your <em>classes</em></h2><p class="sub">${classes.length} submitted.</p>
+    ${classes.map(cardCls).join('') || '<div class="muted">You have not submitted a class yet.</div>'}`;
+}
+function openForm(slot){
+  SUBMIT_SLOT=slot; PHOTO=null;
+  $('#view').innerHTML = `
+    <h2>New <em>class</em></h2>
+    <p class="sub">${esc(slot.date)} · ${esc(slot.start)}–${esc(slot.end)} · ${esc(slot.room)}</p>
+    <div class="err" id="ferr"></div>
+    <label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select>
+    <label>Class title</label><input id="f_title">
+    <label>Description</label><textarea id="f_desc"></textarea>
+    <label>Age range</label>
+    <select id="f_age"><option>All Ages</option><option>Toddlers</option><option>Ages 7–9</option>
+      <option>Ages 9–12</option><option>Ages 16+</option><option>Ages 21+</option></select>
+    <label>Will alcohol be available for purchase?</label>
+    <div class="seg" id="f_alc"><button class="on" data-v="no" onclick="alcSel(this)">No</button>
+      <button data-v="yes" onclick="alcSel(this)">Yes</button></div>
+    <div class="two"><div><label>Max</label><input id="f_max" type="number" value="16" oninput="calc()"></div>
+      <div><label>Min</label><input id="f_min" type="number" value="6" oninput="calc()"></div></div>
+
+    <label>Photo for the graphic</label>
+    <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
+    <input id="f_file" type="file" accept="image/*" class="hidden" onchange="onPhoto(event)">
+    <label>Graphic headline</label><input id="f_head" placeholder="e.g. STAINED GLASS">
+    <label>Script subtitle (optional)</label><input id="f_sub" placeholder="e.g. Mini Terrarium">
+
+    <label style="margin-top:16px">Pricing</label>
+    <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc()"></div>
+      <div><label style="margin-top:0">Planned</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
+    <label>Supply cost / student ($)</label><input id="c_mat" type="number" value="8" oninput="calc()">
+    <div class="calc">
+      <div class="o"><span>Recommended ticket</span><b class="hero" id="o_t">$0</b></div>
+      <div class="o"><span>Your pay @ planned</span><b id="o_p">$0</b></div>
+    </div>
+    <div class="two" style="margin-top:12px"><div><label style="margin-top:0">Ticket price ($)</label><input id="f_ticket" type="number" oninput="this.dataset.t=1"></div>
+      <div><label style="margin-top:0">Your pay ($)</label><input id="f_pay" type="number" oninput="this.dataset.t=1"></div></div>
+    <div style="height:80px"></div>
+    <div class="fab"><div class="two">
+      <button class="btn ghost" onclick="renderInstr('open')">Cancel</button>
+      <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
+  calc(); loadTplOptions();
+}
+function alcSel(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  if(b.dataset.v==='yes') $('#f_age').value='Ages 21+'; }
+function onPhoto(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
+  r.onload=ev=>{PHOTO=ev.target.result; $('#f_photo').innerHTML='<img src="'+PHOTO+'">';}; r.readAsDataURL(f); }
+function calc(){
+  const pay=+$('#c_pay').value||0, plan=Math.max(1,+$('#c_plan').value||1), mat=+$('#c_mat').value||0;
+  const ticket=Math.ceil(mat + (pay/0.6)/plan);
+  const rev=ticket*plan, pool=Math.max(0,rev-mat*plan), yourPay=pool*0.6;
+  $('#o_t').textContent=money(ticket); $('#o_p').textContent=money(yourPay);
+  if(!$('#f_ticket').dataset.t)$('#f_ticket').value=ticket;
+  if(!$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
+}
+async function submitClass(){
+  const alc = $('#f_alc').querySelector('.on').dataset.v==='yes';
+  const body = {
+    title:$('#f_title').value, description:$('#f_desc').value, age_range:$('#f_age').value,
+    alcohol:alc, max_p:+$('#f_max').value, min_p:+$('#f_min').value,
+    ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
+    headline:$('#f_head').value, subtitle:$('#f_sub').value, photo:PHOTO,
+    slot_id:SUBMIT_SLOT.id, slot_date:SUBMIT_SLOT.date,
+    slot_time:SUBMIT_SLOT.start+' – '+SUBMIT_SLOT.end, room:SUBMIT_SLOT.room,
+    supplies:[]
+  };
+  try{ await api('/api/classes','POST',body); renderInstr('mine'); }
+  catch(e){ const x=$('#ferr'); x.textContent=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message); x.classList.add('show'); window.scrollTo(0,0); }
+}
+
+boot();
+</script>
+</body>
+</html>

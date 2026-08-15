@@ -1,0 +1,5 @@
+gibby.db
+config.json
+__pycache__/
+*.pyc
+.git
