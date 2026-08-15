@@ -85,6 +85,17 @@
   .calc{background:var(--ink);color:#fff;border-radius:16px;padding:16px;margin-top:8px}
   .calc .o{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.12);font-size:13px}
   .calc .o:last-child{border-bottom:none}.calc .o b{font-weight:800}.calc .o .hero{color:var(--yellow);font-size:16px}
+  .daytabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 12px;padding-bottom:4px}
+  .daytab{flex:none;border:none;background:var(--white);padding:9px 14px;border-radius:14px;font-weight:800;font-size:14px;cursor:pointer;box-shadow:0 3px 9px rgba(0,0,0,.05);color:var(--ink);text-align:center;line-height:1.1}
+  .daytab small{display:block;font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:2px}
+  .daytab.on{background:var(--ink);color:#fff}.daytab.on small{color:rgba(255,255,255,.7)}
+  .tip{display:flex;gap:9px;align-items:flex-start;background:#FCE889;border-radius:16px;padding:12px 14px;font-size:12.5px;font-weight:700;line-height:1.35;margin-bottom:14px}
+  .slotgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .slotcard{border:none;border-radius:18px;padding:14px 14px 12px;text-align:left;cursor:pointer;position:relative;box-shadow:0 6px 14px rgba(30,22,10,.08);color:var(--ink);overflow:hidden;font-family:inherit}
+  .slotcard .sg{position:absolute;right:11px;top:9px;font-size:13px;opacity:.85}
+  .slotcard .st{font-size:14.5px;font-weight:800;letter-spacing:-.01em;line-height:1.1}
+  .slotcard .sr{font-size:10.5px;font-weight:700;opacity:.68;margin-top:5px}
+  .sc-y{background:#F7D64B}.sc-p{background:#F4A9C8}.sc-b{background:#A9C7EB}.sc-g{background:#AFD0A6}.sc-v{background:#C6B4F0}
 </style>
 </head>
 <body>
@@ -112,7 +123,7 @@ async function api(path, method='GET', body){
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
 
-let ME=null, VIEWAS=null, LOGIN_CHOICE=null;
+let ME=null, VIEWAS=null, LOGIN_CHOICE=null, SLOTDAY=null;
 function showErr(id,msg){ const x=$('#'+id); if(x){x.textContent=msg; x.classList.add('show');} }
 function actingRole(){ return (ME && ME.role==='admin') ? (VIEWAS||'admin') : (ME?ME.role:null); }
 function switchMode(){ VIEWAS = (VIEWAS==='admin'?'instructor':'admin'); boot(); }
@@ -538,15 +549,22 @@ async function renderInstr(tab){
   if(tab==='open') return instrOpen();
   return instrMine();
 }
+const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
 async function instrOpen(){
   const {slots} = await api('/api/slots');
+  if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
+  const days=[...new Set(slots.map(s=>s.date))];
+  if(!days.includes(SLOTDAY)) SLOTDAY=days[0];
+  const dayslots=slots.filter(s=>s.date===SLOTDAY);
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
-    <p class="sub">Pick a slot, then fill the class form.</p>
-    ${slots.map(s=>`<div class="card"><div class="row"><div><h3>${esc(s.start)} – ${esc(s.end)}</h3>
-      <div class="meta">${esc(s.date)} · ${esc(s.room)}</div></div>
-      <button class="btn dark" style="width:auto;padding:10px 16px" onclick='openForm(${JSON.stringify(s)})'>Claim</button>
-      </div></div>`).join('') || '<div class="muted">No open slots right now.</div>'}`;
+    <p class="sub">Slots are set by admin. Pick one, then fill the class form.</p>
+    <div class="daytabs">${days.map(d=>{const p=d.split(', ');return `<button class="daytab ${d===SLOTDAY?'on':''}" onclick="pickDay('${d}')">${esc(p[1]||d)}<small>${esc(p[0]||'')}</small></button>`;}).join('')}</div>
+    <div class="tip">🕒 <span>Book an extra 30-minute slot before <b>and</b> after your class for setup and cleanup.</span></div>
+    <div class="slotgrid">${dayslots.map((s,i)=>`<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]}" onclick='openForm(${JSON.stringify(s)})'>
+      <span class="sg">${SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
+      <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`).join('')}</div>`;
 }
+function pickDay(d){ SLOTDAY=d; instrOpen(); }
 async function instrMine(){
   const {classes} = await api('/api/classes/mine'); window.__classes=classes;
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2><p class="sub">${classes.length} submitted.</p>

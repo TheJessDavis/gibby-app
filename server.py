@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.5-profile"
+VERSION = "1.6-slots-ui"
 
 # ---------------------------------------------------------------- database ----
 def db():
