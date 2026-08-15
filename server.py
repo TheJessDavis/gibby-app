@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.1-race-edit"
+VERSION = "1.2-eventbrite"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -438,6 +438,10 @@ class H(http.server.BaseHTTPRequestHandler):
                 "This is a test from your Gibby Class Manager. If you received this, email is working.", cfg)
             return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
                 "live": bool(cfg["email_live"] and cfg["smtp_host"]), "delivered": bool(delivered)})
+        if p == "/api/test-eventbrite":
+            u = self.require("admin")
+            if not u: return
+            return self.send_json(integrations.eventbrite_orgs(integrations.load_config()))
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return

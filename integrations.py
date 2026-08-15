@@ -85,9 +85,39 @@ def _iso_times(cls, cfg):
         start = t(parts[0])
         end = t(parts[1]) if len(parts) > 1 else start + datetime.timedelta(minutes=30)
         f = "%Y-%m-%dT%H:%M:%SZ"
-        return start.strftime(f), end.strftime(f)
+        # convert US-Eastern local -> UTC so Eventbrite shows the right time
+        su = start - datetime.timedelta(hours=_eastern_offset(start))
+        eu = end - datetime.timedelta(hours=_eastern_offset(end))
+        return su.strftime(f), eu.strftime(f)
     except Exception:
         return None, None
+
+def _eastern_offset(dt):
+    """US Eastern offset (hours, negative) for a naive local datetime. EDT (-4)
+    from the 2nd Sunday of March 02:00 to the 1st Sunday of November 02:00, else EST (-5)."""
+    y = dt.year
+    second_sun_mar = [d for d in range(1, 32) if datetime.date(y, 3, d).weekday() == 6][1]
+    first_sun_nov  = [d for d in range(1, 32) if datetime.date(y, 11, d).weekday() == 6][0]
+    start = datetime.datetime(y, 3, second_sun_mar, 2)
+    end   = datetime.datetime(y, 11, first_sun_nov, 2)
+    return -4 if start <= dt < end else -5
+
+def eventbrite_orgs(cfg):
+    """Read-only: verify the Eventbrite token and return the organization(s) so we
+    can grab the org id. Creates nothing."""
+    if not cfg["eventbrite_token"]:
+        return {"ok": False, "error": "No EVENTBRITE_TOKEN set yet."}
+    try:
+        res = _req("https://www.eventbriteapi.com/v3/users/me/organizations/", method="GET",
+                   token=cfg["eventbrite_token"])
+        return {"ok": True, "organizations": [{"id": o.get("id"), "name": o.get("name")}
+                                              for o in res.get("organizations", [])]}
+    except urllib.error.HTTPError as e:
+        try: body = e.read().decode()[:200]
+        except Exception: body = ""
+        return {"ok": False, "error": f"HTTP {e.code} {body}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 # ----------------------------------------------------------------- platforms ----
 def post_canva(cls, cfg):

@@ -318,7 +318,8 @@ async function adminConnections(){
       <div class="meta" style="margin-top:8px">API keys: <b style="color:${it.configured?'#3F7A32':'#B45309'}">${it.id==='descene'?'no API (manual)':(it.configured?'present':'missing')}</b></div>
       <button class="btn ${it.status==='connected'?'warn':'dark'}" style="margin-top:12px"
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
-        ${it.status==='connected'?'Disconnect':'Connect'}</button></div>`).join('')}
+        ${it.status==='connected'?'Disconnect':'Connect'}</button>
+      ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>`:''}</div>`).join('')}
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
@@ -330,6 +331,12 @@ async function testEmail(){
   else alert('Email is set live but the send FAILED (bad SMTP host/user/password, most likely).\nDouble-check the SMTP settings.');
 }
 async function toggleInteg(id,action){ await api('/api/integrations/'+id+'/'+action,'POST'); adminConnections(); }
+async function testEventbrite(){
+  const r=await api('/api/test-eventbrite','POST',{});
+  if(!r.ok){ alert('Eventbrite check failed:\n'+r.error+'\n\nMake sure EVENTBRITE_TOKEN is set on the server.'); return; }
+  const list=(r.organizations||[]).map(o=>o.name+'  —  Org ID: '+o.id).join('\n');
+  alert('Token works! Your Eventbrite organization(s):\n\n'+(list||'(none found)')+'\n\nSet EVENTBRITE_ORG_ID to the Org ID above, then set GIBBY_LIVE=true.');
+}
 
 /* ---------------- graphic preview ---------------- */
 function previewGraphic(id){
