@@ -21,7 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def load_config():
     cfg = {
-        "live": False, "timezone": "America/New_York", "year": 2027,
+        "live": os.environ.get("GIBBY_LIVE", "").lower() in ("1", "true", "yes"),
+        "timezone": "America/New_York", "year": 2027,
         "eventbrite_token":  os.environ.get("EVENTBRITE_TOKEN", ""),
         "eventbrite_org_id": os.environ.get("EVENTBRITE_ORG_ID", ""),
         "fb_page_id":        os.environ.get("FB_PAGE_ID", ""),

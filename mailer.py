@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def load_email_config():
     cfg = {
-        "email_live": False,
+        "email_live": os.environ.get("EMAIL_LIVE", "").lower() in ("1", "true", "yes"),
         "smtp_host": os.environ.get("SMTP_HOST", ""),
         "smtp_port": int(os.environ.get("SMTP_PORT", "587") or 587),
         "smtp_user": os.environ.get("SMTP_USER", ""),
