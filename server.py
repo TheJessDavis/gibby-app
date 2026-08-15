@@ -10,7 +10,7 @@ emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
 import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random
-import integrations, mailer, threading, time
+import integrations, mailer, gcal, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", ROOT)   # point at a mounted volume in production so data persists
@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.7-consecutive"
+VERSION = "1.8-gcal"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -57,8 +57,19 @@ def init_db():
       id TEXT PRIMARY KEY, name TEXT, method TEXT, status TEXT);
     CREATE TABLE IF NOT EXISTS password_resets(
       token TEXT PRIMARY KEY, user_id INTEGER, expires TEXT);
+    CREATE TABLE IF NOT EXISTS audit_log(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, class_id INTEGER,
+      prev_status TEXT, new_status TEXT, actor_id INTEGER,
+      ts TEXT, snapshot TEXT);
+    -- Immutable at the DB layer: any UPDATE or DELETE against a written row aborts.
+    CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log
+      BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log
+      BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
     """)
     try: c.execute("ALTER TABLE users ADD COLUMN must_change_pw INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
+    try: c.execute("ALTER TABLE slots ADD COLUMN source TEXT DEFAULT 'manual'")
     except sqlite3.OperationalError: pass
     for col in ("promoted","reminded","followed_up","low_alerted"):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
@@ -151,12 +162,25 @@ def publish_class(cls):
     config's "live" is true. Returns external IDs / per-platform results."""
     return integrations.publish(cls)
 
-def approve_and_publish(c, cls):
+def audit(c, class_id, prev_status, new_status, actor_id):
+    """Append one immutable entry recording a Class status change. Snapshots the
+    class record AS IT STANDS NOW (after the change). Append-only: this is the ONLY
+    place the app writes audit_log, and it never updates or deletes; DB triggers
+    enforce that even against bugs. actor_id is None for automated (scheduler) changes."""
+    r = c.execute("SELECT * FROM classes WHERE id=?", (class_id,)).fetchone()
+    snap = json.dumps({k: r[k] for k in r.keys()}) if r else "{}"
+    c.execute("INSERT INTO audit_log(class_id,prev_status,new_status,actor_id,ts,snapshot) VALUES(?,?,?,?,?,?)",
+              (class_id, prev_status, new_status, actor_id, now(), snap))
+
+def approve_and_publish(c, cls, actor_id=None):
     """Shared approval: publish, sync registrations, email the instructor, mark
     approved. Used by admin approval and by instructor approval of admin edits."""
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
     ext = publish_class(cls)
+    gid = gcal.create_event({**cls, "instructor_name": instr["name"]}, gcal.load_gcal_config())  # add to Google Calendar
+    if gid: ext["gcal_event_id"] = gid
     c.execute("UPDATE classes SET status='approved', external_ids=? WHERE id=?",(json.dumps(ext),cls["id"]))
+    audit(c, cls["id"], cls.get("status"), "approved", actor_id)
     seed_registrations(c, cls)
     subj, body = mailer.tmpl_approved(cls, instr); mailer.send(instr["email"], subj, body)
 
@@ -192,6 +216,7 @@ def run_scheduler(asof=None):
                 c.execute("UPDATE classes SET low_alerted=1 WHERE id=?",(cls["id"],)); actions.append(f"low-enroll alert: {cls['title']}")
             if days == 7 and enrolled < (cls["min_p"] or 0):
                 c.execute("UPDATE classes SET status='cancelled' WHERE id=?",(cls["id"],))
+                audit(c, cls["id"], cls.get("status"), "cancelled", None)   # automated: no actor
                 c.execute("UPDATE registrations SET refunded=1 WHERE class_id=?",(cls["id"],))
                 subj, body = mailer.tmpl_cancel(cls); mailer.send(students, subj, body)
                 if instr and instr[0]: mailer.send(instr[0], "Your class was auto-cancelled", body)
@@ -206,10 +231,39 @@ def run_scheduler(asof=None):
     if actions: print("[scheduler]", "; ".join(actions))
     return actions
 
+def reconcile_calendar_slots(open_slots):
+    """Make the slots table match the calendar's open times. Adds new open slots,
+    removes calendar-sourced available slots that are no longer open; never touches
+    claimed slots or manually-created ones."""
+    c = db()
+    existing = {(r["date"],r["start"],r["end"]): dict(r) for r in c.execute("SELECT * FROM slots WHERE source='calendar'")}
+    want = {(s["date"],s["start"],s["end"]) for s in open_slots}
+    added = removed = 0
+    for k, r in existing.items():
+        if k not in want and r["status"] == "available":
+            c.execute("DELETE FROM slots WHERE id=?",(r["id"],)); removed += 1
+    for s in open_slots:
+        if (s["date"],s["start"],s["end"]) not in existing:
+            c.execute("INSERT INTO slots(date,start,end,room,status,source) VALUES(?,?,?,'','available','calendar')",
+                      (s["date"],s["start"],s["end"])); added += 1
+    c.commit(); c.close()
+    return {"added": added, "removed": removed, "open": len(open_slots)}
+
+def sync_calendar():
+    cfg = gcal.load_gcal_config()
+    if not gcal.configured(cfg): return None
+    slots = gcal.sync_slots(cfg)
+    if slots is None: return None
+    return reconcile_calendar_slots(slots)
+
 def scheduler_loop():
     while True:
         try: run_scheduler()
         except Exception as e: print("[scheduler] error:", e)
+        try:
+            r = sync_calendar()
+            if r: print("[gcal] sync", r)
+        except Exception as e: print("[gcal] sync error:", e)
         time.sleep(3600)   # check hourly; day-based rules fire once per class
 
 # ------------------------------------------------------------- handler ----
@@ -312,6 +366,25 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json({"classes": self._classes("")})
+        if p == "/api/audit":   # read-only; filter by ?class_id= or ?actor_id=
+            u = self.require("admin")
+            if not u: return
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            where, args = "", []
+            if q.get("class_id"):
+                where, args = "WHERE a.class_id=?", [int(q["class_id"][0])]
+            elif q.get("actor_id"):
+                where, args = "WHERE a.actor_id=?", [int(q["actor_id"][0])]
+            c = db()
+            rows = [dict(r) for r in c.execute(f"""
+                SELECT a.id, a.class_id, a.prev_status, a.new_status, a.actor_id, a.ts, a.snapshot,
+                       c.title AS class_title, u.name AS actor_name, u.email AS actor_email
+                FROM audit_log a
+                LEFT JOIN classes c ON c.id = a.class_id
+                LEFT JOIN users   u ON u.id = a.actor_id
+                {where} ORDER BY a.id DESC LIMIT 500""", args).fetchall()]
+            c.close()
+            return self.send_json({"entries": rows})
         if p == "/api/dashboard":
             u = self.require("admin")
             if not u: return
@@ -461,6 +534,15 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json(integrations.eventbrite_orgs(integrations.load_config()))
+        if p == "/api/sync-calendar":
+            u = self.require("admin")
+            if not u: return
+            if not gcal.configured(gcal.load_gcal_config()):
+                return self.send_json({"ok":False,"error":"Google Calendar isn't connected yet."})
+            r = sync_calendar()
+            if r is None:
+                return self.send_json({"ok":False,"error":"Could not read the calendar. Check the service account key and that the calendar is shared with it."})
+            return self.send_json({"ok":True, **r})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return
@@ -496,7 +578,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available'", ids).rowcount
                 if claimed != len(ids):
                     c.close(); return self.send_json({"error":"One of those slots was just claimed by someone else. Please reselect."},409)
-                slot_date, room = rows[0]["date"], rows[0]["room"]
+                slot_date = rows[0]["date"]
+                room = b.get("room") or rows[0]["room"]  # calendar slots are roomless; take room from the form
                 slot_time = rows[0]["start"] + " – " + rows[-1]["end"]
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
@@ -508,6 +591,7 @@ class H(http.server.BaseHTTPRequestHandler):
                  json.dumps(b.get("supplies",[])),b.get("headline"),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
                  b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), now()))
+            audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
             mailer.send(admins, "New class submission",
@@ -532,6 +616,7 @@ class H(http.server.BaseHTTPRequestHandler):
             students = [r[0] for r in c.execute("SELECT email FROM registrations WHERE class_id=?",(cid,)).fetchall()]
             instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
             c.execute("UPDATE classes SET status='cancelled' WHERE id=?",(cid,))
+            audit(c, cid, cls.get("status"), "cancelled", u["id"])
             c.execute("UPDATE registrations SET refunded=1 WHERE class_id=?",(cid,)); c.commit(); c.close()
             print(f"[cancel] class #{cid} -> would refund all via Eventbrite")
             subj, body = mailer.tmpl_cancel(cls)
@@ -564,6 +649,7 @@ class H(http.server.BaseHTTPRequestHandler):
             sets += ["status=?","admin_note=?"]; vals += ["instructor_review", b.get("note","")]
             vals.append(cid)
             c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
+            audit(c, cid, row["status"], "instructor_review", u["id"])
             instr = c.execute("SELECT email,name FROM users WHERE id=?",(row["instructor_id"],)).fetchone()
             c.commit(); c.close()
             if instr:
@@ -581,7 +667,7 @@ class H(http.server.BaseHTTPRequestHandler):
             cls = dict(row)
             if cls["instructor_id"] != u["id"] or cls["status"] != "instructor_review":
                 c.close(); return self.send_json({"error":"not allowed"},403)
-            approve_and_publish(c, cls); c.commit(); c.close()
+            approve_and_publish(c, cls, u["id"]); c.commit(); c.close()
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/instructor-decline"):   # instructor rejects admin edits -> back to admin
             u = self.require("instructor")
@@ -591,6 +677,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not row or row["instructor_id"] != u["id"]:
                 c.close(); return self.send_json({"error":"not allowed"},403)
             c.execute("UPDATE classes SET status='pending', admin_note=? WHERE id=?",(b.get("note",""),cid))
+            audit(c, cid, row["status"], "pending", u["id"])
             admins = emails_for(c, "WHERE role='admin'"); c.commit(); c.close()
             mailer.send(admins, f"Instructor requested changes: {row['title']}",
                 f"{u['name']} did not accept the edits to \"{row['title']}\".\n\nTheir note: {b.get('note','(none)')}\n\nIt is back in the approvals queue.")
@@ -635,9 +722,10 @@ class H(http.server.BaseHTTPRequestHandler):
         cls=dict(row)
         instr=dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
         if approve:
-            approve_and_publish(c, cls)
+            approve_and_publish(c, cls, u["id"])
         else:
             c.execute("UPDATE classes SET status='incomplete', admin_note=? WHERE id=?",(b.get("note",""),cid))
+            audit(c, cid, cls.get("status"), "incomplete", u["id"])
             # release all claimed slots back to available
             sids = json.loads(cls.get("slot_ids") or "[]")
             if sids:

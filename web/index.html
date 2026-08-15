@@ -263,7 +263,7 @@ async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; 
 async function renderAdmin(tab){
   const v=$('#view');
   const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
-  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}</div><div id="tab"></div>`;
+  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('audit','Audit')}</div><div id="tab"></div>`;
   if(tab==='dashboard') return adminDashboard();
   if(tab==='slots') return adminSlots();
   if(tab==='approvals') return adminApprovals();
@@ -271,6 +271,7 @@ async function renderAdmin(tab){
   if(tab==='calendar') return adminCalendar();
   if(tab==='connections') return adminConnections();
   if(tab==='all') return adminAll();
+  if(tab==='audit') return adminAudit();
 }
 async function adminDashboard(){
   const d = await api('/api/dashboard');
@@ -374,6 +375,8 @@ async function adminConnections(){
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
         ${it.status==='connected'?'Disconnect':'Connect'}</button>
       ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>`:''}</div>`).join('')}
+    <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
+      <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
@@ -385,6 +388,43 @@ async function testEmail(){
   else alert('Email is set live but the send FAILED (bad SMTP host/user/password, most likely).\nDouble-check the SMTP settings.');
 }
 async function toggleInteg(id,action){ await api('/api/integrations/'+id+'/'+action,'POST'); adminConnections(); }
+async function syncCalendar(){
+  const r=await api('/api/sync-calendar','POST',{});
+  if(!r.ok){ alert('Calendar sync: '+r.error); return; }
+  alert('Calendar synced!\n\nOpen slots now available: '+r.open+'\n(+'+r.added+' added, '+r.removed+' removed)');
+}
+/* ---------------- audit log (read-only) ---------------- */
+async function adminAudit(){
+  const {entries} = await api('/api/audit'); window.__audit = entries;
+  const classes = [...new Map(entries.filter(e=>e.class_id).map(e=>[e.class_id, e.class_title||('Class #'+e.class_id)])).entries()];
+  const actors  = [...new Map(entries.map(e=>[e.actor_id==null?'null':e.actor_id, e.actor_id==null?'Automated (system)':(e.actor_name||e.actor_email||('User #'+e.actor_id))])).entries()];
+  $('#tab').innerHTML = `<h2>Audit <em>log</em></h2>
+    <p class="sub">Append-only record of every class status change. ${entries.length} entr${entries.length===1?'y':'ies'} · read-only.</p>
+    <div class="two">
+      <div><label>Filter by class</label><select id="af_class" onchange="renderAuditRows()"><option value="">All classes</option>
+        ${classes.map(([id,t])=>`<option value="${id}">${esc(t)} (#${id})</option>`).join('')}</select></div>
+      <div><label>Filter by actor</label><select id="af_actor" onchange="renderAuditRows()"><option value="">All actors</option>
+        ${actors.map(([id,n])=>`<option value="${id}">${esc(n)}</option>`).join('')}</select></div>
+    </div>
+    <div id="auditrows" style="margin-top:14px"></div>`;
+  renderAuditRows();
+}
+function snapPretty(s){ try{ const o=JSON.parse(s||'{}'); if(o.photo) o.photo='[image data omitted]'; return JSON.stringify(o,null,2); }catch(_){ return s||''; } }
+function renderAuditRows(){
+  const cid=$('#af_class').value, aid=$('#af_actor').value;
+  let rows = window.__audit||[];
+  if(cid) rows = rows.filter(e=>String(e.class_id)===cid);
+  if(aid) rows = rows.filter(e=>(e.actor_id==null?'null':String(e.actor_id))===aid);
+  const badge=s=>`<span class="pill ${s==='approved'?'appr':(s==='cancelled'||s==='incomplete')?'inc':'pend'}">${esc(s||'new')}</span>`;
+  $('#auditrows').innerHTML = rows.map(e=>`
+    <div class="card">
+      <div class="row"><div><h3 style="font-size:1rem">${esc(e.class_title||('Class #'+e.class_id))}</h3>
+        <div class="meta">${esc(e.ts)} · ${e.actor_id==null?'Automated (system)':esc(e.actor_name||e.actor_email||('User #'+e.actor_id))}</div></div>
+        <div style="white-space:nowrap">${badge(e.prev_status)} <span style="opacity:.5">→</span> ${badge(e.new_status)}</div></div>
+      <button class="btn ghost" style="margin-top:8px" onclick="this.nextElementSibling.classList.toggle('hidden')">View snapshot</button>
+      <pre class="hidden" style="margin-top:8px;background:#f6f4ef;border-radius:12px;padding:12px;overflow:auto;font-size:.72rem;white-space:pre-wrap">${esc(snapPretty(e.snapshot))}</pre>
+    </div>`).join('') || '<div class="muted">No entries match those filters.</div>';
+}
 async function testEventbrite(){
   const r=await api('/api/test-eventbrite','POST',{});
   if(!r.ok){ alert('Eventbrite check failed:\n'+r.error+'\n\nMake sure EVENTBRITE_TOKEN is set on the server.'); return; }
@@ -601,11 +641,14 @@ function openForm(slot){
   SUBMIT_SLOT=slot; PHOTO=null;
   $('#view').innerHTML = `
     <h2>New <em>class</em></h2>
-    <p class="sub">${esc(slot.date)} · ${esc(slot.start)}–${esc(slot.end)} · ${esc(slot.room)}</p>
+    <p class="sub">${esc(slot.date)} · ${esc(slot.start)}–${esc(slot.end)}${slot.room?' · '+esc(slot.room):''}</p>
     <div class="err" id="ferr"></div>
     <label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select>
     <label>Class title</label><input id="f_title">
     <label>Description</label><textarea id="f_desc"></textarea>
+
+    <label>Room</label>
+    <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>
 
     <label>Class length</label>
     <select id="f_len"><option value="">Select length…</option>
@@ -690,7 +733,7 @@ async function submitClass(){
     alcohol:alc, max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     headline:$('#f_head').value, subtitle:$('#f_sub').value, photo:PHOTO,
-    slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date, room:SUBMIT_SLOT.room,
+    slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date, room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     supplies:[]
   };
   try{ await api('/api/classes','POST',body); SEL=[]; renderInstr('mine'); }

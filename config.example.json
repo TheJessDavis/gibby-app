@@ -22,5 +22,15 @@
   "smtp_port": 587,
   "smtp_user": "",
   "smtp_pass": "",
-  "mail_from": "gibby@theeverett.org"
+  "mail_from": "gibby@theeverett.org",
+
+  "_gcal": "Google Calendar two-way sync. Share ONE calendar with the service account, paste the whole key JSON on one line, set gcal_live true to read/write for real. Days: [] = every day, [5] = Saturdays only (Mon=0..Sun=6).",
+  "gcal_live": false,
+  "calendar_id": "",
+  "service_account_json": "",
+  "open_hour": 8,
+  "close_hour": 22,
+  "slot_minutes": 30,
+  "horizon_days": 56,
+  "days": [5]
 }
