@@ -260,10 +260,13 @@ class H(http.server.BaseHTTPRequestHandler):
         path = os.path.normpath(os.path.join(WEB, p.lstrip("/")))
         if not path.startswith(WEB) or not os.path.isfile(path):
             path = os.path.join(WEB, "index.html")  # SPA fallback
-        ctype = {"html":"text/html","js":"application/javascript","css":"text/css"}.get(path.rsplit(".",1)[-1],"text/plain")
+        ctype = {"html":"text/html","js":"application/javascript","css":"text/css",
+                 "png":"image/png","gif":"image/gif","jpg":"image/jpeg","jpeg":"image/jpeg",
+                 "svg":"image/svg+xml","webp":"image/webp","ico":"image/x-icon"}.get(path.rsplit(".",1)[-1],"application/octet-stream")
         with open(path,"rb") as f: data = f.read()
         self.send_response(200)
-        self.send_header("Content-Type",ctype+"; charset=utf-8")
+        is_text = ctype.startswith("text/") or "javascript" in ctype or "svg" in ctype
+        self.send_header("Content-Type", ctype + ("; charset=utf-8" if is_text else ""))
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
 
