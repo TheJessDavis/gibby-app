@@ -353,6 +353,25 @@ class H(http.server.BaseHTTPRequestHandler):
                 try: asof = datetime.date.fromisoformat(b["asof"])
                 except Exception: pass
             return self.send_json({"ok": True, "actions": run_scheduler(asof)})
+        if p == "/api/users":  # admin create/update a user (idempotent by email)
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            email = (b.get("email","") or "").strip().lower()
+            name  = (b.get("name","") or "").strip() or email
+            role  = b.get("role","instructor")
+            pw    = b.get("password","")
+            if not (email and pw):
+                return self.send_json({"error":"email and password required"},400)
+            h, s = hash_pw(pw); c = db()
+            if c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone():
+                c.execute("UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=? WHERE email=?",(name,role,h,s,email))
+                action = "updated"
+            else:
+                c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt) VALUES(?,?,?,?,?)",(name,email,role,h,s))
+                action = "created"
+            c.commit(); c.close()
+            return self.send_json({"ok":True,"action":action,"email":email,"role":role})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return
