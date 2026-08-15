@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.2-poster-review"
+VERSION = "2.3-email-guards"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -57,6 +57,13 @@ def init_db():
       id TEXT PRIMARY KEY, name TEXT, method TEXT, status TEXT);
     CREATE TABLE IF NOT EXISTS password_resets(
       token TEXT PRIMARY KEY, user_id INTEGER, expires TEXT);
+    -- One row per (class, email type). The UNIQUE index is the real guarantee that
+    -- an automated email cannot go out twice, even if two jobs race.
+    CREATE TABLE IF NOT EXISTS email_log(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, class_id INTEGER NOT NULL,
+      email_type TEXT NOT NULL, sent_at TEXT NOT NULL,
+      recipients INTEGER DEFAULT 0, delivered INTEGER DEFAULT 0);
+    CREATE UNIQUE INDEX IF NOT EXISTS email_log_once ON email_log(class_id, email_type);
     CREATE TABLE IF NOT EXISTS audit_log(
       id INTEGER PRIMARY KEY AUTOINCREMENT, class_id INTEGER,
       prev_status TEXT, new_status TEXT, actor_id INTEGER,
@@ -238,9 +245,71 @@ def _class_date(cls, year=2027):
     except Exception:
         return None
 
+# Every automated class email must declare which class statuses it is valid for, and
+# whether the class must still be in the future. Nothing sends outside these rules.
+EMAIL_RULES = {
+    "reminder":          {"statuses": ("approved",),  "future_only": True,  "label": "48h reminder"},
+    "followup":          {"statuses": ("approved",),  "future_only": False, "label": "day-after follow-up"},
+    "cancel":            {"statuses": ("cancelled",), "future_only": False, "label": "cancellation notice"},
+    "cancel_instructor": {"statuses": ("cancelled",), "future_only": False, "label": "instructor cancellation notice"},
+    "low_alert":         {"statuses": ("approved",),  "future_only": True,  "label": "low-enrollment alert"},
+}
+
+def email_sent_at(c, class_id, email_type):
+    r = c.execute("SELECT sent_at FROM email_log WHERE class_id=? AND email_type=?",
+                  (class_id, email_type)).fetchone()
+    return r["sent_at"] if r else None
+
+def send_class_email(c, cls, email_type, recipients, subject, body, asof=None, cfg=None):
+    """THE gate every automated class email goes through. Verifies:
+      1. the class is in an expected status for this email type,
+      2. this email type has not already been sent for this class,
+      3. for reminders, the class date is still in the future.
+    Claims the (class, type) slot in email_log BEFORE sending, so a race cannot
+    produce two emails. Every suppression is logged with its reason.
+    Returns (sent: bool, reason: str)."""
+    rule = EMAIL_RULES[email_type]
+    cid, title = cls["id"], cls.get("title", "")
+
+    def suppressed(reason):
+        print(f"[email SUPPRESSED] class #{cid} {title!r} type={email_type}: {reason}")
+        return False, reason
+
+    status = cls.get("status")
+    if status not in rule["statuses"]:
+        return suppressed(f"class status is {status!r}, expected {' or '.join(rule['statuses'])}")
+
+    prev = email_sent_at(c, cid, email_type)
+    if prev:
+        return suppressed(f"already sent at {prev}")
+
+    if rule["future_only"]:
+        d, today = _class_date(cls), (asof or datetime.date.today())
+        if d is None:
+            return suppressed(f"could not read the class date from {cls.get('slot_date')!r}")
+        if d < today:
+            return suppressed(f"class date {d.isoformat()} has already passed")
+
+    recips = sorted({r for r in (recipients or []) if r and "@" in r})
+    if not recips:
+        return suppressed("no valid recipients")
+
+    # Claim first, then send: if another job already claimed it, we never send.
+    try:
+        c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(?,?,?,?)",
+                  (cid, email_type, now(), len(recips)))
+    except sqlite3.IntegrityError:
+        return suppressed("already sent (another job claimed it first)")
+
+    delivered = mailer.send(recips, subject, body, cfg)
+    c.execute("UPDATE email_log SET delivered=? WHERE class_id=? AND email_type=?",
+              (1 if delivered else 0, cid, email_type))
+    return True, f"{rule['label']} sent to {len(recips)}"
+
 def run_scheduler(asof=None):
-    """One daily tick. Fires the brief's lifecycle automations. Dedup flags on the
-    class row prevent repeats. Returns a list of the actions taken (for logging/UI)."""
+    """One daily tick. Fires the brief's lifecycle automations. Every send goes
+    through send_class_email, which enforces status/duplicate/date guards and logs
+    anything it suppresses. Returns the actions taken (for logging/UI)."""
     today = asof or datetime.date.today()
     c = db(); actions = []
     for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled')").fetchall():
@@ -252,23 +321,38 @@ def run_scheduler(asof=None):
         instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
         cfg = mailer.load_email_config()
         if cls["status"] == "approved":
-            if 7 < days <= 14 and enrolled < (cls["min_p"] or 0) and not cls.get("low_alerted"):
-                mailer.send(emails_for(c,"WHERE role='admin'"), f"Low enrollment: {cls['title']}",
-                    f"\"{cls['title']}\" on {cls['slot_date']} has {enrolled}/{cls['min_p']} registered, two weeks out. Consider promoting it.")
-                c.execute("UPDATE classes SET low_alerted=1 WHERE id=?",(cls["id"],)); actions.append(f"low-enroll alert: {cls['title']}")
+            if 7 < days <= 14 and enrolled < (cls["min_p"] or 0):
+                sent, why = send_class_email(c, cls, "low_alert", emails_for(c,"WHERE role='admin'"),
+                    f"Low enrollment: {cls['title']}",
+                    f"\"{cls['title']}\" on {cls['slot_date']} has {enrolled}/{cls['min_p']} registered, two weeks out. Consider promoting it.",
+                    today, cfg)
+                if sent:
+                    c.execute("UPDATE classes SET low_alerted=1 WHERE id=?",(cls["id"],))
+                    actions.append(f"low-enroll alert: {cls['title']}")
             if days == 7 and enrolled < (cls["min_p"] or 0):
                 c.execute("UPDATE classes SET status='cancelled' WHERE id=?",(cls["id"],))
                 audit(c, cls["id"], cls.get("status"), "cancelled", None)   # automated: no actor
                 c.execute("UPDATE registrations SET refunded=1 WHERE class_id=?",(cls["id"],))
-                subj, body = mailer.tmpl_cancel(cls); mailer.send(students, subj, body)
-                if instr and instr[0]: mailer.send(instr[0], "Your class was auto-cancelled", body)
+                cancelled = {**cls, "status": "cancelled"}   # guards must see the NEW status
+                subj, body = mailer.tmpl_cancel(cls)
+                send_class_email(c, cancelled, "cancel", students, subj, body, today, cfg)
+                send_class_email(c, cancelled, "cancel_instructor", [instr[0]] if instr else [],
+                                 "Your class was auto-cancelled", body, today, cfg)
                 actions.append(f"AUTO-CANCELLED (refunded {len(students)}): {cls['title']}"); continue
-            if days == 2 and not cls.get("reminded"):
-                subj, body = mailer.tmpl_reminder(cls, cfg); mailer.send(students, subj, body)
-                c.execute("UPDATE classes SET reminded=1 WHERE id=?",(cls["id"],)); actions.append(f"48h reminder ({len(students)}): {cls['title']}")
-        if days == -1 and not cls.get("followed_up") and cls["status"] != "cancelled":
-            subj, body = mailer.tmpl_followup(cls, cfg); mailer.send(students, subj, body)
-            c.execute("UPDATE classes SET followed_up=1 WHERE id=?",(cls["id"],)); actions.append(f"day-after follow-up ({len(students)}): {cls['title']}")
+            if days == 2:
+                subj, body = mailer.tmpl_reminder(cls, cfg)
+                sent, why = send_class_email(c, cls, "reminder", students, subj, body, today, cfg)
+                if sent:
+                    c.execute("UPDATE classes SET reminded=1 WHERE id=?",(cls["id"],))
+                    actions.append(f"48h reminder ({len(students)}): {cls['title']}")
+                else: actions.append(f"reminder suppressed for {cls['title']}: {why}")
+        if days == -1:
+            subj, body = mailer.tmpl_followup(cls, cfg)
+            sent, why = send_class_email(c, cls, "followup", students, subj, body, today, cfg)
+            if sent:
+                c.execute("UPDATE classes SET followed_up=1 WHERE id=?",(cls["id"],))
+                actions.append(f"day-after follow-up ({len(students)}): {cls['title']}")
+            else: actions.append(f"follow-up suppressed for {cls['title']}: {why}")
     c.commit(); c.close()
     if actions: print("[scheduler]", "; ".join(actions))
     return actions
@@ -412,6 +496,16 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json({"classes": self._classes("")})
+        if p == "/api/email-log":   # read-only record of which automated emails went out
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""
+                SELECT e.*, c.title AS class_title, c.status AS class_status
+                FROM email_log e LEFT JOIN classes c ON c.id = e.class_id
+                ORDER BY e.id DESC LIMIT 500""").fetchall()]
+            c.close()
+            return self.send_json({"entries": rows})
         if p == "/api/audit":   # read-only; filter by ?class_id= or ?actor_id=
             u = self.require("admin")
             if not u: return
@@ -700,23 +794,30 @@ class H(http.server.BaseHTTPRequestHandler):
             instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
             c.execute("UPDATE classes SET status='cancelled' WHERE id=?",(cid,))
             audit(c, cid, cls.get("status"), "cancelled", u["id"])
-            c.execute("UPDATE registrations SET refunded=1 WHERE class_id=?",(cid,)); c.commit(); c.close()
+            c.execute("UPDATE registrations SET refunded=1 WHERE class_id=?",(cid,))
             print(f"[cancel] class #{cid} -> would refund all via Eventbrite")
+            cancelled = {**cls, "status": "cancelled"}   # guards must see the NEW status
             subj, body = mailer.tmpl_cancel(cls)
-            mailer.send(students, subj, body)
-            if instr and instr[0]: mailer.send(instr[0], "Your class was cancelled", body)
+            send_class_email(c, cancelled, "cancel", students, subj, body)
+            send_class_email(c, cancelled, "cancel_instructor", [instr[0]] if instr else [],
+                             "Your class was cancelled", body)
+            c.commit(); c.close()
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and (p.endswith("/remind") or p.endswith("/followup")):
             u = self.require("admin")
             if not u: return
             cid = p.split("/")[3]; kind = p.rsplit("/",1)[1]; c=db()
-            cls = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
+            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(row)
             students = [r[0] for r in c.execute("SELECT email FROM registrations WHERE class_id=? AND refunded=0",(cid,)).fetchall()]
-            c.close()
             cfg = mailer.load_email_config()
+            # Same guards as the automated job: right status, not already sent, still upcoming.
+            etype = "reminder" if kind == "remind" else "followup"
             subj, body = (mailer.tmpl_reminder(cls, cfg) if kind=="remind" else mailer.tmpl_followup(cls, cfg))
-            mailer.send(students, subj, body)
-            return self.send_json({"ok":True, "sent":len(students)})
+            sent, why = send_class_email(c, cls, etype, students, subj, body, None, cfg)
+            c.commit(); c.close()
+            return self.send_json({"ok":sent, "sent":len(students) if sent else 0, "reason":why})
         if p.startswith("/api/classes/") and p.endswith("/edit"):   # admin edits then returns for instructor approval
             u = self.require("admin")
             if not u: return

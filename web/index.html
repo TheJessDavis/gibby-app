@@ -409,8 +409,21 @@ async function adminAudit(){
       <div><label>Filter by actor</label><select id="af_actor" onchange="renderAuditRows()"><option value="">All actors</option>
         ${actors.map(([id,n])=>`<option value="${id}">${esc(n)}</option>`).join('')}</select></div>
     </div>
-    <div id="auditrows" style="margin-top:14px"></div>`;
-  renderAuditRows();
+    <div id="auditrows" style="margin-top:14px"></div>
+    <label style="margin-top:22px">Automated emails sent</label>
+    <p class="sub" style="margin-top:2px">One row per class per email type. The app refuses to send any of these twice.</p>
+    <div id="emailrows"></div>`;
+  renderAuditRows(); renderEmailLog();
+}
+const ETYPE={reminder:'48h reminder',followup:'day-after follow-up',cancel:'cancellation notice',
+  cancel_instructor:'cancellation (instructor)',low_alert:'low-enrollment alert'};
+async function renderEmailLog(){
+  const {entries}=await api('/api/email-log');
+  $('#emailrows').innerHTML = entries.map(e=>`<div class="card">
+    <div class="row"><div><h3 style="font-size:1rem">${esc(e.class_title||('Class #'+e.class_id))}</h3>
+      <div class="meta">${esc(ETYPE[e.email_type]||e.email_type)} · ${esc(e.sent_at)} · ${e.recipients} recipient${e.recipients===1?'':'s'}</div></div>
+      <span class="pill ${e.delivered?'appr':'inc'}">${e.delivered?'sent':'failed'}</span></div>
+  </div>`).join('') || '<div class="muted">No automated emails have been sent yet.</div>';
 }
 function snapPretty(s){ try{ const o=JSON.parse(s||'{}'); if(o.photo) o.photo='[image data omitted]'; return JSON.stringify(o,null,2); }catch(_){ return s||''; } }
 function renderAuditRows(){
@@ -602,7 +615,9 @@ async function markIncomplete(id){
 
 async function emailClass(id,kind){
   const r=await api('/api/classes/'+id+'/'+kind,'POST');
-  alert((kind==='remind'?'Reminder':'Follow-up')+' emailed to '+r.sent+' students.\n(Dry-run and logged unless email is set live in config.json.)');
+  const what=(kind==='remind'?'Reminder':'Follow-up');
+  if(!r.ok){ alert(what+' NOT sent.\n\nReason: '+r.reason); return; }
+  alert(what+' emailed to '+r.sent+' students.\n(Dry-run and logged unless email is set live in config.json.)');
 }
 async function viewRoster(id){
   const {registrations} = await api('/api/class/'+id+'/registrations');
