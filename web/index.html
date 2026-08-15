@@ -36,6 +36,7 @@
   .pill{font-size:10.5px;font-weight:800;padding:5px 10px;border-radius:999px;white-space:nowrap}
   .pill.pend{background:#EAE0FA;color:#5B3FB0}.pill.appr{background:#DCEFD6;color:#3F7A32}
   .pill.inc{background:#FCE4CE;color:#B45309}.pill.alc{background:var(--coral);color:#fff}
+  .pill.ir{background:#DCE8F5;color:#2c5b8a}
 
   label{display:block;font-size:12.5px;font-weight:800;margin:12px 0 6px}
   input,select,textarea{width:100%;border:2px solid var(--line);background:var(--white);border-radius:14px;
@@ -377,10 +378,11 @@ async function adminAll(){
   $('#tab').innerHTML = `<h2>All <em>classes</em></h2><p class="sub">${classes.length} total.</p>
     ${classes.map(cardCls).join('') || '<div class="muted">No classes yet.</div>'}`;
 }
+const STMAP={approved:['appr','approved'],incomplete:['inc','sent back'],cancelled:['inc','cancelled'],
+  instructor_review:['ir','instructor review'],pending:['pend','pending']};
 function cardCls(c){
-  const pill = c.status==='approved'?'<span class="pill appr">approved</span>'
-    : c.status==='incomplete'?'<span class="pill inc">sent back</span>'
-    : '<span class="pill pend">pending</span>';
+  const [pc,pt]=STMAP[c.status]||STMAP.pending;
+  const pill = `<span class="pill ${pc}">${pt}</span>`;
   return `<div class="card">
     <div class="row"><h3>${esc(c.title)}</h3>${pill}</div>
     <div class="meta">${esc(c.instructor_name)} · ${esc(c.slot_date||'')} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div>
@@ -390,8 +392,16 @@ function cardCls(c){
     ${c.status==='pending' && ME.role==='admin' ? `
       <div class="two" style="margin-top:14px">
         <button class="btn warn" onclick="markIncomplete(${c.id})">Send back</button>
-        <button class="btn green" onclick="approve(${c.id})">Approve</button></div>`:''}
-    ${c.status==='approved' ? `<div class="ok-note" style="margin-top:12px">✓ Published. Eventbrite ID ${esc((c.external_ids||{}).eventbrite_event_id||'')}</div>`:''}
+        <button class="btn green" onclick="approve(${c.id})">Approve</button></div>
+      <button class="btn ghost" style="margin-top:8px" onclick="openEditForm(${c.id})">Edit &amp; return to instructor</button>`:''}
+    ${c.status==='instructor_review' && ME.role==='instructor' ? `
+      <div class="ok-note" style="margin-top:12px;background:#DCE8F5;color:#2c5b8a">An admin edited this class. Review the details above, then approve to publish or send it back.</div>
+      ${c.admin_note?`<div class="meta" style="margin-top:6px">Admin note: ${esc(c.admin_note)}</div>`:''}
+      <div class="two" style="margin-top:10px">
+        <button class="btn warn" onclick="instrDecline(${c.id})">Send back</button>
+        <button class="btn green" onclick="instrApprove(${c.id})">Approve &amp; publish</button></div>`:''}
+    ${c.status==='instructor_review' && ME.role==='admin' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Waiting on ${esc(c.instructor_name)} to approve your edits</div>`:''}
+    ${c.status==='approved' ? `<div class="ok-note" style="margin-top:12px">✓ Published. Eventbrite ID ${esc((c.external_ids||{}).eventbrite_id||'—')}</div>`:''}
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
@@ -406,6 +416,40 @@ function cardCls(c){
   </div>`;
 }
 async function approve(id){ await api(`/api/classes/${id}/approve`,'POST'); adminApprovals(); }
+const AGES=['All Ages','Toddlers','Ages 7–9','Ages 9–12','Ages 16+','Ages 21+'];
+function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
+function openEditForm(id){
+  const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
+  $('#view').innerHTML=`
+    <h2>Edit &amp; <em>return</em></h2>
+    <p class="sub">Make changes, then send to ${esc(c.instructor_name)} to approve before it publishes.</p>
+    <div class="err" id="eerr"></div>
+    <label>Class title</label><input id="e_title" value="${esc(c.title)}">
+    <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
+    <label>Age range</label><select id="e_age">${AGES.map(a=>`<option ${a===c.age_range?'selected':''}>${a}</option>`).join('')}</select>
+    <label>Alcohol available for purchase?</label>
+    <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <div class="two"><div><label>Max</label><input id="e_max" type="number" value="${c.max_p}"></div><div><label>Min</label><input id="e_min" type="number" value="${c.min_p}"></div></div>
+    <div class="two"><div><label>Ticket ($)</label><input id="e_ticket" type="number" value="${c.ticket_price}"></div><div><label>Instructor pay ($)</label><input id="e_pay" type="number" value="${c.instructor_pay}"></div></div>
+    <label>Graphic headline</label><input id="e_head" value="${esc(c.headline||'')}">
+    <label>Script subtitle</label><input id="e_sub" value="${esc(c.subtitle||'')}">
+    <label>Note to instructor (what you changed)</label><textarea id="e_note" placeholder="e.g. Raised the ticket to \$40 so materials are covered."></textarea>
+    <div style="height:80px"></div>
+    <div class="fab"><div class="two">
+      <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>
+      <button class="btn dark" onclick="submitEdit(${id})">Send to instructor</button></div></div>`;
+}
+async function submitEdit(id){
+  const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
+  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
+    alcohol:alc, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
+    ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value,
+    headline:$('#e_head').value, subtitle:$('#e_sub').value, note:$('#e_note').value};
+  try{ await api('/api/classes/'+id+'/edit','POST',body); renderAdmin('approvals'); }
+  catch(e){ showErr('eerr',e.message); }
+}
+async function instrApprove(id){ await api('/api/classes/'+id+'/instructor-approve','POST'); renderInstr('mine'); }
+async function instrDecline(id){ const note=prompt('Optional note back to the admin:')||''; await api('/api/classes/'+id+'/instructor-decline','POST',{note}); renderInstr('mine'); }
 async function markIncomplete(id){
   const note = prompt("What needs fixing? (the instructor sees this)");
   if(note===null) return;

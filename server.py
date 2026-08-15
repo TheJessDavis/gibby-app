@@ -18,13 +18,14 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "persist-test-2"
+VERSION = "1.1-race-edit"
 
 # ---------------------------------------------------------------- database ----
 def db():
-    c = sqlite3.connect(DB)
+    c = sqlite3.connect(DB, timeout=10)      # wait up to 10s for the write lock instead of erroring
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA foreign_keys=ON")
+    c.execute("PRAGMA busy_timeout=8000")
     return c
 
 def init_db():
@@ -142,6 +143,15 @@ def publish_class(cls):
     each platform is skipped if unconfigured, and nothing is actually sent unless
     config's "live" is true. Returns external IDs / per-platform results."""
     return integrations.publish(cls)
+
+def approve_and_publish(c, cls):
+    """Shared approval: publish, sync registrations, email the instructor, mark
+    approved. Used by admin approval and by instructor approval of admin edits."""
+    instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
+    ext = publish_class(cls)
+    c.execute("UPDATE classes SET status='approved', external_ids=? WHERE id=?",(json.dumps(ext),cls["id"]))
+    seed_registrations(c, cls)
+    subj, body = mailer.tmpl_approved(cls, instr); mailer.send(instr["email"], subj, body)
 
 def emails_for(c, where, args=()):
     return [r[0] for r in c.execute(f"SELECT email FROM users {where}", args).fetchall() if r[0]]
@@ -441,6 +451,17 @@ class H(http.server.BaseHTTPRequestHandler):
             if not b.get("photo"): miss.append("photo")
             if miss: return self.send_json({"error":"Missing required fields","fields":miss},400)
             c=db()
+            sid = b.get("slot_id")
+            # RACE-SAFE claim: atomically flip the slot from available->claimed in a
+            # single conditional UPDATE. SQLite serializes writers, so of two
+            # simultaneous claims exactly one gets rowcount==1; the other gets 0 and
+            # is rejected here, before any class row is created. No double-booking.
+            if sid is not None:
+                claimed = c.execute(
+                    "UPDATE slots SET status='claimed' WHERE id=? AND status='available'", (sid,)).rowcount
+                if claimed != 1:
+                    c.close()
+                    return self.send_json({"error":"That slot was just claimed by someone else. Please pick another time."}, 409)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,status,created)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pending', ?)""",
@@ -448,9 +469,6 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline"),b.get("subtitle",""),b.get("photo"), now()))
-            # mark the chosen slot claimed (best-effort match)
-            if b.get("slot_id"):
-                c.execute("UPDATE slots SET status='claimed' WHERE id=?",(b.get("slot_id"),))
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
             mailer.send(admins, "New class submission",
@@ -492,6 +510,52 @@ class H(http.server.BaseHTTPRequestHandler):
             subj, body = (mailer.tmpl_reminder(cls, cfg) if kind=="remind" else mailer.tmpl_followup(cls, cfg))
             mailer.send(students, subj, body)
             return self.send_json({"ok":True, "sent":len(students)})
+        if p.startswith("/api/classes/") and p.endswith("/edit"):   # admin edits then returns for instructor approval
+            u = self.require("admin")
+            if not u: return
+            cid = p.split("/")[3]; b = self.read_json()
+            c = db(); row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            sets, vals = [], []
+            for k in ("title","description","age_range","headline","subtitle"):
+                if k in b: sets.append(f"{k}=?"); vals.append(b[k])
+            for k in ("max_p","min_p","ticket_price","instructor_pay"):
+                if k in b: sets.append(f"{k}=?"); vals.append(b[k])
+            if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            sets += ["status=?","admin_note=?"]; vals += ["instructor_review", b.get("note","")]
+            vals.append(cid)
+            c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
+            instr = c.execute("SELECT email,name FROM users WHERE id=?",(row["instructor_id"],)).fetchone()
+            c.commit(); c.close()
+            if instr:
+                mailer.send(instr[0], f"Please review changes to: {b.get('title', row['title'])}",
+                    f"Hi {instr[1].split()[0]},\n\nAn admin made some edits to your class \"{b.get('title', row['title'])}\" "
+                    f"and needs your approval before it goes live.\n\n{('Note: '+b.get('note')) if b.get('note') else ''}\n\n"
+                    f"Please log in, review the changes, and approve.\n\nThanks,\nThe Gibby")
+            return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/instructor-approve"):   # instructor accepts admin edits -> publish
+            u = self.require("instructor")
+            if not u: return
+            cid = p.split("/")[3]; c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(row)
+            if cls["instructor_id"] != u["id"] or cls["status"] != "instructor_review":
+                c.close(); return self.send_json({"error":"not allowed"},403)
+            approve_and_publish(c, cls); c.commit(); c.close()
+            return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/instructor-decline"):   # instructor rejects admin edits -> back to admin
+            u = self.require("instructor")
+            if not u: return
+            cid = p.split("/")[3]; b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row or row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"not allowed"},403)
+            c.execute("UPDATE classes SET status='pending', admin_note=? WHERE id=?",(b.get("note",""),cid))
+            admins = emails_for(c, "WHERE role='admin'"); c.commit(); c.close()
+            mailer.send(admins, f"Instructor requested changes: {row['title']}",
+                f"{u['name']} did not accept the edits to \"{row['title']}\".\n\nTheir note: {b.get('note','(none)')}\n\nIt is back in the approvals queue.")
+            return self.send_json({"ok":True})
         if p.startswith("/api/integrations/") and (p.endswith("/connect") or p.endswith("/disconnect")):
             u = self.require("admin")
             if not u: return
@@ -532,10 +596,7 @@ class H(http.server.BaseHTTPRequestHandler):
         cls=dict(row)
         instr=dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
         if approve:
-            ext = publish_class(cls)
-            c.execute("UPDATE classes SET status='approved', external_ids=? WHERE id=?",(json.dumps(ext),cid))
-            seed_registrations(c, cls)   # simulate Eventbrite registration sync
-            subj, body = mailer.tmpl_approved(cls, instr); mailer.send(instr["email"], subj, body)
+            approve_and_publish(c, cls)
         else:
             c.execute("UPDATE classes SET status='incomplete', admin_note=? WHERE id=?",(b.get("note",""),cid))
             # release the slot back to available
