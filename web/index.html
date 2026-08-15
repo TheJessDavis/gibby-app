@@ -495,6 +495,7 @@ function cardCls(c){
     <div class="meta" style="margin-top:8px">${esc(c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
     ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
+    ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='instructor' ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Volunteer requested</div>`:''}
     ${c.status==='pending' && actingRole()==='admin' ? `
@@ -582,7 +583,7 @@ async function loadTplOptions(){
   const sel=$('#f_tpl'); if(sel) sel.innerHTML='<option value="">None, start blank</option>'+templates.map((t,i)=>`<option value="${i}">${esc(t.title)}</option>`).join('');
 }
 function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+i];
-  $('#f_title').value=t.title; $('#f_desc').value=t.description; $('#f_head').value=t.title.toUpperCase();
+  $('#f_title').value=t.title; $('#f_desc').value=t.description;
   const c=document.querySelector('#f_ages input[value="'+t.age+'"]'); if(c){c.checked=true; ageChanged();} }
 async function renderInstr(tab){
   $('#view').innerHTML = `
@@ -676,8 +677,9 @@ function openForm(slot){
     <label>Photo for the graphic</label>
     <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
     <input id="f_file" type="file" accept="image/*" class="hidden" onchange="onPhoto(event)">
-    <label>Graphic headline</label><input id="f_head" placeholder="e.g. STAINED GLASS">
-    <label>Script subtitle (optional)</label><input id="f_sub" placeholder="e.g. Mini Terrarium">
+
+    <label>Links <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+    <textarea id="f_links" placeholder="Add any links, one per line: supply lists, inspiration, examples, your portfolio."></textarea>
 
     <label style="margin-top:16px">Materials</label>
     <label class="chk" style="margin:4px 0"><input type="checkbox" id="f_own" onchange="calc()"> I'm providing my own materials</label>
@@ -732,7 +734,7 @@ async function submitClass(){
     needs_volunteer: vol, own_materials: $('#f_own').checked, material_cost:+$('#c_mat').value,
     alcohol:alc, max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
-    headline:$('#f_head').value, subtitle:$('#f_sub').value, photo:PHOTO,
+    links:$('#f_links').value, photo:PHOTO,
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date, room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     supplies:[]
   };

@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.8-gcal"
+VERSION = "1.9-links"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -75,7 +75,8 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
-                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT")):
+                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
+                     ("links","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.commit()
@@ -554,7 +555,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("instructor")
             if not u: return
             b = self.read_json()
-            req = ["title","description","age_range","headline","length"]
+            req = ["title","description","age_range","length"]
             miss=[k for k in req if not str(b.get(k,"")).strip()]
             if not b.get("photo"): miss.append("photo")
             if miss: return self.send_json({"error":"Missing required fields","fields":miss},400)
@@ -583,14 +584,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 slot_time = rows[0]["start"] + " – " + rows[-1]["end"]
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
-                length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?, 'pending', ?)""",
+                length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,status,created)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),u["id"],slot_date,slot_time,room,
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
-                 json.dumps(b.get("supplies",[])),b.get("headline"),b.get("subtitle",""),b.get("photo"),
+                 json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
-                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), now()))
+                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""), now()))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
