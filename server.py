@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.0-required"
+VERSION = "2.1-canva-eventbrite"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -174,16 +174,34 @@ def audit(c, class_id, prev_status, new_status, actor_id):
               (class_id, prev_status, new_status, actor_id, now(), snap))
 
 def approve_and_publish(c, cls, actor_id=None):
-    """Shared approval: publish, sync registrations, email the instructor, mark
-    approved. Used by admin approval and by instructor approval of admin edits."""
+    """Shared approval: mark approved, sync registrations, email the instructor, and
+    kick off external posting. Used by admin approval and by instructor approval of
+    admin edits. The graphic + posting pipeline runs on a background thread because
+    Canva render/export polling can take a while; ids are merged in when it finishes."""
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
-    ext = publish_class(cls)
-    gid = gcal.create_event({**cls, "instructor_name": instr["name"]}, gcal.load_gcal_config())  # add to Google Calendar
-    if gid: ext["gcal_event_id"] = gid
-    c.execute("UPDATE classes SET status='approved', external_ids=? WHERE id=?",(json.dumps(ext),cls["id"]))
+    c.execute("UPDATE classes SET status='approved' WHERE id=?",(cls["id"],))
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
     seed_registrations(c, cls)
     subj, body = mailer.tmpl_approved(cls, instr); mailer.send(instr["email"], subj, body)
+    threading.Thread(target=_publish_async, args=(dict(cls), instr["name"]), daemon=True).start()
+
+def _publish_async(cls, instructor_name):
+    """Off-request-thread: Canva builds the graphic from the template FIRST, then it
+    is attached to the Eventbrite event, then the class goes on the Google Calendar.
+    Resulting external ids are merged into the class row. Never raises."""
+    try:
+        ext = integrations.publish(cls)   # Canva graphic first -> Eventbrite with it attached -> others
+        gid = gcal.create_event({**cls, "instructor_name": instructor_name}, gcal.load_gcal_config())
+        if gid: ext["gcal_event_id"] = gid
+        c = db()
+        row = c.execute("SELECT external_ids FROM classes WHERE id=?",(cls["id"],)).fetchone()
+        cur = json.loads((row["external_ids"] if row else "") or "{}")
+        cur.update(ext)
+        c.execute("UPDATE classes SET external_ids=? WHERE id=?",(json.dumps(cur), cls["id"]))
+        c.commit(); c.close()
+        print(f"[publish async] class #{cls['id']} external posting complete")
+    except Exception as e:
+        print("[publish async] error:", e)
 
 def emails_for(c, where, args=()):
     return [r[0] for r in c.execute(f"SELECT email FROM users {where}", args).fetchall() if r[0]]

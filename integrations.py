@@ -15,7 +15,7 @@ NOTE: endpoint paths/payloads follow each platform's current API shape but shoul
 be verified against live docs before go-live. Real Eventbrite posting also needs
 proper ISO start/end datetimes on the class (see _iso_times, a best-effort parser).
 """
-import json, os, urllib.request, urllib.parse, urllib.error, datetime
+import json, os, urllib.request, urllib.parse, urllib.error, datetime, time, struct, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -65,8 +65,50 @@ def _req(url, method="POST", token=None, json_body=None, form=None, headers=None
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode() or "{}")
 
-def _ok(id=None, status=""):   return {"ok": True,  "id": id, "status": status, "error": ""}
+def _ok(id=None, status="", **extra):  return {"ok": True,  "id": id, "status": status, "error": "", **extra}
 def _no(status, error=""):     return {"ok": False, "id": None, "status": status, "error": error}
+
+def _get_bytes(url, timeout=60):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return r.read()
+
+def _png_size(data):
+    """(width, height) from a PNG's IHDR, or None if not a PNG we can read."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR":
+        return struct.unpack(">II", data[16:24])
+    return None
+
+def _multipart_post(url, fields, file_field, filename, filedata, timeout=120):
+    """POST multipart/form-data (used to push the graphic bytes to Eventbrite's
+    upload endpoint). fields = ordinary form fields, then the file part last."""
+    boundary = "----gibby" + uuid.uuid4().hex
+    nl = b"\r\n"
+    body = bytearray()
+    for k, v in (fields or {}).items():
+        body += b"--" + boundary.encode() + nl
+        body += f'Content-Disposition: form-data; name="{k}"'.encode() + nl + nl
+        body += str(v).encode() + nl
+    body += b"--" + boundary.encode() + nl
+    body += f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"'.encode() + nl
+    body += b"Content-Type: application/octet-stream" + nl + nl
+    body += filedata + nl
+    body += b"--" + boundary.encode() + b"--" + nl
+    req = urllib.request.Request(url, data=bytes(body), method="POST",
+        headers={"Content-Type": "multipart/form-data; boundary=" + boundary})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+def _poll(url, token, pick, tries=40, delay=2):
+    """Poll a Canva async job until it succeeds; `pick(job)` extracts the result.
+    Raises on failure or timeout."""
+    for _ in range(tries):
+        r = _req(url, method="GET", token=token)
+        job = r.get("job") or r
+        st = job.get("status")
+        if st in ("success", "complete", "completed"): return pick(job)
+        if st in ("failed", "error"): raise RuntimeError("Canva job failed: " + json.dumps(job.get("error", {})))
+        time.sleep(delay)
+    raise TimeoutError("Canva job timed out")
 
 _MON = {m: i for i, m in enumerate(
     ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], start=1)}
@@ -122,12 +164,18 @@ def eventbrite_orgs(cfg):
         return {"ok": False, "error": str(e)}
 
 # ----------------------------------------------------------------- platforms ----
-def post_canva(cls, cfg):
+def render_canva(cls, cfg):
+    """Make the class graphic from the Canva brand template and return a PNG URL.
+    Full pipeline: autofill the template -> poll -> export as PNG -> poll -> URL.
+    Returns _ok(design_id, ..., image_url=<png>) so Eventbrite can attach it.
+    Dry-run and skip-safe."""
     if not (cfg["canva_token"] and cfg["canva_template_id"]):
         return _no("skipped: no Canva config")
     if not cfg["live"]:
-        return _ok("canva-dryrun", "dry-run (would autofill + export the poster)")
-    job = _req("https://api.canva.com/rest/v1/autofills", token=cfg["canva_token"], json_body={
+        return _ok("canva-dryrun", "dry-run (would autofill template + export PNG)", image_url=None)
+    tok = cfg["canva_token"]
+    # 1) autofill the brand template with this class's data
+    af = _req("https://api.canva.com/rest/v1/autofills", token=tok, json_body={
         "brand_template_id": cfg["canva_template_id"],
         "data": {
             "headline": {"type": "text", "text": cls.get("headline") or cls.get("title", "")},
@@ -135,31 +183,68 @@ def post_canva(cls, cfg):
             "date":     {"type": "text", "text": f"{cls.get('slot_date','')} {cls.get('slot_time','')}".strip()},
             "ages":     {"type": "text", "text": cls.get("age_range", "")},
         }})
-    # A production build polls the job, then calls /v1/exports to get the PNG URL.
-    return _ok(((job.get("job") or {}).get("id")) or "submitted", "autofill submitted")
+    af_id = (af.get("job") or {}).get("id")
+    design_id = _poll(f"https://api.canva.com/rest/v1/autofills/{af_id}", tok,
+                      lambda job: (((job.get("result") or {}).get("design") or {}).get("id")))
+    if not design_id:
+        return _no("autofill produced no design")
+    # 2) export the finished design as a PNG
+    ex = _req("https://api.canva.com/rest/v1/exports", token=tok,
+              json_body={"design_id": design_id, "format": {"type": "png"}})
+    ex_id = (ex.get("job") or {}).get("id")
+    urls = _poll(f"https://api.canva.com/rest/v1/exports/{ex_id}", tok,
+                 lambda job: job.get("urls") or [])
+    if not urls:
+        return _no("export produced no image")
+    return _ok(design_id, "graphic exported", image_url=urls[0])
 
-def post_eventbrite(cls, cfg):
+def _eventbrite_logo_id(image_url, cfg):
+    """Upload a graphic to Eventbrite and return a media/logo id to set on an event.
+    Three steps: ask for upload instructions, push the bytes to their storage,
+    then confirm. Best-effort; the caller swallows failures."""
+    tok = cfg["eventbrite_token"]
+    img = _get_bytes(image_url)
+    instr = _req("https://www.eventbriteapi.com/v3/media/upload/?type=image-event-logo",
+                 method="GET", token=tok)
+    _multipart_post(instr["upload_url"], instr.get("upload_data", {}),
+                    instr["file_parameter_name"], "graphic.png", img)
+    size = _png_size(img)
+    body = {"upload_token": instr["upload_token"]}
+    if size:
+        body["crop_mask"] = {"top_left": {"x": 0, "y": 0}, "width": size[0], "height": size[1]}
+    media = _req("https://www.eventbriteapi.com/v3/media/upload/", method="POST",
+                 token=tok, json_body=body)
+    return media.get("id")
+
+def post_eventbrite(cls, cfg, image_url=None):
     if not (cfg["eventbrite_token"] and cfg["eventbrite_org_id"]):
         return _no("skipped: no Eventbrite config")
     start, end = _iso_times(cls, cfg)
     if not (start and end):
         return _no("needs valid start/end datetime on the class")
     if not cfg["live"]:
-        return _ok("eb-dryrun", f"dry-run (would create + publish event {start})")
+        return _ok("eb-dryrun", f"dry-run (would create + publish event {start}"
+                                + (", with Canva graphic" if image_url else "") + ")")
+    logo_id = None
+    if image_url:                      # attach the Canva graphic; never let this block the event
+        try: logo_id = _eventbrite_logo_id(image_url, cfg)
+        except Exception as e: print("[eventbrite] logo upload failed (posting without it):", e)
+    event = {
+        "name": {"html": cls["title"]},
+        "description": {"html": cls.get("description", "")},
+        "start": {"timezone": cfg["timezone"], "utc": start},
+        "end":   {"timezone": cfg["timezone"], "utc": end},
+        "currency": "USD", "capacity": cls.get("max_p"),
+        "organizer_id": cfg["eventbrite_organizer_id"]}
+    if logo_id: event["logo_id"] = logo_id
     ev = _req(f"https://www.eventbriteapi.com/v3/organizations/{cfg['eventbrite_org_id']}/events/",
-        token=cfg["eventbrite_token"], json_body={"event": {
-            "name": {"html": cls["title"]},
-            "description": {"html": cls.get("description", "")},
-            "start": {"timezone": cfg["timezone"], "utc": start},
-            "end":   {"timezone": cfg["timezone"], "utc": end},
-            "currency": "USD", "capacity": cls.get("max_p"),
-            "organizer_id": cfg["eventbrite_organizer_id"]}})
+        token=cfg["eventbrite_token"], json_body={"event": event})
     eid = ev.get("id")
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
         json_body={"ticket_class": {"name": "Admission", "quantity_total": cls.get("max_p"),
             "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}})
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
-    return _ok(eid, "event published")
+    return _ok(eid, "event published" + (" with Canva graphic" if logo_id else ""))
 
 def post_facebook(cls, cfg, link=None):
     # Facebook removed Event creation from the Graph API, so this posts to the Page.
@@ -200,17 +285,21 @@ def _safe(fn, *a):
         return _no("error", str(e))
 
 def publish(cls, cfg=None):
-    """Run every platform. Returns an external_ids dict for storage, including a
-    per-platform _results breakdown. Never raises; failures are captured."""
+    """Run every platform, in order. Canva builds the graphic FIRST; the exported
+    PNG is then attached to the Eventbrite event. Returns an external_ids dict for
+    storage, including a per-platform _results breakdown. Never raises."""
     cfg = cfg or load_config()
+    canva = _safe(render_canva, cls, cfg)          # 1. make the graphic from the template
+    image_url = canva.get("image_url")             #    (None in dry-run / if unconfigured)
     results = {
-        "canva":      _safe(post_canva, cls, cfg),
-        "eventbrite": _safe(post_eventbrite, cls, cfg),
+        "canva":      canva,
+        "eventbrite": _safe(post_eventbrite, cls, cfg, image_url),   # 2. post + attach graphic
         "facebook":   _safe(post_facebook, cls, cfg, None),
         "wix":        _safe(post_wix, cls, cfg),
         "descene":    _safe(post_descene, cls, cfg),
     }
     ext = {}
+    if image_url: ext["canva_image_url"] = image_url
     for k, v in results.items():
         if v.get("id"):
             ext[k + "_id"] = v["id"]

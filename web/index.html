@@ -510,7 +510,12 @@ function cardCls(c){
         <button class="btn warn" onclick="instrDecline(${c.id})">Send back</button>
         <button class="btn green" onclick="instrApprove(${c.id})">Approve &amp; publish</button></div>`:''}
     ${c.status==='instructor_review' && actingRole()==='admin' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Waiting on ${esc(c.instructor_name)} to approve your edits</div>`:''}
-    ${c.status==='approved' ? `<div class="ok-note" style="margin-top:12px">✓ Published. Eventbrite ID ${esc((c.external_ids||{}).eventbrite_id||'—')}</div>`:''}
+    ${c.status==='approved' ? (()=>{const x=c.external_ids||{}; return `
+      <div class="ok-note" style="margin-top:12px">${x.eventbrite_id
+        ? `✓ Published to Eventbrite · <a href="https://www.eventbrite.com/e/${esc(x.eventbrite_id)}" target="_blank" rel="noopener noreferrer">view event</a>`
+        : '✓ Approved. Building the graphic and posting to Eventbrite…'}</div>
+      ${x.canva_image_url?`<div style="margin-top:10px"><div class="meta" style="margin-bottom:6px">Canva graphic (attached to the Eventbrite listing)</div>
+        <img src="${esc(x.canva_image_url)}" alt="Class graphic" style="max-width:100%;border-radius:14px;display:block"></div>`:''}`;})():''}
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
