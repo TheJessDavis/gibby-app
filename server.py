@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.4-login-choice"
+VERSION = "1.5-profile"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -404,11 +404,21 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/change-password":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
-            npw = self.read_json().get("new_password","")
+            b = self.read_json(); npw = b.get("new_password",""); name = (b.get("name") or "").strip()
             if len(npw) < 8: return self.send_json({"error":"Use at least 8 characters."},400)
             h, s = hash_pw(npw); c = db()
-            c.execute("UPDATE users SET pw_hash=?, pw_salt=?, must_change_pw=0 WHERE id=?",(h,s,u["id"]))
+            if name:
+                c.execute("UPDATE users SET pw_hash=?, pw_salt=?, must_change_pw=0, name=? WHERE id=?",(h,s,name,u["id"]))
+            else:
+                c.execute("UPDATE users SET pw_hash=?, pw_salt=?, must_change_pw=0 WHERE id=?",(h,s,u["id"]))
             c.commit(); c.close()
+            return self.send_json({"ok":True})
+        if p == "/api/profile":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            name = (self.read_json().get("name") or "").strip()
+            if not name: return self.send_json({"error":"Name is required."},400)
+            c = db(); c.execute("UPDATE users SET name=? WHERE id=?",(name,u["id"])); c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/forgot":
             email = (self.read_json().get("email","") or "").strip().lower()

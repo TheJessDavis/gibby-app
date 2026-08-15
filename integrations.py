@@ -25,6 +25,8 @@ def load_config():
         "timezone": "America/New_York", "year": 2027,
         "eventbrite_token":  os.environ.get("EVENTBRITE_TOKEN", ""),
         "eventbrite_org_id": os.environ.get("EVENTBRITE_ORG_ID", ""),
+        # organizer profile the event posts under (The Gibby, not The Everett)
+        "eventbrite_organizer_id": os.environ.get("EVENTBRITE_ORGANIZER_ID", "76506239933"),
         "fb_page_id":        os.environ.get("FB_PAGE_ID", ""),
         "fb_page_token":     os.environ.get("FB_PAGE_TOKEN", ""),
         "wix_api_key":       os.environ.get("WIX_API_KEY", ""),
@@ -150,7 +152,8 @@ def post_eventbrite(cls, cfg):
             "description": {"html": cls.get("description", "")},
             "start": {"timezone": cfg["timezone"], "utc": start},
             "end":   {"timezone": cfg["timezone"], "utc": end},
-            "currency": "USD", "capacity": cls.get("max_p")}})
+            "currency": "USD", "capacity": cls.get("max_p"),
+            "organizer_id": cfg["eventbrite_organizer_id"]}})
     eid = ev.get("id")
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
         json_body={"ticket_class": {"name": "Admission", "quantity_total": cls.get("max_p"),

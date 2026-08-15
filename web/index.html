@@ -90,7 +90,7 @@
 <body>
 <div class="app">
   <div class="top" id="top" style="display:none">
-    <div><div class="brand">The Gibby</div><div class="who" id="who"></div></div>
+    <div><div class="brand">The Gibby</div><div class="who" id="who" style="cursor:pointer" title="Edit your name" onclick="renderProfile()"></div></div>
     <div style="display:flex;gap:8px">
       <button class="out" id="switchbtn" style="display:none;background:var(--purple);color:#fff" onclick="switchMode()"></button>
       <button class="out" onclick="logout()">Sign out</button>
@@ -135,10 +135,11 @@ async function boot(){
 }
 function renderChangePw(){
   $('#view').innerHTML=`<div class="login-wrap">
-    <h2>Choose a <em>new password</em></h2>
-    <p class="sub">For security, please set your own password before continuing.</p>
+    <h2>Welcome! <em>Set up your account</em></h2>
+    <p class="sub">Enter your name and choose your own password to continue.</p>
     <div style="text-align:left;max-width:340px;margin:0 auto">
       <div class="err" id="cerr"></div>
+      <label>Your name</label><input id="np_name" placeholder="First Last" value="${esc(ME&&ME.name||'')}">
       <label>New password</label><input id="np1" type="password" autocomplete="new-password">
       <label>Confirm password</label><input id="np2" type="password" autocomplete="new-password">
       <div style="height:14px"></div>
@@ -146,11 +147,30 @@ function renderChangePw(){
     </div></div>`;
 }
 async function submitChangePw(){
-  const a=$('#np1').value, b=$('#np2').value;
+  const name=$('#np_name').value.trim(), a=$('#np1').value, b=$('#np2').value;
+  if(!name) return showErr('cerr','Please enter your name.');
   if(a.length<8) return showErr('cerr','Use at least 8 characters.');
   if(a!==b) return showErr('cerr','Passwords do not match.');
-  try{ await api('/api/change-password','POST',{new_password:a}); boot(); }
+  try{ await api('/api/change-password','POST',{new_password:a, name}); boot(); }
   catch(e){ showErr('cerr',e.message); }
+}
+function renderProfile(){
+  $('#view').innerHTML=`<div style="max-width:360px;margin:0 auto">
+    <h2>Your <em>profile</em></h2>
+    <p class="sub">Update the name shown on your classes.</p>
+    <div class="err" id="perr"></div>
+    <label>Your name</label><input id="pf_name" value="${esc(ME&&ME.name||'')}">
+    <div style="height:14px"></div>
+    <button class="btn dark" onclick="saveProfile()">Save</button>
+    <div style="height:8px"></div>
+    <button class="btn ghost" onclick="boot()">Back</button>
+  </div>`;
+}
+async function saveProfile(){
+  const name=$('#pf_name').value.trim();
+  if(!name) return showErr('perr','Name is required.');
+  try{ await api('/api/profile','POST',{name}); await api('/api/me').then(r=>ME=r.user); boot(); }
+  catch(e){ showErr('perr',e.message); }
 }
 function renderForgot(){
   $('#top').style.display='none';
