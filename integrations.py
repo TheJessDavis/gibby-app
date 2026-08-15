@@ -284,13 +284,17 @@ def _safe(fn, *a):
     except Exception as e:
         return _no("error", str(e))
 
-def publish(cls, cfg=None):
-    """Run every platform, in order. Canva builds the graphic FIRST; the exported
-    PNG is then attached to the Eventbrite event. Returns an external_ids dict for
-    storage, including a per-platform _results breakdown. Never raises."""
+def publish(cls, cfg=None, image_url=None):
+    """Run every platform, in order. The Canva graphic is attached to the Eventbrite
+    event. Pass image_url to reuse an already-reviewed graphic (the normal path, since
+    an admin approves the poster first); omit it to build one now. Returns an
+    external_ids dict for storage, incl. a per-platform _results breakdown. Never raises."""
     cfg = cfg or load_config()
-    canva = _safe(render_canva, cls, cfg)          # 1. make the graphic from the template
-    image_url = canva.get("image_url")             #    (None in dry-run / if unconfigured)
+    if image_url:
+        canva = _ok(None, "using the reviewed graphic", image_url=image_url)
+    else:
+        canva = _safe(render_canva, cls, cfg)      # no reviewed graphic: build one now
+        image_url = canva.get("image_url")
     results = {
         "canva":      canva,
         "eventbrite": _safe(post_eventbrite, cls, cfg, image_url),   # 2. post + attach graphic

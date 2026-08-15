@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.1-canva-eventbrite"
+VERSION = "2.2-poster-review"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -173,32 +173,55 @@ def audit(c, class_id, prev_status, new_status, actor_id):
     c.execute("INSERT INTO audit_log(class_id,prev_status,new_status,actor_id,ts,snapshot) VALUES(?,?,?,?,?,?)",
               (class_id, prev_status, new_status, actor_id, now(), snap))
 
-def approve_and_publish(c, cls, actor_id=None):
-    """Shared approval: mark approved, sync registrations, email the instructor, and
-    kick off external posting. Used by admin approval and by instructor approval of
-    admin edits. The graphic + posting pipeline runs on a background thread because
-    Canva render/export polling can take a while; ids are merged in when it finishes."""
+def merge_external(cid, updates):
+    """Merge keys into a class's external_ids JSON without clobbering what's there."""
+    c = db()
+    row = c.execute("SELECT external_ids FROM classes WHERE id=?",(cid,)).fetchone()
+    cur = json.loads((row["external_ids"] if row else "") or "{}")
+    cur.update({k: v for k, v in updates.items() if v is not None})
+    c.execute("UPDATE classes SET external_ids=? WHERE id=?",(json.dumps(cur), cid))
+    c.commit(); c.close()
+
+def start_graphic_review(c, cls, actor_id=None):
+    """Admin approved the class: build the Canva graphic and HOLD for review.
+    Nothing is posted publicly yet. The admin sees the poster, can adjust the
+    headline/script line, and only then publishes."""
+    head = (cls.get("headline") or "").strip() or (cls.get("title") or "")
+    c.execute("UPDATE classes SET status='graphic_review', headline=? WHERE id=?",(head, cls["id"]))
+    audit(c, cls["id"], cls.get("status"), "graphic_review", actor_id)
+    threading.Thread(target=render_graphic_async, args=({**dict(cls), "headline": head},), daemon=True).start()
+
+def render_graphic_async(cls):
+    """Off-request-thread: build the poster from the Canva brand template. Stores the
+    exported image URL (and, if it could not run, why) on the class. Never raises."""
+    try:
+        res = integrations.render_canva(cls, integrations.load_config())
+        merge_external(cls["id"], {"canva_id": res.get("id"), "canva_image_url": res.get("image_url"),
+                                   "canva_status": res.get("error") or res.get("status")})
+        print(f"[graphic] class #{cls['id']}: {res.get('status') or res.get('error')}")
+    except Exception as e:
+        merge_external(cls["id"], {"canva_status": f"error: {e}"})
+        print("[graphic] error:", e)
+
+def publish_now(c, cls, actor_id=None):
+    """Final step, after the admin has reviewed the graphic: post to Eventbrite with
+    that graphic attached, add the class to the Google Calendar, email the instructor."""
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
     c.execute("UPDATE classes SET status='approved' WHERE id=?",(cls["id"],))
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
     seed_registrations(c, cls)
     subj, body = mailer.tmpl_approved(cls, instr); mailer.send(instr["email"], subj, body)
-    threading.Thread(target=_publish_async, args=(dict(cls), instr["name"]), daemon=True).start()
+    img = json.loads(cls.get("external_ids") or "{}").get("canva_image_url")
+    threading.Thread(target=_publish_async, args=(dict(cls), instr["name"], img), daemon=True).start()
 
-def _publish_async(cls, instructor_name):
-    """Off-request-thread: Canva builds the graphic from the template FIRST, then it
-    is attached to the Eventbrite event, then the class goes on the Google Calendar.
-    Resulting external ids are merged into the class row. Never raises."""
+def _publish_async(cls, instructor_name, image_url=None):
+    """Off-request-thread: post to Eventbrite (attaching the already-reviewed graphic)
+    and add the class to the Google Calendar. Ids merged in when done. Never raises."""
     try:
-        ext = integrations.publish(cls)   # Canva graphic first -> Eventbrite with it attached -> others
+        ext = integrations.publish(cls, image_url=image_url)
         gid = gcal.create_event({**cls, "instructor_name": instructor_name}, gcal.load_gcal_config())
         if gid: ext["gcal_event_id"] = gid
-        c = db()
-        row = c.execute("SELECT external_ids FROM classes WHERE id=?",(cls["id"],)).fetchone()
-        cur = json.loads((row["external_ids"] if row else "") or "{}")
-        cur.update(ext)
-        c.execute("UPDATE classes SET external_ids=? WHERE id=?",(json.dumps(cur), cls["id"]))
-        c.commit(); c.close()
+        merge_external(cls["id"], ext)
         print(f"[publish async] class #{cls['id']} external posting complete")
     except Exception as e:
         print("[publish async] error:", e)
@@ -377,6 +400,10 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin");
             if not u: return
             return self.send_json({"classes": self._classes("WHERE c.status='pending' ")})
+        if p == "/api/classes/graphic-review":
+            u = self.require("admin")
+            if not u: return
+            return self.send_json({"classes": self._classes("WHERE c.status='graphic_review' ")})
         if p == "/api/classes/mine":
             u = self.require("instructor")
             if not u: return
@@ -410,6 +437,7 @@ class H(http.server.BaseHTTPRequestHandler):
             approved = self._classes("WHERE c.status='approved' ")
             return self.send_json({
                 "pending": self._classes("WHERE c.status='pending' "),
+                "graphic": self._classes("WHERE c.status='graphic_review' "),
                 "returned": self._classes("WHERE c.status='incomplete' "),
                 "low": [c for c in approved if not c.get("promoted") and c["enrolled"] < (c["min_p"] or 0)],
             })
@@ -632,6 +660,30 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.decide(p, approve=True)
         if p.startswith("/api/classes/") and p.endswith("/incomplete"):
             return self.decide(p, approve=False)
+        if p.startswith("/api/classes/") and p.endswith("/graphic"):   # save poster text + rebuild it
+            u = self.require("admin")
+            if not u: return
+            cid = p.split("/")[3]; b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            head = (b.get("headline") or "").strip() or row["title"]
+            sub  = (b.get("subtitle") or "").strip()
+            c.execute("UPDATE classes SET headline=?, subtitle=? WHERE id=?",(head, sub, cid))
+            cls = {**dict(row), "headline": head, "subtitle": sub}
+            c.commit(); c.close()
+            threading.Thread(target=render_graphic_async, args=(cls,), daemon=True).start()
+            return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/publish"):   # admin approved the graphic -> go live
+            u = self.require("admin")
+            if not u: return
+            cid = p.split("/")[3]; c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(row)
+            if cls["status"] != "graphic_review":
+                c.close(); return self.send_json({"error":"This class is not waiting on graphic review."},400)
+            publish_now(c, cls, u["id"]); c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/promote"):
             u = self.require("admin")
             if not u: return
@@ -698,7 +750,7 @@ class H(http.server.BaseHTTPRequestHandler):
             cls = dict(row)
             if cls["instructor_id"] != u["id"] or cls["status"] != "instructor_review":
                 c.close(); return self.send_json({"error":"not allowed"},403)
-            approve_and_publish(c, cls, u["id"]); c.commit(); c.close()
+            start_graphic_review(c, cls, u["id"]); c.commit(); c.close()
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/instructor-decline"):   # instructor rejects admin edits -> back to admin
             u = self.require("instructor")
@@ -753,7 +805,7 @@ class H(http.server.BaseHTTPRequestHandler):
         cls=dict(row)
         instr=dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
         if approve:
-            approve_and_publish(c, cls, u["id"])
+            start_graphic_review(c, cls, u["id"])   # build the poster, hold for review
         else:
             c.execute("UPDATE classes SET status='incomplete', admin_note=? WHERE id=?",(b.get("note",""),cid))
             audit(c, cid, cls.get("status"), "incomplete", u["id"])

@@ -277,7 +277,10 @@ async function adminDashboard(){
   const d = await api('/api/dashboard');
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
-    <p class="sub">${d.pending.length} pending · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
+    <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
+    ${(d.graphic||[]).length?`<div class="card"><div class="row"><div><h3>Posters waiting on you</h3>
+      <div class="meta">${d.graphic.map(c=>esc(c.title)).join(', ')} · approved but not yet on Eventbrite</div></div></div>
+      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review posters →</button></div>`:''}
     <div class="card"><div class="row"><div><h3>Automations</h3><div class="meta">Reminders, low-enroll alerts, auto-cancel &amp; follow-ups run daily on their own.</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="runScheduler()">Run scheduler now</button></div>
     <label>Pending approval (${d.pending.length})</label>
@@ -470,10 +473,23 @@ async function addSlot(){
   adminSlots();
 }
 async function adminApprovals(){
-  const {classes} = await api('/api/classes/pending'); window.__classes=classes;
+  const [pend, gfx] = await Promise.all([api('/api/classes/pending'), api('/api/classes/graphic-review')]);
+  window.__classes = pend.classes.concat(gfx.classes);
   $('#tab').innerHTML = `<h2>Pending <em>approval</em></h2>
-    <p class="sub">${classes.length} waiting. Approve to publish, or send back with a note.</p>
-    ${classes.map(cardCls).join('') || '<div class="muted">Nothing pending. Nice.</div>'}`;
+    <p class="sub">${pend.classes.length} waiting. Approve to build the poster, or send back with a note.</p>
+    ${pend.classes.map(cardCls).join('') || '<div class="muted">Nothing pending. Nice.</div>'}
+    <label style="margin-top:20px">Poster review (${gfx.classes.length})</label>
+    <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes to Eventbrite.</p>
+    ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}`;
+}
+async function saveGraphic(id){
+  await api('/api/classes/'+id+'/graphic','POST',{headline:$('#gh'+id).value, subtitle:$('#gs'+id).value});
+  adminApprovals();
+}
+async function publishClass(id){
+  if(!confirm('Publish this class to Eventbrite and the calendar? This makes it public.')) return;
+  await api('/api/classes/'+id+'/publish','POST',{});
+  adminApprovals();
 }
 async function adminAll(){
   const {classes} = await api('/api/classes/all'); window.__classes=classes;
@@ -481,7 +497,7 @@ async function adminAll(){
     ${classes.map(cardCls).join('') || '<div class="muted">No classes yet.</div>'}`;
 }
 const STMAP={approved:['appr','approved'],incomplete:['inc','sent back'],cancelled:['inc','cancelled'],
-  instructor_review:['ir','instructor review'],pending:['pend','pending']};
+  instructor_review:['ir','instructor review'],graphic_review:['ir','graphic review'],pending:['pend','pending']};
 const VOLUNTEERS=[['Maya Alvarez','maya.a@example.com'],['Theo Brandt','theo.b@example.com'],
   ['Priya Nair','priya.n@example.com'],['Sam Okafor','sam.o@example.com']];
 function cardCls(c){
@@ -510,6 +526,20 @@ function cardCls(c){
         <button class="btn warn" onclick="instrDecline(${c.id})">Send back</button>
         <button class="btn green" onclick="instrApprove(${c.id})">Approve &amp; publish</button></div>`:''}
     ${c.status==='instructor_review' && actingRole()==='admin' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Waiting on ${esc(c.instructor_name)} to approve your edits</div>`:''}
+    ${c.status==='graphic_review' && actingRole()==='admin' ? (()=>{const x=c.external_ids||{}; return `
+      <div class="ok-note" style="margin-top:12px;background:#DCE8F5;color:#2c5b8a">Approved. Review the poster below, then publish. <b>Nothing is on Eventbrite yet.</b></div>
+      ${x.canva_image_url
+        ? `<img src="${esc(x.canva_image_url)}" alt="Class poster" style="margin-top:10px;max-width:100%;border-radius:14px;display:block">`
+        : `<div class="meta" style="margin-top:10px">No Canva poster yet${x.canva_status?` · <span style="color:#B45309">${esc(x.canva_status)}</span>`:' · building…'}. Use <b>Preview graphic</b> below for the in-app mockup.</div>`}
+      <label style="margin-top:12px">Headline (big block letters)</label>
+      <input id="gh${c.id}" value="${esc(c.headline||c.title||'')}">
+      <label>Script line <span style="color:var(--ink-soft);font-weight:600">(optional, the curly accent)</span></label>
+      <input id="gs${c.id}" value="${esc(c.subtitle||'')}" placeholder="e.g. Mini Terrarium">
+      <div class="two" style="margin-top:10px">
+        <button class="btn ghost" onclick="saveGraphic(${c.id})">Save &amp; rebuild</button>
+        <button class="btn green" onclick="publishClass(${c.id})">Publish to Eventbrite</button></div>
+      <button class="btn warn" style="margin-top:8px" onclick="markIncomplete(${c.id})">Send back to instructor</button>`;})():''}
+    ${c.status==='graphic_review' && actingRole()==='instructor' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Approved · the Gibby is finalizing your poster</div>`:''}
     ${c.status==='approved' ? (()=>{const x=c.external_ids||{}; return `
       <div class="ok-note" style="margin-top:12px">${x.eventbrite_id
         ? `✓ Published to Eventbrite · <a href="https://www.eventbrite.com/e/${esc(x.eventbrite_id)}" target="_blank" rel="noopener noreferrer">view event</a>`
