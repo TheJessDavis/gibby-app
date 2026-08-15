@@ -112,7 +112,7 @@ async function api(path, method='GET', body){
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
 
-let ME=null, VIEWAS=null;
+let ME=null, VIEWAS=null, LOGIN_CHOICE=null;
 function showErr(id,msg){ const x=$('#'+id); if(x){x.textContent=msg; x.classList.add('show');} }
 function actingRole(){ return (ME && ME.role==='admin') ? (VIEWAS||'admin') : (ME?ME.role:null); }
 function switchMode(){ VIEWAS = (VIEWAS==='admin'?'instructor':'admin'); boot(); }
@@ -124,7 +124,9 @@ async function boot(){
   if(!user){ renderLogin(); $('#top').style.display='none'; return; }
   if(user.must_change_pw){ $('#top').style.display='flex'; $('#who').textContent=user.name; return renderChangePw(); }
   $('#top').style.display='flex';
-  if(VIEWAS===null) VIEWAS = user.role;
+  if(LOGIN_CHOICE && user.role==='admin') VIEWAS = LOGIN_CHOICE;   // honor the sign-in choice (admins only)
+  else if(VIEWAS===null) VIEWAS = user.role;
+  LOGIN_CHOICE=null;
   const sb=$('#switchbtn');
   if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = VIEWAS==='admin'?'Instructor view':'Admin view'; }
   else sb.style.display='none';
@@ -204,6 +206,8 @@ function renderLogin(){
        <div class="err" id="lerr"></div>
        <label>Email</label><input id="le" placeholder="you@theeverett.org" autocomplete="username">
        <label>Password</label><input id="lp" type="password" autocomplete="current-password">
+       <label>Sign in as</label>
+       <div class="seg" id="lrole"><button class="on" data-v="instructor" onclick="segPick(this)">Instructor</button><button data-v="admin" onclick="segPick(this)">Admin</button></div>
        <div style="height:14px"></div>
        <button class="btn dark" onclick="doLogin()">Sign in →</button>
        <div style="text-align:center;margin-top:14px"><a href="#" onclick="renderForgot();return false" style="font-size:12.5px;color:var(--purple-deep);font-weight:800;text-decoration:none">Forgot password?</a></div>
@@ -211,8 +215,10 @@ function renderLogin(){
    </div>`;
 }
 async function doLogin(){
+  const chosen = $('#lrole') ? $('#lrole').querySelector('.on').dataset.v : null;
   try{
     await api('/api/login','POST',{email:$('#le').value,password:$('#lp').value});
+    LOGIN_CHOICE = chosen;
     boot();
   }catch(e){ const x=$('#lerr'); x.textContent=e.message; x.classList.add('show'); }
 }
