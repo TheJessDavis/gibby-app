@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "1.9-links"
+VERSION = "2.0-required"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -555,9 +555,21 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("instructor")
             if not u: return
             b = self.read_json()
-            req = ["title","description","age_range","length"]
+            req = ["title","age_range","length","room"]
             miss=[k for k in req if not str(b.get(k,"")).strip()]
+            if len((b.get("description") or "").split()) < 50: miss.append("description (at least 50 words)")
             if not b.get("photo"): miss.append("photo")
+            def _num(k):
+                try: return float(b.get(k))
+                except (TypeError, ValueError): return None
+            mx, mn = _num("max_p"), _num("min_p")
+            if not (mx and mx > 0): miss.append("max_p")
+            if not (mn and mn > 0): miss.append("min_p")
+            if mx and mn and mn > mx: miss.append("min_p (cannot exceed max)")
+            if not (_num("ticket_price") or 0) > 0: miss.append("ticket_price")
+            if not (_num("instructor_pay") or 0) > 0: miss.append("instructor_pay")
+            mc = _num("material_cost")
+            if mc is None or mc < 0: miss.append("material_cost")
             if miss: return self.send_json({"error":"Missing required fields","fields":miss},400)
             c=db()
             ids = b.get("slot_ids") or ([b["slot_id"]] if b.get("slot_id") else [])

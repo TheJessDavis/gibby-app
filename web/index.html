@@ -583,7 +583,7 @@ async function loadTplOptions(){
   const sel=$('#f_tpl'); if(sel) sel.innerHTML='<option value="">None, start blank</option>'+templates.map((t,i)=>`<option value="${i}">${esc(t.title)}</option>`).join('');
 }
 function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+i];
-  $('#f_title').value=t.title; $('#f_desc').value=t.description;
+  $('#f_title').value=t.title; $('#f_desc').value=t.description; descCount();
   const c=document.querySelector('#f_ages input[value="'+t.age+'"]'); if(c){c.checked=true; ageChanged();} }
 async function renderInstr(tab){
   $('#view').innerHTML = `
@@ -646,7 +646,8 @@ function openForm(slot){
     <div class="err" id="ferr"></div>
     <label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select>
     <label>Class title</label><input id="f_title">
-    <label>Description</label><textarea id="f_desc"></textarea>
+    <label>Description <span style="color:var(--ink-soft);font-weight:600">(at least 50 words)</span></label>
+    <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 / 50 words</div>
 
     <label>Room</label>
     <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>
@@ -699,7 +700,7 @@ function openForm(slot){
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="renderInstr('open')">Cancel</button>
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
-  calc(); loadTplOptions();
+  calc(); descCount(); loadTplOptions();
 }
 const KID_AGES=['Toddlers','Ages 7–9','Ages 9–12'];
 function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
@@ -723,7 +724,32 @@ function calc(){
   if($('#f_ticket') && !$('#f_ticket').dataset.t)$('#f_ticket').value=ticket;
   if($('#f_pay') && !$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
 }
+function wordCount(s){ return (s||'').trim().split(/\s+/).filter(Boolean).length; }
+function descCount(){ const n=wordCount($('#f_desc').value); const el=$('#f_desccount');
+  if(el){ el.textContent=n+' / 50 words'+(n>=50?' ✓':''); el.style.color=n>=50?'#3F7A32':'var(--ink-soft)'; } }
+function validateForm(){
+  const miss=[];
+  const num=id=>{ const v=$('#'+id).value; return v.trim()===''?null:+v; };
+  if(!$('#f_title').value.trim()) miss.push('Class title');
+  const dw=wordCount($('#f_desc').value);
+  if(dw<50) miss.push('Description (at least 50 words'+(dw?', currently '+dw:'')+')');
+  if(!$('#f_len').value) miss.push('Class length');
+  if(selectedAges().length===0) miss.push('At least one age range');
+  if(!PHOTO) miss.push('A class photo');
+  const max=num('f_max'), min=num('f_min');
+  if(!(max>0)) miss.push('Max students');
+  if(!(min>0)) miss.push('Min students');
+  if(max>0 && min>0 && min>max) miss.push('Min students can’t be more than Max');
+  const mat=num('c_mat');
+  if(mat===null || mat<0) miss.push('Material cost per student');
+  const ticket=num('f_ticket'), pay=num('f_pay');
+  if(!(ticket>0)) miss.push('Ticket price');
+  if(!(pay>0)) miss.push('Your pay');
+  return miss;
+}
 async function submitClass(){
+  const miss=validateForm();
+  if(miss.length){ const x=$('#ferr'); x.textContent='Please complete: '+miss.join(', ')+'.'; x.classList.add('show'); window.scrollTo(0,0); return; }
   const alc = $('#f_alc').querySelector('.on').dataset.v==='yes';
   const ages = selectedAges();
   const kid = ages.some(a=>KID_AGES.includes(a));
