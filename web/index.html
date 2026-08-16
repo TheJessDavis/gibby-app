@@ -68,6 +68,16 @@
   .logo{width:230px;height:230px;margin:-10px auto -6px}
   .logo img{width:100%;height:100%;object-fit:contain}
   .hidden{display:none!important}
+  .money th,.money td{font-size:12.5px;padding:8px 0;font-variant-numeric:tabular-nums}
+  .money td.num,.money th.num{text-align:right;white-space:nowrap;padding-left:10px}
+  .money .pos{color:#3F7A32;font-weight:800}.money .neg{color:#B4442C;font-weight:800}
+  .lg{display:grid;grid-template-columns:18px 1fr auto;gap:10px;align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+  .lg .rk{font-size:11px;font-weight:800;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+  .lg .nm{font-size:13px;font-weight:700;line-height:1.2}
+  .lg .sub2{font-size:10.5px;color:var(--ink-soft);font-weight:700}
+  .lg .amt{text-align:right;font-variant-numeric:tabular-nums}
+  .lg .amt b{font-size:14px;font-weight:800;display:block}
+  .lg .amt span{font-size:10.5px;color:var(--ink-soft);font-weight:700}
   /* season overview: one row per date, a chip per class, colour = status */
   .seasonbar{display:inline-flex;gap:4px;background:var(--white);border-radius:14px;padding:4px;margin:0 0 14px;box-shadow:0 3px 9px rgba(0,0,0,.05)}
   .seasonbar button{border:none;background:none;font-family:inherit;font-weight:800;font-size:12.5px;color:var(--ink-soft);padding:7px 15px;border-radius:11px;cursor:pointer}
@@ -412,12 +422,12 @@ async function renderAdmin(tab){
   ADMIN_TAB = tab;
   const v=$('#view');
   const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
-  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
+  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
     templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
-    all:adminAll, audit:adminAudit, archive:adminArchive};
+    all:adminAll, money:adminMoney, audit:adminAudit, archive:adminArchive};
   const fn=SECTIONS[tab]||adminDashboard;
   return boundary('admin:'+tab, '#tab', fn);
 }
@@ -675,6 +685,58 @@ async function archiveRecord(table, id, what){
   if(table==='classes') adminAll(); else adminArchive();
 }
 
+/* ---------------- money ---------------- */
+const pct = n => (n*100).toFixed(0)+'%';
+// whole pounds, and a minus sign that sits outside the currency symbol
+const money0 = n => (n<0?'-':'')+'$'+Math.abs(Math.round(+n||0)).toLocaleString();
+async function adminMoney(){
+  const d = await api('/api/report/money');
+  const t = d.totals;
+  const league = (rows, unit) => rows.length ? rows.map((r,i)=>`<div class="lg">
+      <div class="rk">${i+1}</div>
+      <div><div class="nm">${esc(r.name)}</div>
+        <div class="sub2">${r.runs} ${r.runs===1?unit:unit+'s'} &middot; ${pct(r.fill)} full &middot; ${pct(r.margin)} margin</div></div>
+      <div class="amt"><b class="${r.net_per_run>=0?'pos':'neg'}">${money0(r.net_per_run)}</b><span>avg per class</span></div>
+    </div>`).join('') : '<div class="muted">Nothing has run yet.</div>';
+  $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
+    <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.</p>
+    <div class="stotals">
+      <div><b>${t.classes}</b><span>classes run</span></div>
+      <div><b>${money0(t.revenue)}</b><span>revenue</span></div>
+      <div><b>${money0(t.pay)}</b><span>instructor pay</span></div>
+      <div><b>${money0(t.materials)}</b><span>materials</span></div>
+      <div><b class="${t.net>=0?'pos':'neg'}">${money0(t.net)}</b><span>net to The Gibby</span></div>
+      <div><b>${pct(t.margin)}</b><span>margin</span></div>
+      <div><b>${pct(t.fill)}</b><span>seats filled</span></div>
+    </div>
+
+    <label style="margin-top:18px">Best margin by class</label>
+    <p class="sub" style="margin-top:2px">Which ideas are worth running again.</p>
+    ${league(d.by_class,'run')}
+
+    <label style="margin-top:20px">By instructor</label>
+    <p class="sub" style="margin-top:2px">Fill rate is mostly what drives this, so read it alongside how the class was promoted.</p>
+    ${league(d.by_instructor,'class')}
+
+    <label style="margin-top:20px">Every class</label>
+    <div style="overflow-x:auto">
+    <table class="money"><thead><tr>
+      <th>Class</th><th class="num">Booked</th><th class="num">Revenue</th>
+      <th class="num">Pay</th><th class="num">Materials</th><th class="num">Net</th></tr></thead><tbody>
+    ${d.classes.map(c=>`<tr>
+      <td><b>${esc(c.title)}</b><div class="meta">${esc(c.slot_date||'')} &middot; ${esc(c.instructor||'')}${
+        c.status==='cancelled'?' &middot; cancelled':(c.actual?'':' &middot; upcoming')}</div></td>
+      <td class="num">${c.enrolled}/${c.planned}</td>
+      <td class="num">${money0(c.revenue)}</td>
+      <td class="num">${money0(c.instructor_pay)}${c.formula_pay!==c.instructor_pay?`<div class="meta">60% would be ${money0(c.formula_pay)}</div>`:''}</td>
+      <td class="num">${c.gibby_materials?money(c.gibby_materials):'&mdash;'}</td>
+      <td class="num ${c.net>=0?'pos':'neg'}">${money0(c.net)}</td></tr>`).join('')}
+    </tbody></table></div>
+    <div class="hint" style="margin-top:12px">Where an instructor supplies their own materials the cost is
+      reimbursed inside their pay, so it is not charged to The Gibby a second time. Pay shown is the agreed
+      fee on the record; where that differs from 60% of the actual pool, both are shown.</div>`;
+}
+
 /* ---------------- audit log (read-only) ---------------- */
 async function adminAudit(){
   const {entries} = await api('/api/audit'); window.__audit = entries;
@@ -860,7 +922,7 @@ function cardCls(c){
       <div class="sessionlist">${c.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div></details>`:''}
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
-    <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
+    <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money0(c.instructor_pay)} pay</div>
     ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}

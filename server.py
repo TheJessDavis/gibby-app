@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "4.0-season-view"
+VERSION = "4.1-profitability"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -260,6 +260,42 @@ def sync_registrations(class_id, _req_fn=None):
     c.commit(); c.close()
     print(f"[registrations] class #{class_id}: {added} added, {updated} updated, {total} attending")
     return {"added": added, "updated": updated, "attending": total, "fetched": len(people)}
+
+def class_finance(cls, enrolled):
+    """What a class actually made.
+
+    The pricing model: ticket = materials + (target pay / 0.6) / planned. Revenue
+    minus materials is the pool; the instructor takes 60% of it and The Gibby 40%.
+    If the INSTRUCTOR supplied the materials they are reimbursed, and that
+    reimbursement is already inside the agreed instructor_pay - so The Gibby must
+    not also be charged for those materials, or every such class reads as far less
+    profitable than it was.
+
+    instructor_pay is the agreed fee on the record, which is what actually gets
+    paid. formula_pay shows what the 60% split would give at ACTUAL attendance, so
+    an under-filled class makes the gap visible."""
+    ticket  = float(cls.get("ticket_price") or 0)
+    mat     = float(cls.get("material_cost") or 0)
+    pay     = float(cls.get("instructor_pay") or 0)
+    own     = bool(cls.get("own_materials"))
+    planned = int(cls.get("max_p") or 0)
+    revenue   = ticket * enrolled
+    materials = mat * enrolled
+    gibby_materials = 0.0 if own else materials      # see docstring
+    net = revenue - pay - gibby_materials
+    pool = max(0.0, revenue - materials)
+    return {
+        "planned": planned, "enrolled": enrolled,
+        "fill": (enrolled / planned) if planned else 0,
+        "ticket_price": ticket, "revenue": round(revenue, 2),
+        "instructor_pay": round(pay, 2),
+        "formula_pay": round(pool * 0.6 + (materials if own else 0.0), 2),
+        "materials": round(materials, 2),
+        "materials_paid_by": "instructor (reimbursed)" if own else "The Gibby",
+        "gibby_materials": round(gibby_materials, 2),
+        "net": round(net, 2),
+        "margin": (net / revenue) if revenue else 0,
+    }
 
 def followup_audience(c, class_id):
     """Who should get the after-class note, and do we actually know who attended?
@@ -1169,6 +1205,67 @@ class H(http.server.BaseHTTPRequestHandler):
             d["slot_ids"] = ids
             d["slots_available"] = still_free
             return self.send_json({"draft": d})
+        if p == "/api/report/money":
+            u = self.require("admin")
+            if not u: return
+            # ?asof=YYYY-MM-DD looks at the season from a chosen date, which is how
+            # you preview a term that has not finished yet.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            today = datetime.date.today()
+            if q.get("asof"):
+                try: today = datetime.date.fromisoformat(q["asof"][0])
+                except ValueError: pass
+            c = db()
+            rows = [dict(r) for r in c.execute("""
+                SELECT cl.*, u.name AS instructor_name FROM classes cl
+                LEFT JOIN users u ON u.id = cl.instructor_id
+                WHERE cl.deleted_at IS NULL AND cl.status IN ('approved','cancelled')
+                ORDER BY cl.slot_date""")]
+            out = []
+            for r in rows:
+                enrolled = enrollment(c, r["id"])
+                fin = class_finance(r, enrolled)
+                end = _class_end_date(r)
+                fin.update({"id": r["id"], "title": r["title"], "instructor": r["instructor_name"],
+                            "slot_date": r["slot_date"], "room": r["room"], "status": r["status"],
+                            "is_series": bool(r["is_series"]), "sessions": r["session_count"] or 1,
+                            # only a class that has happened can be reported as fact
+                            "actual": bool(end and end < today) or r["status"] == "cancelled"})
+                out.append(fin)
+            c.close()
+
+            def rollup(key):
+                g = {}
+                # aggregate ONLY over classes that have run: projecting from partial
+                # bookings would flatter an upcoming class into the league table
+                for r in [x for x in out if x["actual"] and x["status"] != "cancelled"]:
+                    k = r[key] or "unknown"
+                    b = g.setdefault(k, {"name": k, "runs": 0, "revenue": 0.0, "pay": 0.0,
+                                         "materials": 0.0, "net": 0.0, "seats": 0, "planned": 0})
+                    b["runs"] += 1; b["revenue"] += r["revenue"]; b["pay"] += r["instructor_pay"]
+                    b["materials"] += r["gibby_materials"]; b["net"] += r["net"]
+                    b["seats"] += r["enrolled"]; b["planned"] += r["planned"]
+                for b in g.values():
+                    b["margin"] = (b["net"] / b["revenue"]) if b["revenue"] else 0
+                    b["fill"] = (b["seats"] / b["planned"]) if b["planned"] else 0
+                    b["net_per_run"] = b["net"] / b["runs"] if b["runs"] else 0
+                    for k in ("revenue","pay","materials","net","net_per_run"): b[k] = round(b[k], 2)
+                return sorted(g.values(), key=lambda x: -x["net_per_run"])
+
+            done = [x for x in out if x["actual"] and x["status"] != "cancelled"]
+            totals = {
+                "classes": len(done),
+                "revenue": round(sum(x["revenue"] for x in done), 2),
+                "pay": round(sum(x["instructor_pay"] for x in done), 2),
+                "materials": round(sum(x["gibby_materials"] for x in done), 2),
+                "net": round(sum(x["net"] for x in done), 2),
+                "seats": sum(x["enrolled"] for x in done),
+                "planned": sum(x["planned"] for x in done),
+            }
+            totals["margin"] = (totals["net"] / totals["revenue"]) if totals["revenue"] else 0
+            totals["fill"] = (totals["seats"] / totals["planned"]) if totals["planned"] else 0
+            return self.send_json({"classes": out, "totals": totals,
+                                   "by_class": rollup("title"), "by_instructor": rollup("instructor")})
         if p == "/api/feedback":
             # What instructors actually said, grouped by class title so a repeat of
             # the same class carries its history into the next season.
