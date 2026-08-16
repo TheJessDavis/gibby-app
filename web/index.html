@@ -68,6 +68,30 @@
   .logo{width:230px;height:230px;margin:-10px auto -6px}
   .logo img{width:100%;height:100%;object-fit:contain}
   .hidden{display:none!important}
+  /* season overview: one row per date, a chip per class, colour = status */
+  .seasonbar{display:inline-flex;gap:4px;background:var(--white);border-radius:14px;padding:4px;margin:0 0 14px;box-shadow:0 3px 9px rgba(0,0,0,.05)}
+  .seasonbar button{border:none;background:none;font-family:inherit;font-weight:800;font-size:12.5px;color:var(--ink-soft);padding:7px 15px;border-radius:11px;cursor:pointer}
+  .seasonbar button.on{background:var(--ink);color:#fff}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 14px}
+  .legend span{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;color:var(--ink-soft)}
+  .legend i{width:9px;height:9px;border-radius:3px;flex:none}
+  .st-ok{background:#3F7A32}.st-wait{background:#7C6BD6}.st-low{background:#D9932B}
+  .st-off{background:#B4442C}.st-back{background:#9A9282}
+  .smonth{font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);margin:18px 0 8px}
+  .srow{display:grid;grid-template-columns:58px 1fr;gap:10px;padding:9px 0;border-top:1px solid var(--line);align-items:start}
+  .sdate{font-weight:800;font-size:12.5px;line-height:1.25;color:var(--ink)}
+  .sdate small{display:block;font-size:9.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft)}
+  .schips{display:flex;flex-direction:column;gap:5px}
+  .schip{display:grid;grid-template-columns:4px 1fr auto;gap:8px;align-items:center;background:var(--white);border-radius:9px;padding:7px 9px;box-shadow:0 2px 6px rgba(0,0,0,.05)}
+  .schip .bar{width:4px;height:100%;min-height:24px;border-radius:3px}
+  .schip .t{font-size:12.5px;font-weight:700;line-height:1.25}
+  .schip .r{font-size:10.5px;font-weight:700;color:var(--ink-soft)}
+  .schip .n{font-size:10.5px;font-weight:800;color:var(--ink-soft);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .sfree{font-size:11px;font-weight:700;color:var(--ink-soft);font-style:italic;padding:3px 0}
+  .stotals{display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:9px;overflow:hidden;margin-bottom:16px}
+  .stotals div{background:var(--white);padding:10px 11px}
+  .stotals b{display:block;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+  .stotals span{font-size:10.5px;color:var(--ink-soft);font-weight:700}
   .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:5px;margin:8px 0}
   .cal-h{text-align:center;font-size:10px;font-weight:800;color:var(--ink-soft)}
   .cal-d{aspect-ratio:1/1;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--ink-soft);gap:3px}
@@ -494,13 +518,72 @@ const MONNAME=['January','February','March','April','May','June','July','August'
 function parseDate(s){ if(!s)return null; const p=s.split(', '); const md=(p[1]||p[0]).trim().split(' ');
   const m=MONIDX[md[0]], d=parseInt(md[1]); if(m==null||isNaN(d))return null; return {m,d}; }
 let CAL_M=0;
+/* Read-only. Every class in the season on one screen, so a scheduling decision
+   can be made without clicking through months. */
+let CAL_VIEW='season';
+function classState(c){
+  if(c.status==='cancelled') return ['off','cancelled'];
+  if(c.status==='incomplete') return ['back','sent back'];
+  if(c.status!=='approved') return ['wait','awaiting approval'];
+  if(c.enrolled < (c.min_p||0)) return ['low','below minimum'];
+  return ['ok','on track'];
+}
 async function adminCalendar(){
-  const {classes}=await api('/api/classes/all');
+  const [{classes}, slotsRes] = await Promise.all([api('/api/classes/all'), api('/api/slots')]);
   const items=classes.map(c=>({...c,pd:parseDate(c.slot_date)})).filter(c=>c.pd);
   const months=[...new Set(items.map(c=>c.pd.m))].sort((a,b)=>a-b);
-  if(!months.length){ $('#tab').innerHTML='<h2>Calendar</h2><div class="muted">No scheduled classes yet.</div>'; return; }
+  if(!months.length){ $('#tab').innerHTML='<h2>Season</h2><div class="muted">No scheduled classes yet.</div>'; return; }
   if(!months.includes(CAL_M)) CAL_M=months[0];
-  window.__cal={months,items}; renderCal(CAL_M);
+  // dates that still have unclaimed slots: the gaps you can actually fill
+  const openByDate={};
+  (slotsRes.slots||[]).forEach(sl=>{ const d=parseDate(sl.date); if(d) openByDate[d.m+'-'+d.d]=(openByDate[d.m+'-'+d.d]||0)+1; });
+  window.__cal={months,items,openByDate};
+  CAL_VIEW==='season' ? renderSeason() : renderCal(CAL_M);
+}
+function setCalView(v){ CAL_VIEW=v; CAL_VIEW==='season'?renderSeason():renderCal(CAL_M); }
+function renderSeason(){
+  const {items,openByDate}=window.__cal;
+  const n = st => items.filter(c=>classState(c)[0]===st).length;
+  // group by month, then by date
+  const byMonth={};
+  items.slice().sort((a,b)=>a.pd.m-b.pd.m || a.pd.d-b.pd.d)
+       .forEach(c=>{ (byMonth[c.pd.m]=byMonth[c.pd.m]||{})[c.pd.d]=(byMonth[c.pd.m][c.pd.d]||[]).concat(c); });
+  const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const body=Object.keys(byMonth).map(Number).sort((a,b)=>a-b).map(m=>`
+    <div class="smonth">${esc(MONNAME[m])}</div>
+    ${Object.keys(byMonth[m]).map(Number).sort((a,b)=>a-b).map(d=>{
+      const list=byMonth[m][d], open=openByDate[m+'-'+d]||0;
+      const rooms=new Set(list.map(c=>c.room).filter(Boolean));
+      const dow=(list[0].slot_date||'').includes(', ') ? list[0].slot_date.split(', ')[0]
+                                                       : DOW[new Date(2027,m,d).getDay()];
+      return `<div class="srow">
+        <div class="sdate">${d}<small>${esc(dow)}</small></div>
+        <div class="schips">
+          ${list.map(c=>{const [st,label]=classState(c);return `<div class="schip">
+            <div class="bar st-${st}"></div>
+            <div><div class="t">${esc(c.title)}</div>
+              <div class="r">${esc(c.room||'room not set')} &middot; ${esc(c.slot_time||'')} &middot; ${esc(label)}</div></div>
+            <div class="n">${c.enrolled}/${c.max_p}</div></div>`;}).join('')}
+          ${open?`<div class="sfree">${open} slot${open===1?'':'s'} still open${rooms.size===1?' in the other room':''}</div>`:''}
+        </div></div>`;}).join('')}`).join('');
+  $('#tab').innerHTML = `<h2>The <em>season</em></h2>
+    <p class="sub">Every class, both rooms, whole season. Read-only.</p>
+    <div class="seasonbar">
+      <button class="on" onclick="setCalView('season')">Season</button>
+      <button onclick="setCalView('month')">Month</button></div>
+    <div class="stotals">
+      <div><b>${items.length}</b><span>classes</span></div>
+      <div><b>${n('ok')}</b><span>on track</span></div>
+      <div><b>${n('low')}</b><span>below min</span></div>
+      <div><b>${n('wait')}</b><span>awaiting</span></div>
+      <div><b>${n('off')}</b><span>cancelled</span></div>
+      <div><b>${n('back')}</b><span>sent back</span></div>
+    </div>
+    <div class="legend">
+      <span><i class="st-ok"></i>on track</span><span><i class="st-low"></i>below minimum</span>
+      <span><i class="st-wait"></i>awaiting approval</span><span><i class="st-off"></i>cancelled</span>
+      <span><i class="st-back"></i>sent back</span></div>
+    ${body}`;
 }
 function renderCal(m){
   const {months,items}=window.__cal, year=2027;
@@ -514,6 +597,8 @@ function renderCal(m){
   $('#tab').innerHTML=`<div class="row"><h2 style="margin:0">${MONNAME[m]} <em>${year}</em></h2><div>
       ${idx>0?`<button class="navm" onclick="renderCal(${months[idx-1]})">‹</button>`:''}
       ${idx<months.length-1?`<button class="navm" onclick="renderCal(${months[idx+1]})">›</button>`:''}</div></div>
+    <div class="seasonbar"><button onclick="setCalView('season')">Season</button>
+      <button class="on" onclick="setCalView('month')">Month</button></div>
     <p class="sub">Days with classes are highlighted. Tap one.</p>
     <div class="calgrid">${cells}</div>
     <div id="agenda"><label>All ${MONNAME[m]}</label>${items.filter(c=>c.pd.m===m).sort((a,b)=>a.pd.d-b.pd.d).map(agendaRow).join('')}</div>`;
@@ -1446,7 +1531,7 @@ async function submitClass(){
  'testEventbrite','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','returnFollowup','sendFeedback'
+ 'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
