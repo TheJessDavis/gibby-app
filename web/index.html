@@ -449,9 +449,30 @@ async function runScheduler(){
 async function promote(id){ await api('/api/classes/'+id+'/promote','POST'); adminDashboard(); }
 async function cancelClass(id){ if(!confirm('Cancel this class and refund all students? This cannot be undone.'))return;
   await api('/api/classes/'+id+'/cancel','POST'); adminDashboard(); }
+const FB_ENROL={too_few:'ran quiet',about_right:'about right',too_many:'ran full'};
+const FB_MAT={short:'ran short on materials',enough:'materials were right',too_much:'materials left over'};
 async function adminTemplates(){
-  const {templates} = await api('/api/templates/all');
+  const [{templates}, fb] = await Promise.all([api('/api/templates/all'), api('/api/feedback')]);
+  const seen = fb.by_title || [];
   $('#tab').innerHTML = `<h2>Class <em>templates</em></h2><p class="sub">${templates.length} templates. Instructors pick from these.</p>
+    ${seen.length?`<label style="margin-top:0">What instructors said (${fb.responses.length} ${fb.responses.length===1?'class':'classes'})</label>
+      <p class="sub" style="margin-top:2px">Their own words after teaching. Worth a look before you plan next season.</p>
+      ${seen.map(t=>`<div class="card">
+        <div class="row"><div><h3 style="font-size:1rem">${esc(t.title)}</h3>
+          <div class="meta">taught ${t.runs}&times; by ${esc(t.instructors.join(', ')||'unknown')}</div></div>
+          <span class="pill ${t.again_no?'inc':(t.again_yes?'appr':'pend')}">${
+            t.again_no ? 'would not repeat' : (t.again_yes ? `${t.again_yes} would teach again` : 'mixed')}</span></div>
+        <div class="meta" style="margin-top:8px">
+          ${t.materials_short?`<div style="color:#B45309;font-weight:800">Ran short on materials ${t.materials_short}&times; &mdash; worth raising the material budget</div>`:''}
+          ${t.too_few?`<div>Felt quiet ${t.too_few}&times; &mdash; consider a lower minimum or more promotion</div>`:''}
+          ${t.too_many?`<div>Felt too full ${t.too_many}&times; &mdash; consider a lower cap or the Large Room</div>`:''}
+        </div>
+        ${fb.responses.filter(r=>r.title===t.title && (r.notes||'').trim()).map(r=>`
+          <div class="sessrow" style="border-top:1px solid var(--line);padding-top:8px;margin-top:8px">
+            <b style="min-width:0">${esc(r.instructor_name||'')}</b>
+            <span style="font-weight:600">&ldquo;${esc(r.notes)}&rdquo;</span></div>`).join('')}
+      </div>`).join('')}
+      <label style="margin-top:20px">All templates</label>`:''}
     <div class="card">
       <label style="margin-top:0">New template title</label><input id="tt">
       <div class="two"><div><label>Category</label><input id="tc" placeholder="Painting"></div>
@@ -699,6 +720,14 @@ async function adminApprovals(){
   // If a publish is already running (e.g. after a reload, or another admin started
   // it), pick the live status back up instead of showing a stale idle card.
   window.__classes.filter(c=>c.publishing_in_progress).forEach(c=>startPublishPolling(c.id));
+}
+async function sendFeedback(id){
+  const pick = k => { const el=$('#'+k+id); const on=el&&el.querySelector('.on'); return on?on.dataset.v:''; };
+  await api('/api/classes/'+id+'/feedback','POST',{
+    enrollment: pick('fbe'), materials: pick('fbm'), teach_again: pick('fba'),
+    notes: $('#fbn'+id).value});
+  alert('Thank you. That goes straight to The Gibby and helps shape next season.');
+  instrMine();
 }
 async function saveFollowup(id, save){
   const note = $('#fu'+id).value;
@@ -1112,6 +1141,8 @@ async function instrMine(){
   const drafts = dr.drafts || [];
   const todo = classes.filter(c=>c.followup_status==='awaiting_instructor');
   const waiting = classes.filter(c=>c.followup_status==='pending_admin');
+  // asked once the class has finished, and only until they answer
+  const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
       <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. An admin checks it before it goes out.</p>
@@ -1124,6 +1155,30 @@ async function instrMine(){
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">Send for approval</button></div>
+      </div>`).join('')}`:''}
+    ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
+      <p class="sub" style="margin-top:2px">Three quick questions, just for The Gibby. Students never see these.</p>
+      ${feedbackDue.map(c=>`<div class="card">
+        <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
+          <div class="meta">${esc(c.slot_date||'')} &middot; ${c.enrolled} of ${c.max_p} booked</div></div></div>
+        <label style="margin-top:10px">How did enrollment feel?</label>
+        <div class="seg" id="fbe${c.id}">
+          <button data-v="too_few" onclick="segPick(this)">Too quiet</button>
+          <button class="on" data-v="about_right" onclick="segPick(this)">About right</button>
+          <button data-v="too_many" onclick="segPick(this)">Too full</button></div>
+        <label>Were materials sufficient?</label>
+        <div class="seg" id="fbm${c.id}">
+          <button data-v="short" onclick="segPick(this)">Ran short</button>
+          <button class="on" data-v="enough" onclick="segPick(this)">Just right</button>
+          <button data-v="too_much" onclick="segPick(this)">Too much left</button></div>
+        <label>Would you teach this again?</label>
+        <div class="seg" id="fba${c.id}">
+          <button data-v="no" onclick="segPick(this)">No</button>
+          <button data-v="maybe" onclick="segPick(this)">Maybe</button>
+          <button class="on" data-v="yes" onclick="segPick(this)">Yes</button></div>
+        <label>Anything else? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+        <textarea id="fbn${c.id}" placeholder="e.g. Two hours was tight for this one. Three would let the glaze dry properly."></textarea>
+        <button class="btn dark" style="margin-top:10px" onclick="sendFeedback(${c.id})">Send to The Gibby</button>
       </div>`).join('')}`:''}
     ${waiting.length?`<label style="margin-top:18px">With the Gibby for review (${waiting.length})</label>
       ${waiting.map(c=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
@@ -1391,7 +1446,7 @@ async function submitClass(){
  'testEventbrite','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','returnFollowup'
+ 'saveFollowup','sendFollowup','returnFollowup','sendFeedback'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "3.8-followup-workflow"
+VERSION = "3.9-instructor-feedback"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -88,6 +88,13 @@ def init_db():
       email_type TEXT NOT NULL, sent_at TEXT NOT NULL,
       recipients INTEGER DEFAULT 0, delivered INTEGER DEFAULT 0);
     CREATE UNIQUE INDEX IF NOT EXISTS email_log_once ON email_log(class_id, email_type);
+    -- What the instructor thought, asked the day after the class. Private to The
+    -- Gibby: it never goes to students. One row per class.
+    CREATE TABLE IF NOT EXISTS class_feedback(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, class_id INTEGER NOT NULL UNIQUE,
+      instructor_id INTEGER, enrollment TEXT, materials TEXT, teach_again TEXT,
+      notes TEXT, submitted_at TEXT);
+    CREATE INDEX IF NOT EXISTS class_feedback_instructor ON class_feedback(instructor_id);
     -- Work-in-progress class proposals. A draft holds the FORM ONLY: it does not
     -- claim any slots, otherwise an abandoned draft would sit on a Saturday nobody
     -- else could book. Slots are still claimed at submit time.
@@ -913,7 +920,9 @@ def run_scheduler(asof=None):
                     f"Hi {first},\n\n\"{cls['title']}\" has finished. When you have a moment, please "
                     f"write a short note to your students.\n\nOpen the app, go to My classes, and you "
                     f"will find it waiting under Follow-up notes. An admin reviews it before it goes "
-                    f"out.\n\nThank you,\nThe Gibby", today, cfg)
+                    f"out.\n\nWhile you are there, there are three quick questions about how the class "
+                    f"went. Those are just for us, they are never sent to students, and they help us "
+                    f"plan next season.\n\nThank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} to write the follow-up: {cls['title']}"
                                if sent else f"follow-up request suppressed for {cls['title']}: {why}")
     c.commit(); c.close()
@@ -1160,6 +1169,40 @@ class H(http.server.BaseHTTPRequestHandler):
             d["slot_ids"] = ids
             d["slots_available"] = still_free
             return self.send_json({"draft": d})
+        if p == "/api/feedback":
+            # What instructors actually said, grouped by class title so a repeat of
+            # the same class carries its history into the next season.
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""
+                SELECT f.*, cl.title, cl.slot_date, cl.max_p, cl.min_p, u.name AS instructor_name,
+                       (SELECT COUNT(*) FROM registrations r
+                        WHERE r.class_id=f.class_id AND r.refunded=0) AS enrolled
+                FROM class_feedback f
+                JOIN classes cl ON cl.id = f.class_id
+                LEFT JOIN users u ON u.id = f.instructor_id
+                WHERE cl.deleted_at IS NULL
+                ORDER BY f.submitted_at DESC""")]
+            c.close()
+            by_title = {}
+            for r in rows:
+                t = by_title.setdefault(r["title"], {"title": r["title"], "runs": 0,
+                        "again_yes": 0, "again_no": 0, "materials_short": 0,
+                        "too_few": 0, "too_many": 0, "instructors": set()})
+                t["runs"] += 1
+                if r["teach_again"] == "yes": t["again_yes"] += 1
+                if r["teach_again"] == "no":  t["again_no"]  += 1
+                if r["materials"] == "short": t["materials_short"] += 1
+                if r["enrollment"] == "too_few":  t["too_few"] += 1
+                if r["enrollment"] == "too_many": t["too_many"] += 1
+                if r["instructor_name"]: t["instructors"].add(r["instructor_name"])
+            summary = []
+            for t in by_title.values():
+                t["instructors"] = sorted(t["instructors"])
+                summary.append(t)
+            summary.sort(key=lambda t: (-t["again_yes"], t["title"]))
+            return self.send_json({"responses": rows, "by_title": summary})
         if p == "/api/classes/followup-review":
             u = self.require("admin")
             if not u: return
@@ -1292,10 +1335,14 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def _classes(self, where, args=()):
         c = db()
-        rows = c.execute(f"""SELECT c.*, u.name AS instructor_name, ra.name AS reviewing_admin_name
+        rows = c.execute(f"""SELECT c.*, u.name AS instructor_name, ra.name AS reviewing_admin_name,
+                             f.enrollment AS fb_enrollment, f.materials AS fb_materials,
+                             f.teach_again AS fb_teach_again, f.notes AS fb_notes,
+                             f.submitted_at AS fb_submitted_at
                              FROM classes c
                              JOIN users u ON u.id=c.instructor_id
                              LEFT JOIN users ra ON ra.id=c.reviewing_admin_id
+                             LEFT JOIN class_feedback f ON f.class_id=c.id
                              {where} {'AND' if where.strip() else 'WHERE'} c.deleted_at IS NULL
                              ORDER BY c.created DESC""", args).fetchall()
         out=[]
@@ -1767,6 +1814,35 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); raise
             c.close()
             run_publish_side_effects(pending_side_effects)
+            return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/feedback"):
+            # Three questions, asked once, private to The Gibby.
+            u = self.require("instructor")
+            if not u: return
+            cid = int(p.split("/")[3]); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            valid = {"enrollment": {"too_few","about_right","too_many"},
+                     "materials":  {"enough","short","too_much"},
+                     "teach_again":{"yes","maybe","no"}}
+            answers = {}
+            for k, allowed in valid.items():
+                v = (b.get(k) or "").strip()
+                if v not in allowed:
+                    c.close(); return self.send_json({"error":f"Please answer all three questions."},400)
+                answers[k] = v
+            c.execute("""INSERT INTO class_feedback(class_id,instructor_id,enrollment,materials,
+                         teach_again,notes,submitted_at) VALUES(?,?,?,?,?,?,?)
+                         ON CONFLICT(class_id) DO UPDATE SET enrollment=excluded.enrollment,
+                         materials=excluded.materials, teach_again=excluded.teach_again,
+                         notes=excluded.notes, submitted_at=excluded.submitted_at""",
+                      (cid, row["instructor_id"], answers["enrollment"], answers["materials"],
+                       answers["teach_again"], (b.get("notes") or "").strip()[:2000], now()))
+            c.commit(); c.close()
+            print(f"[feedback] class #{cid}: enrollment={answers['enrollment']} "
+                  f"materials={answers['materials']} again={answers['teach_again']}")
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/followup-note"):
             # Instructor writes (or re-writes) the note. save=true keeps a draft;
