@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "3.5-attendee-pagination"
+VERSION = "3.6-indexes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -136,6 +136,33 @@ def init_db():
         except sqlite3.OperationalError: pass
     c.execute("CREATE INDEX IF NOT EXISTS sessions_refresh ON sessions(refresh_token)")
     c.execute("CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)")
+    # ---- query indexes -------------------------------------------------------
+    # Derived by running EXPLAIN QUERY PLAN over every query the app issues and
+    # indexing what actually scanned. Composites lead with the selective column:
+    # deleted_at alone is a poor index because nearly every row is NULL, so the
+    # planner was picking it and still reading most of the table.
+    for ddl in (
+        # classes: filtered by status or instructor, ordered by created
+        "CREATE INDEX IF NOT EXISTS classes_status      ON classes(status, deleted_at)",
+        "CREATE INDEX IF NOT EXISTS classes_instructor  ON classes(instructor_id, deleted_at)",
+        "CREATE INDEX IF NOT EXISTS classes_slot_date   ON classes(slot_date)",
+        "CREATE INDEX IF NOT EXISTS classes_created     ON classes(created DESC)",
+        # registrations: rosters and every enrolment count
+        "CREATE INDEX IF NOT EXISTS registrations_class ON registrations(class_id, refunded)",
+        # slots: availability, the series week-matcher, and calendar reconcile
+        "CREATE INDEX IF NOT EXISTS slots_status        ON slots(status, deleted_at)",
+        "CREATE INDEX IF NOT EXISTS slots_date          ON slots(date, start, end)",
+        "CREATE INDEX IF NOT EXISTS slots_source        ON slots(source, status)",
+        # audit log: the Audit tab filters, and decided_by() on every lost race
+        "CREATE INDEX IF NOT EXISTS audit_log_class     ON audit_log(class_id, id DESC)",
+        "CREATE INDEX IF NOT EXISTS audit_log_actor     ON audit_log(actor_id, id DESC)",
+        # per-class job lookups (publish status, duplicate-publish guard)
+        "CREATE INDEX IF NOT EXISTS job_queue_class     ON job_queue(class_id)",
+        # lifecycle email recipients are selected by role
+        "CREATE INDEX IF NOT EXISTS users_role          ON users(role, deleted_at)",
+    ):
+        try: c.execute(ddl)
+        except sqlite3.OperationalError as e: print("[index]", e)
     # Any session created before expiry existed has no expires_at and would other-
     # wise live forever. Retire them so everyone re-authenticates once.
     c.execute("UPDATE sessions SET revoked_at=? WHERE expires_at IS NULL AND revoked_at IS NULL", (now(),))
