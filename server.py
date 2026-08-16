@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.8-age-label"
+VERSION = "2.9-pending-lock"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -99,7 +99,8 @@ def init_db():
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
-                     ("session_dates","TEXT"),("age_label","TEXT")):
+                     ("session_dates","TEXT"),("age_label","TEXT"),
+                     ("publishing_in_progress","INTEGER DEFAULT 0")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.commit()
@@ -282,6 +283,15 @@ QUEUE_TICK = 20                       # seconds between sweeps
 PLATFORM_LABEL = {"canva":"Canva", "eventbrite":"Eventbrite", "facebook":"Facebook",
                   "wix":"Wix", "descene":"Descene", "gcal":"Google Calendar"}
 
+def refresh_publishing_flag(c, class_id):
+    """publishing_in_progress simply means "this class still has outbound jobs in
+    flight". Recomputed from the queue rather than tracked by hand, so it can never
+    get stuck on after a crash or a restart."""
+    n = c.execute("SELECT COUNT(*) FROM job_queue WHERE class_id=? AND status IN ('queued','running')",
+                  (class_id,)).fetchone()[0]
+    c.execute("UPDATE classes SET publishing_in_progress=? WHERE id=?", (1 if n else 0, class_id))
+    return n
+
 def enqueue(c, class_id, platform, payload=None, delay=0):
     when = (datetime.datetime.now() + datetime.timedelta(seconds=delay)).isoformat(timespec="seconds")
     c.execute("""INSERT INTO job_queue(class_id,platform,payload,attempts,next_run_at,status,created,updated)
@@ -296,12 +306,14 @@ def queue_publish(class_id, image_url=None, instructor_name=""):
         if platform == "eventbrite": payload["image_url"] = image_url
         if platform == "gcal":       payload["instructor_name"] = instructor_name
         enqueue(c, class_id, platform, payload)
+    refresh_publishing_flag(c, class_id)
     c.commit(); c.close()
     print(f"[queue] class #{class_id}: queued 5 publishing jobs")
 
 def render_graphic_async(cls):
     """Queue the Canva poster build. The worker retries it on failure."""
-    c = db(); enqueue(c, cls["id"], "canva", {}); c.commit(); c.close()
+    c = db(); enqueue(c, cls["id"], "canva", {}); refresh_publishing_flag(c, cls["id"])
+    c.commit(); c.close()
     print(f"[queue] class #{cls['id']}: queued Canva graphic")
 
 def _run_platform(platform, cls, payload):
@@ -364,7 +376,8 @@ def process_due_jobs():
         if claimed != 1: continue
         if not cls:
             c = db(); c.execute("UPDATE job_queue SET status='skipped', last_error='class no longer exists', updated=? WHERE id=?",
-                                (now(), job["id"])); c.commit(); c.close(); continue
+                                (now(), job["id"]))
+            refresh_publishing_flag(c, job["class_id"]); c.commit(); c.close(); continue
 
         outcome, detail = _run_platform(job["platform"], cls, json.loads(job["payload"] or "{}"))
         label = PLATFORM_LABEL.get(job["platform"], job["platform"])
@@ -388,6 +401,7 @@ def process_due_jobs():
             c.execute("UPDATE job_queue SET status='queued', attempts=?, last_error=?, next_run_at=?, updated=? WHERE id=?",
                       (attempts, str(detail)[:400], nxt, now(), job["id"]))
             print(f"[queue] class #{cls['id']} {label}: attempt {attempts} failed ({detail}); retrying in {delay}s")
+        refresh_publishing_flag(c, job["class_id"])   # clears once nothing is left in flight
         c.commit(); c.close()
         if outcome is True: _record_success(job["class_id"], job["platform"], detail)
 
@@ -744,6 +758,25 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin");
             if not u: return
             return self.send_json({"classes": self._classes("WHERE c.status='pending' ")})
+        if p.startswith("/api/classes/") and p.endswith("/publish-status"):
+            # Per-platform state for the optimistic UI. One row per platform, latest wins.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); c = db()
+            row = c.execute("SELECT status, publishing_in_progress FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            jobs = {}
+            for r in c.execute("SELECT * FROM job_queue WHERE class_id=? ORDER BY id",(cid,)):
+                jobs[r["platform"]] = {"platform": r["platform"],
+                    "label": PLATFORM_LABEL.get(r["platform"], r["platform"]),
+                    "status": r["status"], "attempts": r["attempts"],
+                    "error": r["last_error"] or "", "next_run_at": r["next_run_at"]}
+            c.close()
+            order = ["canva","eventbrite","facebook","wix","gcal","descene"]
+            out = [jobs[k] for k in order if k in jobs] + [v for k,v in jobs.items() if k not in order]
+            return self.send_json({"class_status": row["status"],
+                                   "publishing": bool(row["publishing_in_progress"]),
+                                   "platforms": out})
         if p == "/api/classes/graphic-review":
             u = self.require("admin")
             if not u: return
@@ -1160,6 +1193,16 @@ class H(http.server.BaseHTTPRequestHandler):
                     msg = (f"This submission was already published by {who}." if who and cls["status"]=="approved"
                            else "This class is not waiting on graphic review.")
                     return self.send_json({"error":msg, "status":cls["status"]}, 409)
+                # Only a publish-phase job blocks a second publish. The Canva poster
+                # render also sets publishing_in_progress, and that must NOT stop an
+                # admin publishing a class whose poster is still building.
+                busy = c.execute("""SELECT COUNT(*) FROM job_queue WHERE class_id=?
+                                    AND platform<>'canva' AND status IN ('queued','running')""",
+                                 (cid,)).fetchone()[0]
+                if busy:
+                    c.execute("ROLLBACK"); c.close()
+                    return self.send_json({"error":"Publishing is already running for this class.",
+                                           "status":cls["status"]}, 409)
                 # CAS: only one publisher can move graphic_review -> approved
                 if c.execute("UPDATE classes SET status='approved' WHERE id=? AND status='graphic_review'",
                              (cid,)).rowcount != 1:

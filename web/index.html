@@ -107,6 +107,17 @@
   .mday.on .mdow,.mday.on .mcount{color:rgba(255,255,255,.72)}
   .mnum{font-size:20px;font-weight:800;line-height:1.15}
   .mcount{font-size:10.5px;font-weight:700;color:var(--ink-soft)}
+  /* pending lock + per-platform publish status */
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.35);
+    border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  .btn.ghost .spin,.btn.green .spin{border-color:rgba(0,0,0,.18);border-top-color:var(--ink)}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .btn[disabled]{opacity:.62;cursor:not-allowed}
+  .pubstat{margin-top:10px}
+  .pubrow{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;padding:6px 0;border-top:1px solid var(--line)}
+  .pubrow .ic{width:17px;text-align:center;flex:none}
+  .pubrow .er{color:#B4442C;font-weight:700}
+  .pubrow.wait{color:var(--ink-soft)}
   .sessionlist{margin-top:8px}
   .sessrow{font-size:12.5px;font-weight:700;color:var(--ink-soft);padding:6px 0;border-top:1px solid var(--line)}
   .sessrow b{display:inline-block;min-width:20px;color:var(--ink)}
@@ -334,6 +345,7 @@ async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; 
 
 /* ---------------- admin ---------------- */
 async function renderAdmin(tab){
+  ADMIN_TAB = tab;
   const v=$('#view');
   const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
   v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('audit','Audit')}</div><div id="tab"></div>`;
@@ -593,14 +605,12 @@ async function adminApprovals(){
     <label style="margin-top:20px">Poster review (${gfx.classes.length})</label>
     <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes to Eventbrite.</p>
     ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}`;
+  // If a publish is already running (e.g. after a reload, or another admin started
+  // it), pick the live status back up instead of showing a stale idle card.
+  window.__classes.filter(c=>c.publishing_in_progress).forEach(c=>startPublishPolling(c.id));
 }
 async function saveGraphic(id){
   await api('/api/classes/'+id+'/graphic','POST',{headline:$('#gh'+id).value, subtitle:$('#gs'+id).value});
-  adminApprovals();
-}
-async function publishClass(id){
-  if(!confirm('Publish this class to Eventbrite and the calendar? This makes it public.')) return;
-  await api('/api/classes/'+id+'/publish','POST',{});
   adminApprovals();
 }
 async function adminAll(){
@@ -636,7 +646,7 @@ function cardCls(c){
     ${c.status==='pending' && actingRole()==='admin' ? `
       <div class="two" style="margin-top:14px">
         <button class="btn warn" onclick="markIncomplete(${c.id})">Send back</button>
-        <button class="btn green" onclick="approve(${c.id})">Approve</button></div>
+        <button class="btn green" onclick="approve(${c.id}, event)">Approve</button></div>
       <button class="btn ghost" style="margin-top:8px" onclick="openEditForm(${c.id})">Edit &amp; return to instructor</button>`:''}
     ${c.status==='instructor_review' && actingRole()==='instructor' ? `
       <div class="ok-note" style="margin-top:12px;background:#DCE8F5;color:#2c5b8a">An admin edited this class. Review the details above, then approve to publish or send it back.</div>
@@ -656,15 +666,18 @@ function cardCls(c){
       <input id="gs${c.id}" value="${esc(c.subtitle||'')}" placeholder="e.g. Mini Terrarium">
       <div class="two" style="margin-top:10px">
         <button class="btn ghost" onclick="saveGraphic(${c.id})">Save &amp; rebuild</button>
-        <button class="btn green" onclick="publishClass(${c.id})">Publish to Eventbrite</button></div>
+        <button class="btn green" onclick="publishClass(${c.id}, event)">Publish to Eventbrite</button></div>
+      <div class="pubstat" id="pubstat${c.id}"></div>
       <button class="btn warn" style="margin-top:8px" onclick="markIncomplete(${c.id})">Send back to instructor</button>`;})():''}
     ${c.status==='graphic_review' && actingRole()==='instructor' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Approved · the Gibby is finalizing your poster</div>`:''}
     ${c.status==='approved' ? (()=>{const x=c.external_ids||{}; return `
       <div class="ok-note" style="margin-top:12px">${x.eventbrite_id
         ? `✓ Published to Eventbrite · <a href="https://www.eventbrite.com/e/${esc(x.eventbrite_id)}" target="_blank" rel="noopener noreferrer">view event</a>`
-        : '✓ Approved. Building the graphic and posting to Eventbrite…'}</div>
+        : '✓ Approved. Publishing status is below.'}</div>
       ${x.canva_image_url?`<div style="margin-top:10px"><div class="meta" style="margin-bottom:6px">Canva graphic (attached to the Eventbrite listing)</div>
-        <img src="${esc(x.canva_image_url)}" alt="Class graphic" style="max-width:100%;border-radius:14px;display:block"></div>`:''}`;})():''}
+        <img src="${esc(x.canva_image_url)}" alt="Class graphic" style="max-width:100%;border-radius:14px;display:block"></div>`:''}
+      <div class="pubstat" id="pubstat${c.id}"></div>
+      ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="startPublishPolling(${c.id})">Show publishing status</button>`:''}`;})():''}
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
@@ -678,6 +691,66 @@ function cardCls(c){
     <div id="gfx${c.id}"></div>
   </div>`;
 }
+/* ---------------- optimistic UI + pending lock ----------------
+   The click locks the button immediately, before the request goes out, so a
+   double-tap cannot fire twice. The server-side compare-and-swap and the
+   publishing_in_progress flag are the real guards; this is the fast feedback. */
+function btnFrom(ev){ return ev && (ev.currentTarget || (ev.target && ev.target.closest && ev.target.closest('button'))) || null; }
+function lockButton(btn, label){
+  if(!btn) return null;
+  const restore = {html: btn.innerHTML, disabled: btn.disabled};
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin"></span>${esc(label)}`;
+  // lock every sibling action on the same card so nothing else fires mid-flight
+  const card = btn.closest('.card');
+  const others = card ? [...card.querySelectorAll('button')].filter(b=>b!==btn && !b.disabled) : [];
+  others.forEach(b=>b.disabled=true);
+  return ()=>{ btn.innerHTML=restore.html; btn.disabled=restore.disabled; others.forEach(b=>b.disabled=false); };
+}
+
+const PUB_ICON = {done:'✓', failed:'⚠', skipped:'–', queued:'…', running:'…'};
+function pubRowsHTML(platforms){
+  if(!platforms.length) return '<div class="meta">Nothing queued yet.</div>';
+  return platforms.map(p=>{
+    const waiting = p.status==='queued'||p.status==='running';
+    const detail = p.status==='failed' ? `<span class="er">${esc(p.error||'failed')}</span>`
+      : p.status==='skipped' ? `<span class="meta">${esc(p.error||'not connected')}</span>`
+      : p.status==='done' ? '' : `<span class="meta">${p.attempts?`retrying (attempt ${p.attempts+1})`:'waiting'}</span>`;
+    return `<div class="pubrow ${waiting?'wait':''}"><span class="ic">${PUB_ICON[p.status]||'·'}</span>
+      <b>${esc(p.label)}</b> ${detail}</div>`;
+  }).join('');
+}
+
+/* Poll until the queue drains, then leave the final per-platform result on screen. */
+let POLLS = {}, ADMIN_TAB=null;
+async function pollPublish(id, tries){
+  const host = $('#pubstat'+id);
+  if(!host) return;                                  // card re-rendered; stop quietly
+  let r;
+  try{ r = await api(`/api/classes/${id}/publish-status`); }
+  catch(_){ return; }
+  if(!$('#pubstat'+id)) return;
+  const failed = r.platforms.filter(p=>p.status==='failed');
+  $('#pubstat'+id).innerHTML =
+    `<div class="meta" style="font-weight:800">${r.publishing ? 'Publishing…'
+      : failed.length ? `${failed.length} step${failed.length===1?' needs':'s need'} attention`
+      : 'All steps finished'}</div>` + pubRowsHTML(r.platforms);
+  if(r.publishing && tries > 0){
+    POLLS[id] = setTimeout(()=>pollPublish(id, tries-1), 2000);
+  } else {
+    delete POLLS[id];
+    // Refresh the approvals queue so the finished card moves on, but only if that
+    // is the tab the admin is actually looking at. Never yank them somewhere else.
+    if(!r.publishing && ADMIN_TAB==='approvals'){
+      setTimeout(()=>{ if(ADMIN_TAB==='approvals' && $('#pubstat'+id)) adminApprovals(); }, 2500);
+    }
+  }
+}
+function startPublishPolling(id){
+  clearTimeout(POLLS[id]);
+  pollPublish(id, 40);                               // ~80s of live updates, then it settles
+}
+
 /* If another admin decided first the server answers 409 with a friendly line.
    Show exactly that and refresh the queue so the stale card disappears. */
 async function decideClass(id, path, body){
@@ -689,7 +762,28 @@ async function decideClass(id, path, body){
   }
   adminApprovals(); return true;
 }
-async function approve(id){ return decideClass(id,'approve'); }
+async function approve(id, ev){
+  // Approve builds the poster; it does NOT post to the platforms (that is Publish).
+  const undo = lockButton(btnFrom(ev), 'Building the poster…');
+  try{
+    const ok = await decideClass(id,'approve');
+    if(!ok && undo) undo();
+  }catch(e){ if(undo) undo(); throw e; }
+}
+async function publishClass(id, ev){
+  if(!confirm('Publish this class to Eventbrite and the calendar? This makes it public.')) return;
+  const undo = lockButton(btnFrom(ev), 'Publishing to all platforms…');
+  const host = $('#pubstat'+id);
+  if(host) host.innerHTML = '<div class="meta" style="font-weight:800">Publishing…</div>';
+  try{
+    await api('/api/classes/'+id+'/publish','POST',{});
+  }catch(e){
+    if(undo) undo();
+    if(e.data && e.data.status){ alert(e.message); return adminApprovals(); }
+    throw e;
+  }
+  startPublishPolling(id);      // live per-platform status; the card refreshes when it settles
+}
 /* The single source of truth for age ranges. Used by the class form, the admin
    edit form and the template editor. */
 const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14','Ages 15–18','Ages 18+','Ages 21+'];
@@ -1074,7 +1168,7 @@ async function submitClass(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','runScheduler','retryJob','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','runScheduler','retryJob','startPublishPolling','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
