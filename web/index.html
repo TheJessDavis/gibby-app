@@ -348,12 +348,12 @@ async function renderAdmin(tab){
   ADMIN_TAB = tab;
   const v=$('#view');
   const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
-  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('audit','Audit')}</div><div id="tab"></div>`;
+  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
     templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
-    all:adminAll, audit:adminAudit};
+    all:adminAll, audit:adminAudit, archive:adminArchive};
   const fn=SECTIONS[tab]||adminDashboard;
   return boundary('admin:'+tab, '#tab', fn);
 }
@@ -494,6 +494,41 @@ async function syncCalendar(){
   if(!r.ok){ alert('Calendar sync: '+r.error); return; }
   alert('Calendar synced!\n\nOpen slots now available: '+r.open+'\n(+'+r.added+' added, '+r.removed+' removed)');
 }
+/* ---------------- archive (soft-deleted records) ---------------- */
+async function adminArchive(){
+  const d = await api('/api/archive');
+  const n = d.classes.length + d.slots.length + d.users.length;
+  const row = (title, meta, table, id) => `<div class="card">
+    <div class="row"><div><h3 style="font-size:1rem">${title}</h3><div class="meta">${meta}</div></div></div>
+    <button class="btn ghost" style="margin-top:10px" onclick="restoreRecord('${table}',${id})">Restore</button></div>`;
+  $('#tab').innerHTML = `<h2>Archive</h2>
+    <p class="sub">${n} archived record${n===1?'':'s'}. Nothing is ever deleted from the database, so anything here can be brought back.</p>
+
+    <label>Classes (${d.classes.length})</label>
+    ${d.classes.map(c=>row(esc(c.title||('Class #'+c.id)),
+      `${esc(c.instructor_name||'unknown instructor')} · ${esc(c.slot_date||'')} ${esc(c.slot_time||'')} · was ${esc(c.status)} · archived ${esc(c.deleted_at)}`,
+      'classes', c.id)).join('') || '<div class="muted">No archived classes.</div>'}
+
+    <label style="margin-top:18px">Instructors &amp; admins (${d.users.length})</label>
+    ${d.users.map(u=>row(esc(u.name||u.email),
+      `${esc(u.email)} · ${esc(u.role)} · archived ${esc(u.deleted_at)}`,
+      'users', u.id)).join('') || '<div class="muted">No archived people.</div>'}
+
+    <label style="margin-top:18px">Time slots (${d.slots.length})</label>
+    ${d.slots.map(s=>row(`${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}`,
+      `${esc(s.room||'no room')} · ${esc(s.status)} · from ${esc(s.source)} · archived ${esc(s.deleted_at)}`,
+      'slots', s.id)).join('') || '<div class="muted">No archived slots.</div>'}`;
+}
+async function restoreRecord(table, id){
+  await api(`/api/archive/${table}/${id}/restore`,'POST');
+  adminArchive();
+}
+async function archiveRecord(table, id, what){
+  if(!confirm(`Archive this ${what}?\n\nIt disappears from the app but is not deleted, and you can restore it from the Archive tab.`)) return;
+  await api(`/api/archive/${table}/${id}/delete`,'POST');
+  if(table==='classes') adminAll(); else adminArchive();
+}
+
 /* ---------------- audit log (read-only) ---------------- */
 async function adminAudit(){
   const {entries} = await api('/api/audit'); window.__audit = entries;
@@ -688,6 +723,7 @@ function cardCls(c){
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
+    ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="archiveRecord('classes',${c.id},'class')">Archive class</button>`:''}
     <div id="gfx${c.id}"></div>
   </div>`;
 }
@@ -1168,7 +1204,7 @@ async function submitClass(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','runScheduler','retryJob','startPublishPolling','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 

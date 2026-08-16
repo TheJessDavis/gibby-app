@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.9-pending-lock"
+VERSION = "3.0-soft-delete"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -103,6 +103,12 @@ def init_db():
                      ("publishing_in_progress","INTEGER DEFAULT 0")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
+    # Soft delete: nothing is ever removed from these three tables. A row with
+    # deleted_at set is invisible to normal queries but recoverable from Archive.
+    for tbl in ("slots", "classes", "users"):
+        try: c.execute(f"ALTER TABLE {tbl} ADD COLUMN deleted_at TEXT")
+        except sqlite3.OperationalError: pass
+        c.execute(f"CREATE INDEX IF NOT EXISTS {tbl}_deleted_at ON {tbl}(deleted_at)")
     c.commit()
     seed(c)
     c.close()
@@ -442,7 +448,10 @@ def _publish_async(cls, instructor_name, image_url=None):
         print("[publish async] could not queue:", e)
 
 def emails_for(c, where, args=()):
-    return [r[0] for r in c.execute(f"SELECT email FROM users {where}", args).fetchall() if r[0]]
+    # never mail a deactivated account
+    joiner = "AND" if where.strip().upper().startswith("WHERE") else "WHERE"
+    return [r[0] for r in c.execute(
+        f"SELECT email FROM users {where} {joiner} deleted_at IS NULL", args).fetchall() if r[0]]
 
 # --------------------------------------------------- lifecycle scheduler ----
 _MON_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
@@ -482,7 +491,7 @@ def find_series_sessions(c, first_ids, weeks, year=2027):
     going forward, so a 6-week course still gets 6 sessions around a busy Saturday.
     Returns (sessions, skipped) where each session is {date,start,end,slot_ids}."""
     rows = [dict(r) for r in c.execute(
-        f"SELECT * FROM slots WHERE id IN ({','.join('?'*len(first_ids))})", first_ids).fetchall()]
+        f"SELECT * FROM slots WHERE id IN ({','.join('?'*len(first_ids))}) AND deleted_at IS NULL", first_ids).fetchall()]
     if len(rows) != len(first_ids): return None, None
     rows.sort(key=lambda r: tmin(r["start"]))
     d0 = parse_day(rows[0]["date"], year)
@@ -500,7 +509,7 @@ def find_series_sessions(c, first_ids, weeks, year=2027):
         ids = []
         for (st, en) in times:
             r = c.execute("""SELECT id FROM slots WHERE date=? AND start=? AND end=?
-                             AND status='available' AND (room=? OR room='')""",
+                             AND status='available' AND deleted_at IS NULL AND (room=? OR room='')""",
                           (label, st, en, room)).fetchone()
             if not r: break
             ids.append(r["id"])
@@ -584,7 +593,7 @@ def run_scheduler(asof=None):
     anything it suppresses. Returns the actions taken (for logging/UI)."""
     today = asof or datetime.date.today()
     c = db(); actions = []
-    for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled')").fetchall():
+    for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled') AND deleted_at IS NULL").fetchall():
         cls = dict(r); d = _class_date(cls)
         if not d: continue
         days = (d - today).days                       # to the FIRST session
@@ -632,22 +641,28 @@ def run_scheduler(asof=None):
     return actions
 
 def reconcile_calendar_slots(open_slots):
-    """Make the slots table match the calendar's open times. Adds new open slots,
-    removes calendar-sourced available slots that are no longer open; never touches
-    claimed slots or manually-created ones."""
+    """Make the slots table match the calendar's open times. Calendar slots that are
+    no longer open are SOFT deleted (recoverable, and restored automatically if the
+    time reopens). Claimed slots and manually-created ones are never touched."""
     c = db()
-    existing = {(r["date"],r["start"],r["end"]): dict(r) for r in c.execute("SELECT * FROM slots WHERE source='calendar'")}
+    existing = {(r["date"],r["start"],r["end"]): dict(r)
+                for r in c.execute("SELECT * FROM slots WHERE source='calendar'")}
     want = {(s["date"],s["start"],s["end"]) for s in open_slots}
-    added = removed = 0
+    added = removed = restored = 0
     for k, r in existing.items():
-        if k not in want and r["status"] == "available":
-            c.execute("DELETE FROM slots WHERE id=?",(r["id"],)); removed += 1
+        if k not in want and r["status"] == "available" and not r["deleted_at"]:
+            c.execute("UPDATE slots SET deleted_at=? WHERE id=?", (now(), r["id"])); removed += 1
     for s in open_slots:
-        if (s["date"],s["start"],s["end"]) not in existing:
+        k = (s["date"], s["start"], s["end"])
+        prev = existing.get(k)
+        if prev is None:
             c.execute("INSERT INTO slots(date,start,end,room,status,source) VALUES(?,?,?,'','available','calendar')",
                       (s["date"],s["start"],s["end"])); added += 1
+        elif prev["deleted_at"]:
+            # the time reopened on the calendar: bring the original row back
+            c.execute("UPDATE slots SET deleted_at=NULL WHERE id=?", (prev["id"],)); restored += 1
     c.commit(); c.close()
-    return {"added": added, "removed": removed, "open": len(open_slots)}
+    return {"added": added, "removed": removed, "restored": restored, "open": len(open_slots)}
 
 def sync_calendar():
     cfg = gcal.load_gcal_config()
@@ -676,8 +691,9 @@ class H(http.server.BaseHTTPRequestHandler):
         tok = ck["gibby_session"].value if "gibby_session" in ck else None
         if not tok: return None
         c = db()
+        # A soft-deleted account loses its existing sessions immediately.
         row = c.execute("""SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id
-                           WHERE s.token=?""",(tok,)).fetchone()
+                           WHERE s.token=? AND u.deleted_at IS NULL""",(tok,)).fetchone()
         c.close()
         return dict(row) if row else None
 
@@ -745,7 +761,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/slots":
             u = self.require()
             if not u: return
-            c = db(); rows=[dict(r) for r in c.execute("SELECT * FROM slots WHERE status='available' ORDER BY id").fetchall()]; c.close()
+            c = db(); rows=[dict(r) for r in c.execute("SELECT * FROM slots WHERE status='available' AND deleted_at IS NULL ORDER BY id").fetchall()]; c.close()
             return self.send_json({"slots":rows})
         if p in ("/api/templates","/api/templates/all"):
             u = self.require()
@@ -763,7 +779,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = int(p.split("/")[3]); c = db()
-            row = c.execute("SELECT status, publishing_in_progress FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT status, publishing_in_progress FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             jobs = {}
             for r in c.execute("SELECT * FROM job_queue WHERE class_id=? ORDER BY id",(cid,)):
@@ -789,6 +805,31 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json({"classes": self._classes("")})
+        if p == "/api/archive":   # recovery view: everything currently soft-deleted
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            classes = [dict(r) for r in c.execute("""
+                SELECT c.id, c.title, c.slot_date, c.slot_time, c.room, c.status, c.deleted_at,
+                       u.name AS instructor_name FROM classes c
+                LEFT JOIN users u ON u.id=c.instructor_id
+                WHERE c.deleted_at IS NOT NULL ORDER BY c.deleted_at DESC LIMIT 200""")]
+            slots = [dict(r) for r in c.execute("""
+                SELECT id, date, start, end, room, status, source, deleted_at FROM slots
+                WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 200""")]
+            users = [dict(r) for r in c.execute("""
+                SELECT id, name, email, role, deleted_at FROM users
+                WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 200""")]
+            c.close()
+            return self.send_json({"classes":classes, "slots":slots, "users":users})
+        if p == "/api/instructors":   # active people, for the admin roster
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute(
+                "SELECT id,name,email,role FROM users WHERE deleted_at IS NULL ORDER BY role,name")]
+            c.close()
+            return self.send_json({"users": rows})
         if p == "/api/client-errors":   # what the UI error boundaries have caught
             u = self.require("admin")
             if not u: return
@@ -849,7 +890,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return self.send_json({"error":"not signed in"},401)
             cid = p.split("/")[3]
             c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             if u["role"]=="instructor" and row["instructor_id"]!=u["id"]:
                 c.close(); return self.send_json({"error":"forbidden"},403)
@@ -877,7 +918,8 @@ class H(http.server.BaseHTTPRequestHandler):
                              FROM classes c
                              JOIN users u ON u.id=c.instructor_id
                              LEFT JOIN users ra ON ra.id=c.reviewing_admin_id
-                             {where} ORDER BY c.created DESC""", args).fetchall()
+                             {where} {'AND' if where.strip() else 'WHERE'} c.deleted_at IS NULL
+                             ORDER BY c.created DESC""", args).fetchall()
         out=[]
         for r in rows:
             d=dict(r); d["supplies"]=json.loads(d["supplies"] or "[]"); d["external_ids"]=json.loads(d["external_ids"] or "{}")
@@ -893,7 +935,8 @@ class H(http.server.BaseHTTPRequestHandler):
     def api_post(self, p):
         if p == "/api/login":
             b = self.read_json()
-            c = db(); row = c.execute("SELECT * FROM users WHERE email=?",(b.get("email","").strip().lower(),)).fetchone()
+            c = db(); row = c.execute("SELECT * FROM users WHERE email=? AND deleted_at IS NULL",
+                                      (b.get("email","").strip().lower(),)).fetchone()
             if not row:
                 c.close(); return self.send_json({"error":"No account for that email."},401)
             h,_ = hash_pw(b.get("password",""), row["pw_salt"])
@@ -910,6 +953,39 @@ class H(http.server.BaseHTTPRequestHandler):
             if "gibby_session" in ck:
                 c=db(); c.execute("DELETE FROM sessions WHERE token=?",(ck["gibby_session"].value,)); c.commit(); c.close()
             return self.send_json({"ok":True}, cookie="gibby_session=; Path=/; Max-Age=0")
+        if p.startswith("/api/archive/"):
+            # Soft delete / restore. Nothing is ever removed from the database; a row
+            # with deleted_at set simply stops appearing in normal queries.
+            u = self.require("admin")
+            if not u: return
+            parts = p.split("/")            # /api/archive/{table}/{id}/{delete|restore}
+            if len(parts) != 6: return self.send_json({"error":"not found"},404)
+            table, rid, action = parts[3], parts[4], parts[5]
+            if table not in ("slots","classes","users") or action not in ("delete","restore"):
+                return self.send_json({"error":"not found"},404)
+            try: rid = int(rid)
+            except ValueError: return self.send_json({"error":"bad id"},400)
+            if table == "users" and rid == u["id"]:
+                return self.send_json({"error":"You cannot archive your own account."},400)
+            c = db()
+            row = c.execute(f"SELECT * FROM {table} WHERE id=?", (rid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if action == "delete":
+                c.execute(f"UPDATE {table} SET deleted_at=? WHERE id=? AND deleted_at IS NULL", (now(), rid))
+                if table == "classes":
+                    # give the slots back so the time can be rebooked
+                    sids = json.loads(row["slot_ids"] or "[]")
+                    if sids:
+                        c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(sids))})", sids)
+                    audit(c, rid, row["status"], "archived", u["id"])
+                if table == "users":
+                    c.execute("DELETE FROM sessions WHERE user_id=?", (rid,))   # sign them out now
+            else:
+                c.execute(f"UPDATE {table} SET deleted_at=NULL WHERE id=?", (rid,))
+                if table == "classes": audit(c, rid, "archived", row["status"], u["id"])
+            c.commit(); c.close()
+            print(f"[archive] {u['name']} {action}d {table} #{rid}")
+            return self.send_json({"ok":True})
         if p.startswith("/api/jobs/") and p.endswith("/retry"):
             u = self.require("admin")
             if not u: return
@@ -968,7 +1044,10 @@ class H(http.server.BaseHTTPRequestHandler):
             mc = 1 if b.get("must_change_pw", True) else 0
             h, s = hash_pw(pw); c = db()
             if c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone():
-                c.execute("UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=?, must_change_pw=? WHERE email=?",(name,role,h,s,mc,email))
+                # Re-adding a deactivated person revives their account rather than
+                # failing on the unique email.
+                c.execute("""UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=?, must_change_pw=?,
+                             deleted_at=NULL WHERE email=?""",(name,role,h,s,mc,email))
                 action = "updated"
             else:
                 c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt,must_change_pw) VALUES(?,?,?,?,?,?)",(name,email,role,h,s,mc))
@@ -996,7 +1075,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"ok":True})
         if p == "/api/forgot":
             email = (self.read_json().get("email","") or "").strip().lower()
-            c = db(); row = c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone()
+            c = db(); row = c.execute("SELECT id FROM users WHERE email=? AND deleted_at IS NULL",(email,)).fetchone()
             if row:
                 tok = secrets.token_urlsafe(24)
                 exp = (datetime.datetime.now()+datetime.timedelta(hours=1)).isoformat()
@@ -1091,7 +1170,7 @@ class H(http.server.BaseHTTPRequestHandler):
             sessions = []
             if ids:
                 ph = ",".join("?"*len(ids))
-                rows = [dict(r) for r in c.execute(f"SELECT * FROM slots WHERE id IN ({ph})", ids).fetchall()]
+                rows = [dict(r) for r in c.execute(f"SELECT * FROM slots WHERE id IN ({ph}) AND deleted_at IS NULL", ids).fetchall()]
                 if len(rows) != len(ids):
                     c.close(); return self.send_json({"error":"One of those slots no longer exists."},400)
                 # The FIRST session is always one day, one room, back-to-back. A series
@@ -1115,7 +1194,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                  "end": rows[-1]["end"], "slot_ids": [r["id"] for r in rows]}]
                 # RACE-SAFE: claim ALL slots for every session atomically; if any got
                 # taken first, rowcount < N, we roll back (no commit) and reject.
-                claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available'", ids).rowcount
+                claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
                 if claimed != len(ids):
                     c.close(); return self.send_json({"error":"One of those slots was just claimed by someone else. Please reselect."},409)
                 slot_date = rows[0]["date"]
@@ -1152,7 +1231,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = int(p.split("/")[3]); c = db()
-            row = c.execute("SELECT status, reviewing_admin_id, review_started_at FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT status, reviewing_admin_id, review_started_at FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             other = None
             if row["reviewing_admin_id"] and row["reviewing_admin_id"] != u["id"]:
@@ -1168,7 +1247,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = p.split("/")[3]; b = self.read_json(); c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             head = (b.get("headline") or "").strip() or row["title"]
             sub  = (b.get("subtitle") or "").strip()
@@ -1183,7 +1262,7 @@ class H(http.server.BaseHTTPRequestHandler):
             cid = int(p.split("/")[3]); c = db()
             begin_immediate(c)      # same lock as decide(): two admins cannot both publish
             try:
-                row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+                row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
                 if not row:
                     c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"not found"},404)
                 cls = dict(row)
@@ -1228,7 +1307,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = p.split("/")[3]; c=db()
-            cls = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
+            cls = dict(c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone())
             students = [r[0] for r in c.execute("SELECT email FROM registrations WHERE class_id=?",(cid,)).fetchall()]
             instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
             c.execute("UPDATE classes SET status='cancelled' WHERE id=?",(cid,))
@@ -1246,7 +1325,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = p.split("/")[3]; kind = p.rsplit("/",1)[1]; c=db()
-            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             cls = dict(row)
             students = [r[0] for r in c.execute("SELECT email FROM registrations WHERE class_id=? AND refunded=0",(cid,)).fetchall()]
@@ -1261,7 +1340,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = p.split("/")[3]; b = self.read_json()
-            c = db(); row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            c = db(); row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             sets, vals = [], []
             for k in ("title","description","age_range","headline","subtitle"):
@@ -1287,7 +1366,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("instructor")
             if not u: return
             cid = p.split("/")[3]; c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             cls = dict(row)
             if cls["instructor_id"] != u["id"] or cls["status"] != "instructor_review":
@@ -1298,7 +1377,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("instructor")
             if not u: return
             cid = p.split("/")[3]; b = self.read_json(); c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row or row["instructor_id"] != u["id"]:
                 c.close(); return self.send_json({"error":"not allowed"},403)
             c.execute("UPDATE classes SET status='pending', admin_note=? WHERE id=?",(b.get("note",""),cid))
@@ -1351,7 +1430,7 @@ class H(http.server.BaseHTTPRequestHandler):
         c = db()
         begin_immediate(c)                  # write lock for the whole decision
         try:
-            row = c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
             if not row:
                 c.execute("ROLLBACK"); c.close()
                 return self.send_json({"error": "not found"}, 404)
