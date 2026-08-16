@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Gibby Class Manager - pre-commit secret scanner.
+#
+# Blocks a commit that stages anything looking like an API key, password, token
+# or credential. Install with:  ./scripts/install-hooks.sh
+#
+# Bypass (only when you are certain it is a false positive):
+#   git commit --no-verify
+# Better: mark the line  # pragma: allowlist secret  or audit it into the
+# baseline with:  python3 -m detect_secrets scan --baseline .secrets.baseline
+
+set -uo pipefail
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT" || exit 1
+
+RED=$'\033[31m'; YEL=$'\033[33m'; GRN=$'\033[32m'; OFF=$'\033[0m'
+fail=0
+
+# ---------------------------------------------------------------- 1. env files
+# A .env holds real values; it must never be committed regardless of content.
+if git diff --cached --name-only --diff-filter=ACM | grep -qE '(^|/)\.env($|\.)' \
+   && ! git diff --cached --name-only --diff-filter=ACM | grep -qE '(^|/)\.env\.example$'; then
+  echo "${RED}BLOCKED:${OFF} you are committing a .env file. Real values belong in the"
+  echo "         environment, never in git. Use .env.example for the names."
+  fail=1
+fi
+
+# Any file that is basically always a credential.
+if git diff --cached --name-only --diff-filter=ACM \
+   | grep -qE '(^|/)(config\.json|service-account.*\.json|credentials.*\.json|.*\.pem|.*\.key)$'; then
+  echo "${RED}BLOCKED:${OFF} a credentials file is staged (config.json / service account / key)."
+  fail=1
+fi
+
+# ------------------------------------------------------- 2. detect-secrets
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -n "$STAGED" ]; then
+  if python3 -c "import detect_secrets" 2>/dev/null; then
+    BASELINE_ARG=""
+    [ -f .secrets.baseline ] && BASELINE_ARG="--baseline .secrets.baseline"
+    # shellcheck disable=SC2086
+    if ! echo "$STAGED" | xargs python3 -m detect_secrets.pre_commit_hook $BASELINE_ARG; then
+      echo
+      echo "${RED}BLOCKED:${OFF} detect-secrets found a possible secret in your staged changes."
+      echo "  If it is real:  move it to an environment variable (see .env.example)."
+      echo "  If it is not:   add  # pragma: allowlist secret  on that line, or run"
+      echo "                  python3 -m detect_secrets scan --baseline .secrets.baseline"
+      fail=1
+    fi
+  else
+    echo "${YEL}WARNING:${OFF} detect-secrets is not installed, so staged changes were not"
+    echo "         scanned. Install it with:  python3 -m pip install --user detect-secrets"
+  fi
+fi
+
+# --------------------------------------------- 3. obvious hardcoded literals
+# A short belt-and-braces pass for the patterns detect-secrets is lenient about,
+# e.g. a quoted assignment to a password/token variable.
+PATTERN='(password|passwd|secret|api[_-]?key|apikey|access[_-]?token|auth[_-]?token)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{6,}'
+HITS=$(git diff --cached -U0 --diff-filter=ACM \
+       | grep -E '^\+' | grep -vE '^\+\+\+' \
+       | grep -inE "$PATTERN" \
+       | grep -viE 'os\.environ|getenv|environ\.get|\.env\.example|pragma: allowlist secret|placeholder|example|your[_-]|xxx|<[a-z]' || true)
+if [ -n "$HITS" ]; then
+  echo "${RED}BLOCKED:${OFF} a hardcoded credential looks like it is being committed:"
+  echo "$HITS" | sed 's/^/    /'
+  echo "  Move it to an environment variable, or append  # pragma: allowlist secret"
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "Commit aborted. Override only if you are certain:  git commit --no-verify"
+  exit 1
+fi
+
+echo "${GRN}✓${OFF} no secrets detected in staged changes"
+exit 0

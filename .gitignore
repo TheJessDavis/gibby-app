@@ -1,4 +1,21 @@
+# secrets - never commit these
+.env
+.env.*
+!.env.example
 config.json
+*.pem
+*.key
+service-account*.json
+credentials*.json
+
+# local data
 gibby.db
+gibby.db-journal
+gibby.db-wal
+
+# python
 __pycache__/
 *.pyc
+
+# detect-secrets audit state is safe to commit; the baseline records
+# non-secrets that were reviewed and cleared.

@@ -13,11 +13,35 @@ import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.pa
 import integrations, mailer, gcal, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+
+def _load_dotenv():
+    """Read .env for local development. Real environment variables always win, so
+    this never overrides what the host (Render) has set. Gitignored by design."""
+    path = os.path.join(ROOT, ".env")
+    if not os.path.isfile(path): return
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line: continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and v and k not in os.environ:
+                    os.environ[k] = v
+        print("[config] loaded .env for local development")
+    except Exception as e:
+        print("[config] could not read .env:", e)
+
+_load_dotenv()
 DATA_DIR = os.environ.get("DATA_DIR", ROOT)   # point at a mounted volume in production so data persists
 DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
-SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
+# No weak default. If SEED_PASSWORD is not supplied we mint a random one for this
+# run and print it once, so an unconfigured deploy can never ship accounts whose
+# password is published in this repository.
+SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
+SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
 VERSION = "3.6-indexes"
 
 # ---------------------------------------------------------------- database ----
@@ -246,7 +270,8 @@ def seed(c):
         rows = admins + [(n, ".".join(n.lower().split())+"@theeverett.org", "instructor") for n in instructors]
         for name, email, role in rows:
             h, s = hash_pw(SEED_PW)
-            c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt) VALUES(?,?,?,?,?)",
+            # seeded accounts must set their own password at first sign-in
+            c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt,must_change_pw) VALUES(?,?,?,?,?,1)",
                       (name, email, role, h, s))
     if c.execute("SELECT COUNT(*) FROM templates").fetchone()[0] == 0:
         tpls = [
@@ -1898,8 +1923,9 @@ if __name__ == "__main__":
     print(f"Gibby Class Manager running:  http://localhost:{PORT}   (data: {DB})")
     print("Sign in as admin:      jess@theeverett.org")
     print("Sign in as instructor: christin.smiertka@theeverett.org  (first.last of any roster name)")
-    if SEED_PW == "gibby123":
-        print("\n  *** SECURITY: users are seeded with the default password 'gibby123'.")
-        print("      Before exposing this on the internet, set SEED_PASSWORD to something strong")
-        print("      (and delete gibby.db so it re-seeds), or change each account's password. ***\n")
+    if SEED_PW_GENERATED:
+        print("\n  *** No SEED_PASSWORD set, so a random one was generated for any accounts")
+        print(f"      seeded on this run:   {SEED_PW}")
+        print("      It is shown only here. Everyone must change it at first sign-in.")
+        print("      Set SEED_PASSWORD in the environment to choose it yourself. ***\n")
     Threaded(("0.0.0.0", PORT), H).serve_forever()

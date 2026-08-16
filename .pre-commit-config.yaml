@@ -1,0 +1,14 @@
+# For anyone using the `pre-commit` framework (pip install pre-commit && pre-commit install).
+# The repo's own hook in scripts/pre-commit works without the framework and does
+# the same job, so this is an alternative, not a requirement.
+repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: |
+          (?x)^(
+            \.secrets\.baseline|
+            web/opening\.png
+          )$

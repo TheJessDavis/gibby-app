@@ -25,7 +25,10 @@ def load_config():
         "timezone": "America/New_York", "year": 2027,
         "eventbrite_token":  os.environ.get("EVENTBRITE_TOKEN", ""),
         "eventbrite_org_id": os.environ.get("EVENTBRITE_ORG_ID", ""),
-        # organizer profile the event posts under (The Gibby, not The Everett)
+        # Organizer profile the event posts under (The Gibby, not The Everett).
+        # NOT a secret - this id appears in public Eventbrite URLs - so it is left
+        # as a default deliberately: clearing it would silently post events under
+        # the wrong organizer. Override with EVENTBRITE_ORGANIZER_ID if it changes.
         "eventbrite_organizer_id": os.environ.get("EVENTBRITE_ORGANIZER_ID", "76506239933"),
         "fb_page_id":        os.environ.get("FB_PAGE_ID", ""),
         "fb_page_token":     os.environ.get("FB_PAGE_TOKEN", ""),
@@ -249,8 +252,9 @@ def post_eventbrite(cls, cfg, image_url=None):
         "description": {"html": desc},
         "start": {"timezone": cfg["timezone"], "utc": start},
         "end":   {"timezone": cfg["timezone"], "utc": end},
-        "currency": "USD", "capacity": cls.get("max_p"),
-        "organizer_id": cfg["eventbrite_organizer_id"]}
+        "currency": "USD", "capacity": cls.get("max_p")}
+    if cfg.get("eventbrite_organizer_id"):     # omit rather than send an empty id
+        event["organizer_id"] = cfg["eventbrite_organizer_id"]
     if logo_id: event["logo_id"] = logo_id
     ev = _req(f"https://www.eventbriteapi.com/v3/organizations/{cfg['eventbrite_org_id']}/events/",
         token=cfg["eventbrite_token"], json_body={"event": event})
