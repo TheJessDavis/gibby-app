@@ -15,7 +15,7 @@ NOTE: endpoint paths/payloads follow each platform's current API shape but shoul
 be verified against live docs before go-live. Real Eventbrite posting also needs
 proper ISO start/end datetimes on the class (see _iso_times, a best-effort parser).
 """
-import json, os, urllib.request, urllib.parse, urllib.error, datetime, time, struct, uuid
+import json, os, re, urllib.request, urllib.parse, urllib.error, datetime, time, struct, uuid
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -125,7 +125,8 @@ def _iso_times(cls, cfg):
     try:
         date = (cls.get("slot_date") or "").split(", ")[-1].strip().split()  # ['Jan','17']
         mon, day = _MON[date[0]], int(date[1])
-        parts = [p.strip() for p in (cls.get("slot_time") or "").replace("—", "–").split("–")]
+        # accept en dash, em dash or a plain hyphen: a hand-edited time should still publish
+        parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", (cls.get("slot_time") or "").strip()) if p.strip()]
         def t(s):
             dt = datetime.datetime.strptime(s, "%I:%M %p")
             return datetime.datetime(cfg["year"], mon, day, dt.hour, dt.minute)
@@ -274,7 +275,7 @@ def post_eventbrite(cls, cfg, image_url=None):
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
         json_body={"ticket_class": ticket})
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
-    return _ok(eid, "event published" + (" with Canva graphic" if logo_id else ""))
+    return _ok(eid, "event published" + (" with poster attached" if logo_id else ""))
 
 MAX_ATTENDEE_PAGES = 200          # ~10k attendees at 50/page; a stop against a bad loop
 
@@ -391,7 +392,7 @@ def publish(cls, cfg=None, image_url=None):
     external_ids dict for storage, incl. a per-platform _results breakdown. Never raises."""
     cfg = cfg or load_config()
     if image_url:
-        canva = _ok(None, "using the reviewed graphic", image_url=image_url)
+        canva = _ok(None, "using the approved poster", image_url=image_url)
     else:
         canva = _safe(render_canva, cls, cfg)      # no reviewed graphic: build one now
         image_url = canva.get("image_url")

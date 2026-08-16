@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "4.2-registration-cutoff"
+VERSION = "4.3-attach-poster"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -146,7 +146,7 @@ def init_db():
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
-                     ("close_days","INTEGER DEFAULT 0"),
+                     ("close_days","INTEGER DEFAULT 0"),("poster","TEXT"),
                      ("headcount_sent","INTEGER DEFAULT 0"),
                      ("followup_note","TEXT"),("followup_status","TEXT"),
                      ("followup_requested_at","TEXT"),("followup_submitted_at","TEXT"),
@@ -743,7 +743,8 @@ def publish_now(c, cls, actor_id=None, spawn=True):
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
     seed_registrations(c, cls)
     subj, body = mailer.tmpl_approved(cls, instr)
-    img = json.loads(cls.get("external_ids") or "{}").get("canva_image_url")
+    # a hand-attached poster wins over the Canva render: an admin chose it on purpose
+    img = cls.get("poster") or json.loads(cls.get("external_ids") or "{}").get("canva_image_url")
     side = {"to": instr["email"], "subject": subj, "body": body,
             "cls": dict(cls), "instructor_name": instr["name"], "image_url": img}
     if spawn: run_publish_side_effects(side)
@@ -1886,6 +1887,23 @@ class H(http.server.BaseHTTPRequestHandler):
                           (u["id"], now(), cid))
             c.commit(); c.close()
             return self.send_json({"ok":True, "status":row["status"], "also_reviewing":other})
+        if p.startswith("/api/classes/") and p.endswith("/poster"):
+            # Attach a poster made by hand. This is the fallback when Canva autofill
+            # is not available, and it must be as good as the automatic path.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); b = self.read_json(); c = db()
+            row = c.execute("SELECT id FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            img = (b.get("image") or "").strip()
+            if img and not img.startswith("data:image/"):
+                c.close(); return self.send_json({"error":"That does not look like an image."},400)
+            if len(img) > 8_000_000:      # ~6MB of actual image
+                c.close(); return self.send_json({"error":"That image is too large. Please use one under 5MB."},400)
+            c.execute("UPDATE classes SET poster=? WHERE id=?", (img or None, cid))
+            c.commit(); c.close()
+            print(f"[poster] class #{cid}: {'attached by ' + u['name'] if img else 'removed by ' + u['name']}")
+            return self.send_json({"ok":True, "attached": bool(img)})
         if p.startswith("/api/classes/") and p.endswith("/graphic"):   # save poster text + rebuild it
             u = self.require("admin")
             if not u: return

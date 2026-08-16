@@ -14,7 +14,7 @@ Config (env vars, or config.json):
 Does nothing until configured. The google libraries are imported lazily so the
 rest of the app runs even if they aren't installed.
 """
-import os, json, datetime
+import os, re, json, datetime
 
 try:
     from zoneinfo import ZoneInfo
@@ -109,7 +109,7 @@ def create_event(cls, cfg):
             md = (s.get("date") or "").split(", ")[-1].split()
             mon, day = MONTHS.index(md[0]) + 1, int(md[1])
             span = s.get("time") or f"{s.get('start','')} – {s.get('end','')}"
-            parts = [p.strip() for p in span.replace("—", "–").split("–")]
+            parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", (span or "").strip()) if p.strip()]
             def t(x):
                 dt = datetime.datetime.strptime(x, "%I:%M %p")
                 return datetime.datetime(year, mon, day, dt.hour, dt.minute)
