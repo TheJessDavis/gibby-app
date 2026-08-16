@@ -758,6 +758,7 @@ function cardCls(c){
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
+      ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="syncRegistrations(${c.id})">Sync registrations from Eventbrite</button>`:''}
       <div id="roster${c.id}"></div>`:''}
     ${actingRole()==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
@@ -1335,7 +1336,7 @@ async function submitClass(){
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
  'testEventbrite','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
- 'saveDraft','resumeDraft','deleteDraft','leaveForm'
+ 'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "3.4-csrf"
+VERSION = "3.5-attendee-pagination"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -120,6 +120,10 @@ def init_db():
         except sqlite3.OperationalError: pass
     # Soft delete: nothing is ever removed from these three tables. A row with
     # deleted_at set is invisible to normal queries but recoverable from Archive.
+    try: c.execute("ALTER TABLE registrations ADD COLUMN external_id TEXT")
+    except sqlite3.OperationalError: pass
+    c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS registrations_ext
+                 ON registrations(class_id, external_id) WHERE external_id IS NOT NULL""")
     for tbl in ("slots", "classes", "users"):
         try: c.execute(f"ALTER TABLE {tbl} ADD COLUMN deleted_at TEXT")
         except sqlite3.OperationalError: pass
@@ -156,6 +160,43 @@ def seed_registrations(c, cls):
     for name,email,phone in random.sample(FAKE_STUDENTS, min(n, len(FAKE_STUDENTS))):
         c.execute("INSERT INTO registrations(class_id,name,email,phone,created) VALUES(?,?,?,?,?)",
                   (cls["id"], name, email, phone, now()))
+
+def sync_registrations(class_id, _req_fn=None):
+    """Pull the real roster from Eventbrite (all pages) and reconcile it into the
+    registrations table. Idempotent: attendees are keyed on their Eventbrite id, so
+    running this repeatedly updates rather than duplicates. Returns a summary, or
+    None when there is nothing to sync."""
+    c = db()
+    row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (class_id,)).fetchone()
+    if not row: c.close(); return None
+    cls = dict(row)
+    cls["external_ids"] = json.loads(cls.get("external_ids") or "{}")
+    c.close()
+
+    people = integrations.sync_attendees(cls, _req_fn=_req_fn)
+    if people is None: return None
+
+    c = db()
+    added = updated = 0
+    for a in people:
+        ext = a["external_id"]
+        existing = c.execute("SELECT id FROM registrations WHERE class_id=? AND external_id=?",
+                             (class_id, ext)).fetchone() if ext else None
+        if existing:
+            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=? WHERE id=?""",
+                      (a["name"], a["email"], a["phone"], 1 if a["refunded"] else 0, existing["id"]))
+            updated += 1
+        else:
+            c.execute("""INSERT INTO registrations(class_id,name,email,phone,refunded,external_id,created)
+                         VALUES(?,?,?,?,?,?,?)""",
+                      (class_id, a["name"], a["email"], a["phone"],
+                       1 if a["refunded"] else 0, ext or None, now()))
+            added += 1
+    total = c.execute("SELECT COUNT(*) FROM registrations WHERE class_id=? AND refunded=0",
+                      (class_id,)).fetchone()[0]
+    c.commit(); c.close()
+    print(f"[registrations] class #{class_id}: {added} added, {updated} updated, {total} attending")
+    return {"added": added, "updated": updated, "attending": total, "fetched": len(people)}
 
 def enrollment(c, class_id):
     return c.execute("SELECT COUNT(*) FROM registrations WHERE class_id=? AND refunded=0",(class_id,)).fetchone()[0]
@@ -829,6 +870,15 @@ def scheduler_loop():
             if r: print("[gcal] sync", r)
         except Exception as e: print("[gcal] sync error:", e)
         prune_sessions()          # tidy away long-dead auth rows
+        try:
+            c = db()
+            live = [r["id"] for r in c.execute(
+                "SELECT id FROM classes WHERE status='approved' AND deleted_at IS NULL")]
+            c.close()
+            for cid in live:      # keeps enrolment honest for the low-enrollment rules
+                sync_registrations(cid)
+        except Exception as e:
+            print("[registrations] hourly sync error:", e)
         time.sleep(3600)   # check hourly; day-based rules fire once per class
 
 # ------------------------------------------------------------- handler ----
@@ -1617,6 +1667,15 @@ class H(http.server.BaseHTTPRequestHandler):
             c.close()
             run_publish_side_effects(pending_side_effects)
             return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/sync-registrations"):
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3])
+            r = sync_registrations(cid)
+            if r is None:
+                return self.send_json({"ok":False,
+                    "error":"Nothing to sync: this class has no Eventbrite event yet, or Eventbrite is not connected."})
+            return self.send_json({"ok":True, **r})
         if p.startswith("/api/classes/") and p.endswith("/promote"):
             u = self.require("admin")
             if not u: return

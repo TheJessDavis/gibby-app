@@ -261,6 +261,69 @@ def post_eventbrite(cls, cfg, image_url=None):
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
     return _ok(eid, "event published" + (" with Canva graphic" if logo_id else ""))
 
+MAX_ATTENDEE_PAGES = 200          # ~10k attendees at 50/page; a stop against a bad loop
+
+def fetch_attendees(event_id, cfg, _req_fn=None):
+    """Pull EVERY attendee for an Eventbrite event, following pagination.
+
+    Eventbrite returns a `pagination` object alongside each page:
+        {"has_more_items": true, "continuation": "<opaque token>", ...}
+    Only the first page is returned unless the continuation token is passed back,
+    so a naive single request silently under-reports the roster. Loop until
+    has_more_items is false.
+
+    Returns a list of raw attendee dicts. Raises on HTTP errors so the caller can
+    decide (the retry queue treats them as retryable)."""
+    req = _req_fn or _req
+    token = cfg["eventbrite_token"]
+    base = f"https://www.eventbriteapi.com/v3/events/{event_id}/attendees/"
+    out, continuation, pages = [], None, 0
+    while True:
+        url = base + (f"?continuation={urllib.parse.quote(continuation)}" if continuation else "")
+        res = req(url, method="GET", token=token) or {}
+        out.extend(res.get("attendees") or [])
+        pages += 1
+        pg = res.get("pagination") or {}
+        if not pg.get("has_more_items"):
+            break
+        continuation = pg.get("continuation")
+        if not continuation:
+            # has_more_items with no token to follow: stop rather than re-request
+            # page one forever.
+            print(f"[eventbrite] pagination claimed more items but sent no continuation "
+                  f"after page {pages}; stopping with {len(out)} attendee(s)")
+            break
+        if pages >= MAX_ATTENDEE_PAGES:
+            print(f"[eventbrite] stopped at the {MAX_ATTENDEE_PAGES}-page safety limit "
+                  f"with {len(out)} attendee(s)")
+            break
+    print(f"[eventbrite] fetched {len(out)} attendee(s) for event {event_id} across {pages} page(s)")
+    return out
+
+def normalize_attendee(a):
+    """Eventbrite attendee -> the fields the roster actually uses."""
+    p = a.get("profile") or {}
+    name = (p.get("name") or " ".join(x for x in (p.get("first_name"), p.get("last_name")) if x)).strip()
+    return {
+        "external_id": str(a.get("id") or ""),
+        "name": name or "(no name)",
+        "email": (p.get("email") or "").strip(),
+        "phone": (p.get("cell_phone") or p.get("home_phone") or p.get("work_phone") or "").strip(),
+        # Eventbrite marks these separately; either means they are not coming.
+        "refunded": bool(a.get("refunded") or a.get("cancelled")),
+    }
+
+def sync_attendees(cls, cfg=None, _req_fn=None):
+    """All attendees for a class, normalized. Returns None when there is nothing to
+    sync (no Eventbrite id, no credentials, or not live)."""
+    cfg = cfg or load_config()
+    event_id = (cls.get("external_ids") or {}).get("eventbrite_id") if isinstance(cls.get("external_ids"), dict) else None
+    event_id = event_id or cls.get("eventbrite_id")
+    if not event_id: return None
+    if not cfg.get("eventbrite_token"): return None
+    if not cfg.get("live") and not _req_fn: return None
+    return [normalize_attendee(a) for a in fetch_attendees(event_id, cfg, _req_fn)]
+
 def post_facebook(cls, cfg, link=None):
     # Facebook removed Event creation from the Graph API, so this posts to the Page.
     if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
