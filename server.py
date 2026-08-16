@@ -9,7 +9,7 @@ approval). External posting (Eventbrite, Facebook, Wix, Canva, Descene) and
 emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
-import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random
+import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re
 import integrations, mailer, gcal, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.7-retry-queue"
+VERSION = "2.8-age-label"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -99,7 +99,7 @@ def init_db():
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
-                     ("session_dates","TEXT")):
+                     ("session_dates","TEXT"),("age_label","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.commit()
@@ -181,6 +181,33 @@ def seed(c):
 
 # Outbound posting now runs through the retry queue below (queue_publish), which
 # calls integrations.py one platform at a time so each can fail and retry alone.
+
+def _age_bounds(label):
+    """'Ages 8–10' -> (8,10); 'Ages 21+' -> (21,200); 'All Ages' -> (0,200)."""
+    s = (label or "").strip()
+    if not s: return None
+    if s.lower().startswith("all"): return (0, 200)
+    nums = re.findall(r"\d+", s)
+    if not nums: return None                      # legacy wording like 'Toddlers'
+    if "+" in s: return (int(nums[0]), 200)
+    if len(nums) >= 2: return (int(nums[0]), int(nums[1]))
+    return (int(nums[0]), int(nums[0]))
+
+def age_label(age_range):
+    """Turn a multi-select into ONE readable phrase for the public listing.
+    'Ages 5–7, Ages 8–10, Ages 11–14' -> 'Ages 5–14'. Non-touching picks stay
+    separate: 'Ages 2–4, Ages 21+' -> 'Ages 2–4 & 21+'."""
+    parts = [p.strip() for p in (age_range or "").split(",") if p.strip()]
+    if not parts: return ""
+    if any(p.lower().startswith("all") for p in parts): return "All ages"
+    spans = sorted(b for b in (_age_bounds(p) for p in parts) if b)
+    if not spans: return age_range                # unparseable: leave it alone
+    merged = [list(spans[0])]
+    for lo, hi in spans[1:]:
+        if lo <= merged[-1][1] + 1: merged[-1][1] = max(merged[-1][1], hi)
+        else: merged.append([lo, hi])
+    out = [f"{lo}+" if hi >= 200 else (str(lo) if lo == hi else f"{lo}–{hi}") for lo, hi in merged]
+    return "Ages " + " & ".join(out)
 
 def audit(c, class_id, prev_status, new_status, actor_id):
     """Append one immutable entry recording a Class status change. Snapshots the
@@ -1065,15 +1092,15 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
                 length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
-                is_series,session_count,session_dates,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?, 'pending', ?)""",
+                is_series,session_count,session_dates,age_label,status,created)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, 'pending', ?)""",
                 (b.get("title"),u["id"],slot_date,slot_time,room,
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
                  b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
-                 is_series, weeks, json.dumps(sessions), now()))
+                 is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")), now()))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
@@ -1196,6 +1223,8 @@ class H(http.server.BaseHTTPRequestHandler):
             sets, vals = [], []
             for k in ("title","description","age_range","headline","subtitle"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
+            if "age_range" in b:                       # keep the published phrase in sync
+                sets.append("age_label=?"); vals.append(age_label(b["age_range"]))
             for k in ("max_p","min_p","ticket_price","instructor_pay"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)

@@ -117,7 +117,7 @@ def create_event(cls, cfg):
             end = t(parts[1]) if len(parts) > 1 and parts[1] else start + datetime.timedelta(minutes=30)
             title = f"{cls['title']} ({i} of {n})" if n > 1 else cls["title"]
             desc = (f"Instructor: {cls.get('instructor_name','')}\nRoom: {cls.get('room','')}\n"
-                    f"Ages: {cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}"
+                    f"{cls.get('age_label') or cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}"
                     + (f"\nSession {i} of {n}" if n > 1 else "") + f"\n\n{cls.get('description','')}")
             ev = svc.events().insert(calendarId=cfg["calendar_id"], body={
                 "summary": title,

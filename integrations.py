@@ -181,7 +181,7 @@ def render_canva(cls, cfg):
             "headline": {"type": "text", "text": cls.get("headline") or cls.get("title", "")},
             "subtitle": {"type": "text", "text": cls.get("subtitle", "")},
             "date":     {"type": "text", "text": f"{cls.get('slot_date','')} {cls.get('slot_time','')}".strip()},
-            "ages":     {"type": "text", "text": cls.get("age_range", "")},
+            "ages":     {"type": "text", "text": cls.get("age_label") or cls.get("age_range", "")},
         }})
     af_id = (af.get("job") or {}).get("id")
     design_id = _poll(f"https://api.canva.com/rest/v1/autofills/{af_id}", tok,
@@ -240,6 +240,10 @@ def post_eventbrite(cls, cfg, image_url=None):
         lines = "".join(f"<li>{s['date']} · {s['start']} – {s['end']}</li>" for s in sessions)
         desc = (f"<p><b>A {len(sessions)}-week course.</b> One ticket covers all "
                 f"{len(sessions)} sessions:</p><ul>{lines}</ul>") + desc
+    # Ages as ONE phrase ("Ages 5–14"), not the raw multi-select list.
+    ages = cls.get("age_label") or cls.get("age_range") or ""
+    if ages:
+        desc = f"<p><b>{ages}</b></p>" + desc
     event = {
         "name": {"html": cls["title"]},
         "description": {"html": desc},

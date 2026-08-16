@@ -625,7 +625,7 @@ function cardCls(c){
       <div class="sessionlist">${c.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div></details>`:''}
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
-    <div class="meta" style="margin-top:8px">${esc(c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
+    <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
     ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
@@ -692,7 +692,7 @@ async function decideClass(id, path, body){
 async function approve(id){ return decideClass(id,'approve'); }
 /* The single source of truth for age ranges. Used by the class form, the admin
    edit form and the template editor. */
-const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14','Ages 14–18','Ages 18+','Ages 21+'];
+const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14','Ages 15–18','Ages 18+','Ages 21+'];
 function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
 async function openEditForm(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
@@ -812,6 +812,9 @@ function monthGridHTML(slots){
 
 async function instrOpen(){
   const {slots} = await api('/api/slots');
+  // The view can change while that request is in flight (tap a slot, then hit
+  // Continue before the list redraws). If our target is gone, drop the render.
+  if(!$('#tab')) return;
   if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
   const days=[...new Set(slots.map(s=>s.date))];
   if(!days.includes(SLOTDAY)){ SLOTDAY=days[0]; SEL=[]; }
@@ -924,6 +927,7 @@ function openForm(slot){
 
     <label>Age range (choose all that apply)</label>
     <div class="chkgrid" id="f_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
+    <div class="hint" id="f_agepreview"></div>
 
     <div id="f_volwrap" class="hidden">
       <label>Do you need a volunteer to assist with this class?</label>
@@ -971,7 +975,35 @@ function openForm(slot){
 // Under-14 groups trigger the "do you need a volunteer assistant?" question.
 const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14'];
 function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
-function ageChanged(){ const kid=selectedAges().some(a=>KID_AGES.includes(a)); $('#f_volwrap').classList.toggle('hidden', !kid); }
+/* Mirrors age_label() on the server so the instructor sees the exact phrase that
+   will appear on Eventbrite and the poster, not the raw checkbox list. */
+function ageBounds(s){
+  if(!s) return null;
+  if(/^all/i.test(s.trim())) return [0,200];
+  const n=(s.match(/\d+/g)||[]).map(Number);
+  if(!n.length) return null;
+  if(s.includes('+')) return [n[0],200];
+  return n.length>1?[n[0],n[1]]:[n[0],n[0]];
+}
+function ageLabel(list){
+  if(!list.length) return '';
+  if(list.some(a=>/^all/i.test(a))) return 'All ages';
+  const spans=list.map(ageBounds).filter(Boolean).sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  if(!spans.length) return list.join(', ');
+  const m=[spans[0].slice()];
+  for(const [lo,hi] of spans.slice(1)){
+    if(lo<=m[m.length-1][1]+1) m[m.length-1][1]=Math.max(m[m.length-1][1],hi);
+    else m.push([lo,hi]);
+  }
+  return 'Ages '+m.map(([lo,hi])=>hi>=200?`${lo}+`:(lo===hi?`${lo}`:`${lo}–${hi}`)).join(' & ');
+}
+function ageChanged(){
+  const sel=selectedAges();
+  const kid=sel.some(a=>KID_AGES.includes(a));
+  $('#f_volwrap').classList.toggle('hidden', !kid);
+  const p=$('#f_agepreview');
+  if(p) p.textContent = sel.length ? `Will appear as: ${ageLabel(sel)}` : '';
+}
 function alcSel(b){ segPick(b);
   if(b.dataset.v==='yes'){ const c=document.querySelector('#f_ages input[value="Ages 21+"]'); if(c){c.checked=true; ageChanged();} } }
 function onPhoto(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
