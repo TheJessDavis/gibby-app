@@ -87,32 +87,47 @@ def sync_slots(cfg):
     return out
 
 def create_event(cls, cfg):
-    """Write a class onto the calendar with full details. Returns the event id,
-    or None (dry-run / not configured / error)."""
+    """Write a class onto the calendar with full details. A series gets ONE calendar
+    event per session, so every week blocks the room. Returns the event id (comma
+    separated for a series), or None (dry-run / not configured / error)."""
+    # A series books every session; a one-day class books just the one.
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception:
+        sessions = []
+    if not sessions:
+        sessions = [{"date": cls.get("slot_date"), "time": cls.get("slot_time")}]
+    n = len(sessions)
+
     if not (configured(cfg) and cfg["gcal_live"]):
-        print(f"[gcal] dry-run: would add event '{cls.get('title')}'"); return None
+        print(f"[gcal] dry-run: would add {n} event(s) for '{cls.get('title')}'"); return None
     try:
         svc = _service(cfg)
-        # parse "Sat, Jan 17" + "10:00 AM – 11:00 AM"
-        md = cls["slot_date"].split(", ")[-1].split()
-        mon, day = MONTHS.index(md[0]) + 1, int(md[1])
         year = datetime.datetime.now(TZ).year
-        parts = [p.strip() for p in (cls.get("slot_time") or "").replace("—", "–").split("–")]
-        def t(x):
-            dt = datetime.datetime.strptime(x, "%I:%M %p")
-            return datetime.datetime(year, mon, day, dt.hour, dt.minute)
-        start, end = t(parts[0]), t(parts[1]) if len(parts) > 1 else t(parts[0]) + datetime.timedelta(minutes=30)
-        desc = (f"Instructor: {cls.get('instructor_name','')}\nRoom: {cls.get('room','')}\n"
-                f"Ages: {cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}\n\n"
-                f"{cls.get('description','')}")
-        ev = svc.events().insert(calendarId=cfg["calendar_id"], body={
-            "summary": cls["title"],
-            "description": desc,
-            "location": f"The Gibby — {cls.get('room','')}",
-            "start": {"dateTime": start.isoformat(), "timeZone": "America/New_York"},
-            "end":   {"dateTime": end.isoformat(),   "timeZone": "America/New_York"},
-        }).execute()
-        print(f"[gcal] created event {ev.get('id')} for '{cls['title']}'")
-        return ev.get("id")
+        ids = []
+        for i, s in enumerate(sessions, start=1):
+            md = (s.get("date") or "").split(", ")[-1].split()
+            mon, day = MONTHS.index(md[0]) + 1, int(md[1])
+            span = s.get("time") or f"{s.get('start','')} – {s.get('end','')}"
+            parts = [p.strip() for p in span.replace("—", "–").split("–")]
+            def t(x):
+                dt = datetime.datetime.strptime(x, "%I:%M %p")
+                return datetime.datetime(year, mon, day, dt.hour, dt.minute)
+            start = t(parts[0])
+            end = t(parts[1]) if len(parts) > 1 and parts[1] else start + datetime.timedelta(minutes=30)
+            title = f"{cls['title']} ({i} of {n})" if n > 1 else cls["title"]
+            desc = (f"Instructor: {cls.get('instructor_name','')}\nRoom: {cls.get('room','')}\n"
+                    f"Ages: {cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}"
+                    + (f"\nSession {i} of {n}" if n > 1 else "") + f"\n\n{cls.get('description','')}")
+            ev = svc.events().insert(calendarId=cfg["calendar_id"], body={
+                "summary": title,
+                "description": desc,
+                "location": f"The Gibby — {cls.get('room','')}",
+                "start": {"dateTime": start.isoformat(), "timeZone": "America/New_York"},
+                "end":   {"dateTime": end.isoformat(),   "timeZone": "America/New_York"},
+            }).execute()
+            ids.append(ev.get("id"))
+        print(f"[gcal] created {len(ids)} event(s) for '{cls['title']}'")
+        return ",".join(i for i in ids if i) or None
     except Exception as e:
         print("[gcal] write error:", e); return None

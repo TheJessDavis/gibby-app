@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.5-approval-lock"
+VERSION = "2.6-series"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -87,7 +87,9 @@ def init_db():
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
-                     ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT")):
+                     ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
+                     ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
+                     ("session_dates","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.commit()
@@ -287,13 +289,70 @@ def emails_for(c, where, args=()):
     return [r[0] for r in c.execute(f"SELECT email FROM users {where}", args).fetchall() if r[0]]
 
 # --------------------------------------------------- lifecycle scheduler ----
-_MONS = {m:i for i,m in enumerate(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], start=1)}
-def _class_date(cls, year=2027):
+_MON_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+_MONS = {m:i for i,m in enumerate(_MON_NAMES, start=1)}
+_DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+
+def parse_day(label, year=2027):
+    """'Sat, Jan 17' -> date(2027,1,17). Slot labels carry no year (see note below)."""
     try:
-        p = (cls["slot_date"] or "").split(", ")[-1].split()
+        p = (label or "").split(", ")[-1].split()
         return datetime.date(year, _MONS[p[0]], int(p[1]))
     except Exception:
         return None
+
+def day_label(d):
+    """date -> 'Sat, Jan 17', the format slots are stored in."""
+    return f"{_DOW[d.weekday()]}, {_MON_NAMES[d.month-1]} {d.day}"
+
+def _class_date(cls, year=2027):
+    """First session. Used for the 48h reminder and the 1-week auto-cancel."""
+    return parse_day(cls.get("slot_date"), year)
+
+def _class_end_date(cls, year=2027):
+    """Last session. A 6-week course finishes weeks after it starts, so the
+    day-after follow-up has to key off the END, not the first meeting."""
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+        if sessions:
+            return parse_day(sessions[-1]["date"], year)
+    except Exception:
+        pass
+    return _class_date(cls, year)
+
+def find_series_sessions(c, first_ids, weeks, year=2027):
+    """Given the slot ids for the FIRST session, find the same weekday+time+room on
+    following weeks. Weeks that are already taken are skipped and the search keeps
+    going forward, so a 6-week course still gets 6 sessions around a busy Saturday.
+    Returns (sessions, skipped) where each session is {date,start,end,slot_ids}."""
+    rows = [dict(r) for r in c.execute(
+        f"SELECT * FROM slots WHERE id IN ({','.join('?'*len(first_ids))})", first_ids).fetchall()]
+    if len(rows) != len(first_ids): return None, None
+    rows.sort(key=lambda r: tmin(r["start"]))
+    d0 = parse_day(rows[0]["date"], year)
+    if not d0: return None, None
+    room  = rows[0]["room"]
+    times = [(r["start"], r["end"]) for r in rows]
+    sessions = [{"date": rows[0]["date"], "start": rows[0]["start"], "end": rows[-1]["end"],
+                 "slot_ids": [r["id"] for r in rows]}]
+    skipped = []
+    week = 1
+    # look a good way past the requested run so skipped weeks can be made up
+    while len(sessions) < weeks and week <= weeks * 3 + 8:
+        d = d0 + datetime.timedelta(days=7*week); week += 1
+        label = day_label(d)
+        ids = []
+        for (st, en) in times:
+            r = c.execute("""SELECT id FROM slots WHERE date=? AND start=? AND end=?
+                             AND status='available' AND (room=? OR room='')""",
+                          (label, st, en, room)).fetchone()
+            if not r: break
+            ids.append(r["id"])
+        if len(ids) == len(times):
+            sessions.append({"date": label, "start": times[0][0], "end": times[-1][1], "slot_ids": ids})
+        else:
+            skipped.append(label)
+    return sessions, skipped
 
 # Every automated class email must declare which class statuses it is valid for, and
 # whether the class must still be in the future. Nothing sends outside these rules.
@@ -365,7 +424,9 @@ def run_scheduler(asof=None):
     for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled')").fetchall():
         cls = dict(r); d = _class_date(cls)
         if not d: continue
-        days = (d - today).days
+        days = (d - today).days                       # to the FIRST session
+        end = _class_end_date(cls) or d
+        end_days = (end - today).days                 # to the LAST session (series-aware)
         enrolled = enrollment(c, cls["id"])
         students = [x[0] for x in c.execute("SELECT email FROM registrations WHERE class_id=? AND refunded=0",(cls["id"],)).fetchall()]
         instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
@@ -396,7 +457,7 @@ def run_scheduler(asof=None):
                     c.execute("UPDATE classes SET reminded=1 WHERE id=?",(cls["id"],))
                     actions.append(f"48h reminder ({len(students)}): {cls['title']}")
                 else: actions.append(f"reminder suppressed for {cls['title']}: {why}")
-        if days == -1:
+        if end_days == -1:      # the day after the LAST session, not the first
             subj, body = mailer.tmpl_followup(cls, cfg)
             sent, why = send_class_email(c, cls, "followup", students, subj, body, today, cfg)
             if sent:
@@ -624,6 +685,8 @@ class H(http.server.BaseHTTPRequestHandler):
         out=[]
         for r in rows:
             d=dict(r); d["supplies"]=json.loads(d["supplies"] or "[]"); d["external_ids"]=json.loads(d["external_ids"] or "{}")
+            d["sessions"]=json.loads(d.get("session_dates") or "[]")
+            d["is_series"]=bool(d.get("is_series"))
             d["alcohol"]=bool(d["alcohol"]); d["promoted"]=bool(d.get("promoted"))
             d["enrolled"]=enrollment(c, d["id"])
             out.append(d)
@@ -769,6 +832,20 @@ class H(http.server.BaseHTTPRequestHandler):
             c=db(); c.execute("INSERT INTO slots(date,start,end,room) VALUES(?,?,?,?)",
                 (b.get("date"),b.get("start"),b.get("end"),b.get("room","Large Room")))
             c.commit(); c.close(); return self.send_json({"ok":True})
+        if p == "/api/series-preview":
+            # Show the instructor exactly which dates a run would land on, including
+            # any weeks skipped because they were already booked, BEFORE submitting.
+            u = self.require("instructor")
+            if not u: return
+            b = self.read_json()
+            ids = [int(x) for x in (b.get("slot_ids") or [])]
+            weeks = max(2, min(int(b.get("weeks") or 2), 26))
+            if not ids: return self.send_json({"error":"Pick the first session first."},400)
+            c = db(); sessions, skipped = find_series_sessions(c, ids, weeks); c.close()
+            if sessions is None:
+                return self.send_json({"error":"Those slots are no longer available."},400)
+            return self.send_json({"ok":True, "sessions":sessions, "skipped":skipped,
+                                   "requested":weeks, "found":len(sessions)})
         if p == "/api/classes":  # instructor submit
             u = self.require("instructor")
             if not u: return
@@ -793,40 +870,60 @@ class H(http.server.BaseHTTPRequestHandler):
             ids = b.get("slot_ids") or ([b["slot_id"]] if b.get("slot_id") else [])
             ids = [int(x) for x in ids]
             slot_date, slot_time, room = b.get("slot_date"), b.get("slot_time"), b.get("room")
+            is_series = 1 if b.get("is_series") else 0
+            weeks = max(2, min(int(b.get("session_count") or 2), 26)) if is_series else 1
+            sessions = []
             if ids:
                 ph = ",".join("?"*len(ids))
                 rows = [dict(r) for r in c.execute(f"SELECT * FROM slots WHERE id IN ({ph})", ids).fetchall()]
                 if len(rows) != len(ids):
                     c.close(); return self.send_json({"error":"One of those slots no longer exists."},400)
+                # The FIRST session is always one day, one room, back-to-back. A series
+                # then repeats that shape on later weeks.
                 if len({r["date"] for r in rows}) != 1 or len({r["room"] for r in rows}) != 1:
                     c.close(); return self.send_json({"error":"Slots must be the same day and same room."},400)
                 rows.sort(key=lambda r: tmin(r["start"]))
                 for a, nxt in zip(rows, rows[1:]):
                     if tmin(a["end"]) != tmin(nxt["start"]):
                         c.close(); return self.send_json({"error":"Slots must be back-to-back (consecutive)."},400)
-                # RACE-SAFE: claim ALL selected slots atomically; if any got taken
-                # first, rowcount < N, we roll back (no commit) and reject.
+                if is_series:
+                    sessions, _skipped = find_series_sessions(c, ids, weeks)
+                    if not sessions:
+                        c.close(); return self.send_json({"error":"Those slots are no longer available."},400)
+                    if len(sessions) < 2:
+                        c.close(); return self.send_json({"error":"Could not find enough open weeks for a series. Try a different start date."},400)
+                    ids = [i for s in sessions for i in s["slot_ids"]]     # every slot across the run
+                    ph = ",".join("?"*len(ids))
+                else:
+                    sessions = [{"date": rows[0]["date"], "start": rows[0]["start"],
+                                 "end": rows[-1]["end"], "slot_ids": [r["id"] for r in rows]}]
+                # RACE-SAFE: claim ALL slots for every session atomically; if any got
+                # taken first, rowcount < N, we roll back (no commit) and reject.
                 claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available'", ids).rowcount
                 if claimed != len(ids):
                     c.close(); return self.send_json({"error":"One of those slots was just claimed by someone else. Please reselect."},409)
                 slot_date = rows[0]["date"]
                 room = b.get("room") or rows[0]["room"]  # calendar slots are roomless; take room from the form
                 slot_time = rows[0]["start"] + " – " + rows[-1]["end"]
+                weeks = len(sessions)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
-                length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, 'pending', ?)""",
+                length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
+                is_series,session_count,session_dates,status,created)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?, 'pending', ?)""",
                 (b.get("title"),u["id"],slot_date,slot_time,room,
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
-                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""), now()))
+                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
+                 is_series, weeks, json.dumps(sessions), now()))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
+            when = (f"{weeks} sessions starting {slot_date}" if is_series else f"{slot_date} {slot_time}")
             mailer.send(admins, "New class submission",
-                f"{u['name']} submitted \"{b.get('title')}\" for {b.get('slot_date','')} {b.get('slot_time','')}. Review it in the app.")
+                f"{u['name']} submitted \"{b.get('title')}\" for {when}. Review it in the app.")
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/approve"):
             return self.decide(p, approve=True)

@@ -90,6 +90,26 @@
   .daytab small{display:block;font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:2px}
   .daytab.on{background:var(--ink);color:#fff}.daytab.on small{color:rgba(255,255,255,.7)}
   .tip{display:flex;gap:9px;align-items:flex-start;background:#FCE889;border-radius:16px;padding:12px 14px;font-size:12.5px;font-weight:700;line-height:1.35;margin-bottom:14px}
+  /* one-day vs series, month/list toggle, week picker, session lists */
+  .kindseg{margin:0 0 14px}
+  .viewtog{display:inline-flex;gap:4px;background:var(--white);border-radius:14px;padding:4px;margin:0 0 12px;box-shadow:0 3px 9px rgba(0,0,0,.05)}
+  .viewtog button{border:none;background:none;font-family:inherit;font-weight:800;font-size:12.5px;color:var(--ink-soft);padding:7px 16px;border-radius:11px;cursor:pointer}
+  .viewtog button.on{background:var(--ink);color:#fff}
+  .weekpick{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .weekpick button{border:none;background:var(--white);font-family:inherit;font-weight:800;font-size:14px;color:var(--ink);width:44px;height:40px;border-radius:13px;cursor:pointer;box-shadow:0 3px 9px rgba(0,0,0,.05)}
+  .weekpick button.on{background:var(--ink);color:#fff}
+  .weekpick input{width:74px;margin:0;padding:9px 10px}
+  .monthhead{font-weight:800;font-size:13px;color:var(--ink-soft);margin:0 0 8px;text-transform:uppercase;letter-spacing:.06em}
+  .monthgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(78px,1fr));gap:8px;margin-bottom:14px}
+  .mday{border:none;background:var(--white);border-radius:15px;padding:10px 6px;cursor:pointer;font-family:inherit;text-align:center;box-shadow:0 3px 9px rgba(0,0,0,.05);color:var(--ink)}
+  .mday.on{background:var(--ink);color:#fff}
+  .mdow{font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft)}
+  .mday.on .mdow,.mday.on .mcount{color:rgba(255,255,255,.72)}
+  .mnum{font-size:20px;font-weight:800;line-height:1.15}
+  .mcount{font-size:10.5px;font-weight:700;color:var(--ink-soft)}
+  .sessionlist{margin-top:8px}
+  .sessrow{font-size:12.5px;font-weight:700;color:var(--ink-soft);padding:6px 0;border-top:1px solid var(--line)}
+  .sessrow b{display:inline-block;min-width:20px;color:var(--ink)}
   .slotgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .slotcard{border:none;border-radius:18px;padding:14px 14px 12px;text-align:left;cursor:pointer;position:relative;box-shadow:0 6px 14px rgba(30,22,10,.08);color:var(--ink);overflow:hidden;font-family:inherit}
   .slotcard .sg{position:absolute;right:11px;top:9px;font-size:13px;opacity:.85}
@@ -583,7 +603,12 @@ function cardCls(c){
   const pill = `<span class="pill ${pc}">${pt}</span>`;
   return `<div class="card">
     <div class="row"><h3>${esc(c.title)}</h3>${pill}</div>
-    <div class="meta">${esc(c.instructor_name)} · ${esc(c.slot_date||'')} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div>
+    <div class="meta">${esc(c.instructor_name)} · ${c.is_series&&c.sessions&&c.sessions.length
+      ? `${c.sessions.length} sessions, ${esc(c.sessions[0].date)} – ${esc(c.sessions[c.sessions.length-1].date)}`
+      : esc(c.slot_date||'')} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div>
+    ${c.is_series?`<div style="margin-top:8px"><span class="pill ir">📚 ${c.session_count||(c.sessions||[]).length}-week course</span></div>`:''}
+    ${c.is_series&&c.sessions&&c.sessions.length?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">All ${c.sessions.length} dates</summary>
+      <div class="sessionlist">${c.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div></details>`:''}
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
     <div class="meta" style="margin-top:8px">${esc(c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money(c.instructor_pay)} pay</div>
@@ -734,6 +759,41 @@ async function renderInstr(tab){
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
 let DAYSLOTS=[], SEL=[];
 function tmin(t){ const m=(t||'').trim().match(/(\d+):(\d+)\s*(AM|PM)/i); if(!m)return 0; let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12; return h*60 + +m[2]; }
+let CLASSKIND='single';      // 'single' = one-day class, 'series' = multi-week course
+let SERIES_WEEKS=6, SLOTVIEW='list', SERIES_PREVIEW=null;
+function setKind(k){ CLASSKIND=k; SERIES_PREVIEW=null; instrOpen(); }
+function setSlotView(v){ SLOTVIEW=v; instrOpen(); }
+function setWeeks(n){ SERIES_WEEKS=Math.max(2,Math.min(+n||6,26)); SERIES_PREVIEW=null;
+  if(SEL.length) previewSeries(); else instrOpen(); }
+
+async function previewSeries(){
+  try{
+    const r=await api('/api/series-preview','POST',{slot_ids:SEL, weeks:SERIES_WEEKS});
+    SERIES_PREVIEW=r;
+  }catch(e){ SERIES_PREVIEW={error:e.message}; }
+  instrOpen();
+}
+
+/* Month grid of open slots: every day in the next 30 days, shaded by how many
+   slots are still free. Tapping a day drops back into that day's slot list. */
+function monthGridHTML(slots){
+  const byDay={}; slots.forEach(s=>{ (byDay[s.date]=byDay[s.date]||[]).push(s); });
+  const days=Object.keys(byDay).map(d=>({label:d, n:byDay[d].length, dt:parseDate(d)}))
+    .filter(d=>d.dt).sort((a,b)=>a.dt.m-b.dt.m || a.dt.d-b.dt.d);
+  if(!days.length) return '<div class="muted">No open days right now.</div>';
+  const MABBR=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const a=days[0].dt, z=days[days.length-1].dt;
+  // Say the real range rather than assuming a fixed window; open days can span months.
+  const range = `${MABBR[a.m]} ${a.d} – ${MABBR[z.m]} ${z.d}`;
+  return `<div class="monthhead">${days.length} open day${days.length===1?'':'s'} · ${esc(range)}</div>
+    <div class="monthgrid">${days.map(d=>`
+      <button class="mday ${d.label===SLOTDAY?'on':''}" onclick="pickDay('${d.label}')">
+        <div class="mdow">${esc(d.label.split(', ')[0])} · ${MABBR[d.dt.m]}</div>
+        <div class="mnum">${d.dt.d}</div>
+        <div class="mcount">${d.n} open</div>
+      </button>`).join('')}</div>`;
+}
+
 async function instrOpen(){
   const {slots} = await api('/api/slots');
   if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
@@ -742,14 +802,45 @@ async function instrOpen(){
   DAYSLOTS = slots.filter(s=>s.date===SLOTDAY).sort((a,b)=>tmin(a.start)-tmin(b.start));
   const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).filter(Boolean).sort((a,b)=>tmin(a.start)-tmin(b.start));
   const range = sel.length ? sel[0].start+' – '+sel[sel.length-1].end : '';
+  const series = CLASSKIND==='series';
+  const p = SERIES_PREVIEW;
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
-    <p class="sub">Tap a slot, or tap a run of back-to-back slots in the same room for a longer class.</p>
-    <div class="daytabs">${days.map(d=>{const p=d.split(', ');return `<button class="daytab ${d===SLOTDAY?'on':''}" onclick="pickDay('${d}')">${esc(p[1]||d)}<small>${esc(p[0]||'')}</small></button>`;}).join('')}</div>
+
+    <div class="seg kindseg" id="kind">
+      <button class="${!series?'on':''}" onclick="setKind('single')">One-day class</button>
+      <button class="${series?'on':''}" onclick="setKind('series')">Series course</button>
+    </div>
+
+    ${series?`<div class="tip">📚 <span>Pick the <b>first</b> session below. The course repeats at the same time each week.</span></div>
+      <label>How many weeks?</label>
+      <div class="weekpick">${[4,6,8,10,12].map(n=>`<button class="${SERIES_WEEKS===n?'on':''}" onclick="setWeeks(${n})">${n}</button>`).join('')}
+        <input type="number" min="2" max="26" value="${SERIES_WEEKS}" onchange="setWeeks(this.value)" aria-label="weeks">
+      </div>`
+    :`<p class="sub">Tap a slot, or tap a run of back-to-back slots in the same room for a longer class.</p>`}
+
+    <div class="viewtog">
+      <button class="${SLOTVIEW==='list'?'on':''}" onclick="setSlotView('list')">List</button>
+      <button class="${SLOTVIEW==='month'?'on':''}" onclick="setSlotView('month')">Month</button>
+    </div>
+
+    ${SLOTVIEW==='month' ? monthGridHTML(slots) : `
+      <div class="daytabs">${days.map(d=>{const q=d.split(', ');return `<button class="daytab ${d===SLOTDAY?'on':''}" onclick="pickDay('${d}')">${esc(q[1]||d)}<small>${esc(q[0]||'')}</small></button>`;}).join('')}</div>`}
+
     <div class="tip">🕒 <span>Book an extra 30-minute slot before <b>and</b> after your class for setup and cleanup.</span></div>
     <div class="slotgrid">${DAYSLOTS.map((s,i)=>{const on=SEL.includes(s.id);return `<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]} ${on?'sel':''}" onclick="toggleSlot(${s.id})">
       <span class="sg">${on?'✓':SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
       <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`;}).join('')}</div>
-    ${sel.length?`<div class="selbar"><div><div class="a">${sel.length} slot${sel.length>1?'s':''} · ${esc(range)}</div><div class="b">${esc(sel[0].room)}${sel.length>1?' · consecutive':''}</div></div><button onclick="confirmSel()">Continue →</button></div>`:''}`;
+
+    ${series && SEL.length ? `<div class="card" style="margin-top:14px">
+      <h3 style="font-size:1rem">Your course dates</h3>
+      ${!p ? `<div class="meta" style="margin-top:6px">Checking which weeks are open…</div>`
+        : p.error ? `<div class="meta" style="margin-top:6px;color:#B4442C">${esc(p.error)}</div>`
+        : `<div class="meta" style="margin-top:6px">${p.found} of ${p.requested} weeks${p.found<p.requested?' (that is all that is open)':''}</div>
+           <div class="sessionlist">${p.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div>
+           ${p.skipped&&p.skipped.length?`<div class="meta" style="margin-top:8px;color:#B45309">Skipped (already booked): ${p.skipped.map(esc).join(', ')}</div>`:''}`}
+    </div>`:''}
+
+    ${sel.length?`<div class="selbar"><div><div class="a">${series&&p&&p.found?`${p.found}-week course`:`${sel.length} slot${sel.length>1?'s':''} · ${esc(range)}`}</div><div class="b">${esc(sel[0].room)}${series?' · weekly':(sel.length>1?' · consecutive':'')}</div></div><button onclick="confirmSel()">Continue →</button></div>`:''}`;
 }
 function pickDay(d){ SLOTDAY=d; SEL=[]; instrOpen(); }
 function toggleSlot(id){
@@ -763,12 +854,20 @@ function toggleSlot(id){
     else if(s.room===first.room && tmin(s.end)===tmin(first.start)) SEL.push(id);
     else SEL=[id];
   }
+  SERIES_PREVIEW=null;
+  if(CLASSKIND==='series' && SEL.length) return previewSeries();   // re-checks open weeks, then redraws
   instrOpen();
 }
 function confirmSel(){
   const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).sort((a,b)=>tmin(a.start)-tmin(b.start));
+  const series = CLASSKIND==='series';
+  if(series && (!SERIES_PREVIEW || !SERIES_PREVIEW.sessions || SERIES_PREVIEW.sessions.length<2)){
+    alert('Not enough open weeks for a series from that date. Try a different start, or fewer weeks.');
+    return;
+  }
   openForm({ date:sel[0].date, room:sel[0].room, start:sel[0].start, end:sel[sel.length-1].end,
-    time:sel[0].start+' – '+sel[sel.length-1].end, ids:SEL.slice() });
+    time:sel[0].start+' – '+sel[sel.length-1].end, ids:SEL.slice(),
+    series, sessions: series?SERIES_PREVIEW.sessions:null, weeks: series?SERIES_PREVIEW.sessions.length:1 });
 }
 async function instrMine(){
   const {classes} = await api('/api/classes/mine'); window.__classes=classes;
@@ -779,7 +878,12 @@ function openForm(slot){
   SUBMIT_SLOT=slot; PHOTO=null;
   $('#view').innerHTML = `
     <h2>New <em>class</em></h2>
-    <p class="sub">${esc(slot.date)} · ${esc(slot.start)}–${esc(slot.end)}${slot.room?' · '+esc(slot.room):''}</p>
+    <p class="sub">${slot.series
+      ? `${slot.weeks}-week course · ${esc(slot.sessions[0].date)} – ${esc(slot.sessions[slot.sessions.length-1].date)} · ${esc(slot.start)}–${esc(slot.end)}`
+      : `${esc(slot.date)} · ${esc(slot.start)}–${esc(slot.end)}${slot.room?' · '+esc(slot.room):''}`}</p>
+    ${slot.series?`<div class="card" style="margin-bottom:14px"><h3 style="font-size:.95rem">${slot.weeks} sessions</h3>
+      <div class="sessionlist">${slot.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)}</div>`).join('')}</div>
+      <div class="meta" style="margin-top:8px">Students pay once and are enrolled in every session.</div></div>`:''}
     <div class="err" id="ferr"></div>
     <label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select>
     <label>Class title</label><input id="f_title">
@@ -828,9 +932,10 @@ function openForm(slot){
     <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc()"></div>
       <div><label style="margin-top:0">Planned</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
     <div class="calc">
-      <div class="o"><span>Recommended ticket</span><b class="hero" id="o_t">$0</b></div>
-      <div class="o"><span>Your pay @ planned</span><b id="o_p">$0</b></div>
+      <div class="o"><span>Recommended ticket${slot.series?' <small>(whole course)</small>':''}</span><b class="hero" id="o_t">$0</b></div>
+      <div class="o"><span>Your pay @ planned${slot.series?' <small>(whole course)</small>':''}</span><b id="o_p">$0</b></div>
     </div>
+    ${slot.series?`<div class="hint">One ticket covers all ${slot.weeks} sessions. Set the price for the full course, not per week.</div>`:''}
     <div class="two" style="margin-top:12px"><div><label style="margin-top:0">Ticket price ($)</label><input id="f_ticket" type="number" oninput="this.dataset.t=1"></div>
       <div><label style="margin-top:0">Your pay ($)</label><input id="f_pay" type="number" oninput="this.dataset.t=1"></div></div>
     <div style="height:80px"></div>
@@ -899,6 +1004,7 @@ async function submitClass(){
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     links:$('#f_links').value, photo:PHOTO,
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date, room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
+    is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,
     supplies:[]
   };
   try{ await api('/api/classes','POST',body); SEL=[]; renderInstr('mine'); }

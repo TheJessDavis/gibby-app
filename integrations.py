@@ -229,9 +229,20 @@ def post_eventbrite(cls, cfg, image_url=None):
     if image_url:                      # attach the Canva graphic; never let this block the event
         try: logo_id = _eventbrite_logo_id(image_url, cfg)
         except Exception as e: print("[eventbrite] logo upload failed (posting without it):", e)
+    # A series is ONE listing with one ticket; spell the dates out in the description
+    # so students know exactly what they are buying.
+    desc = cls.get("description", "")
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception:
+        sessions = []
+    if cls.get("is_series") and sessions:
+        lines = "".join(f"<li>{s['date']} · {s['start']} – {s['end']}</li>" for s in sessions)
+        desc = (f"<p><b>A {len(sessions)}-week course.</b> One ticket covers all "
+                f"{len(sessions)} sessions:</p><ul>{lines}</ul>") + desc
     event = {
         "name": {"html": cls["title"]},
-        "description": {"html": cls.get("description", "")},
+        "description": {"html": desc},
         "start": {"timezone": cfg["timezone"], "utc": start},
         "end":   {"timezone": cfg["timezone"], "utc": end},
         "currency": "USD", "capacity": cls.get("max_p"),
