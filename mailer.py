@@ -93,8 +93,32 @@ def tmpl_reminder(cls, cfg):
         f"Where: The Gibby, {cls.get('room','')}\n\n"
         f"{cfg['logistics']}\n\nSee you there,\nThe Gibby")
 
-def tmpl_followup(cls, cfg):
-    return (f"Thanks for joining {cls['title']}!",
-        f"Hello,\n\nThank you for coming to \"{cls['title']}\"! We hope you had a great time and made something you love.\n\n"
-        f"If you enjoyed it, a quick Google review means the world to us: {cfg['google_review_url']}\n\n"
-        f"And if you took any photos, we would love for you to share them.\n\nWith gratitude,\nThe Gibby")
+def tmpl_followup(cls, cfg, attended=True, note="", instructor_name=""):
+    """After-class note. `attended` says whether we actually know these people were
+    there (Eventbrite check-in was scanned). When we do not know, nothing in the
+    copy may assume they came: asking a no-show how they enjoyed it, and to leave a
+    review, is the fastest way to earn a complaint.
+
+    `note` is the instructor's own message, which carries the email when present."""
+    signoff = (f"\n\nWith gratitude,\n{instructor_name} and everyone at The Gibby"
+               if instructor_name else "\n\nWith gratitude,\nThe Gibby")
+    if attended:
+        subject = f"Thanks for joining {cls['title']}!"
+        opening = (f"Thank you for coming to \"{cls['title']}\"! We hope you had a great time "
+                   f"and made something you love.")
+        ask = (f"If you enjoyed it, a quick Google review means the world to us: "
+               f"{cfg['google_review_url']}\n\nAnd if you took any photos, we would love for you "
+               f"to share them.")
+    else:
+        # Deliberately ambiguous: this list mixes people who came with people who
+        # only held a ticket, and we cannot tell them apart.
+        subject = f"About {cls['title']} at The Gibby"
+        opening = (f"\"{cls['title']}\" has wrapped up. We hope you enjoyed the class, or that "
+                   f"you are looking forward to catching a future one.")
+        ask = (f"If you did join us and enjoyed it, a Google review means the world to us: "
+               f"{cfg['google_review_url']}\n\nAnd if you took any photos, we would love to see "
+               f"them.\n\nEither way, we would love to have you at the next one.")
+    body = f"Hello,\n\n{opening}\n\n"
+    if note.strip():
+        body += note.strip() + "\n\n"
+    return (subject, body + ask + signoff)

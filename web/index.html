@@ -672,17 +672,53 @@ async function addSlot(){
   adminSlots();
 }
 async function adminApprovals(){
-  const [pend, gfx] = await Promise.all([api('/api/classes/pending'), api('/api/classes/graphic-review')]);
+  const [pend, gfx, fu] = await Promise.all([api('/api/classes/pending'), api('/api/classes/graphic-review'), api('/api/classes/followup-review')]);
   window.__classes = pend.classes.concat(gfx.classes);
   $('#tab').innerHTML = `<h2>Pending <em>approval</em></h2>
     <p class="sub">${pend.classes.length} waiting. Approve to build the poster, or send back with a note.</p>
     ${pend.classes.map(cardCls).join('') || '<div class="muted">Nothing pending. Nice.</div>'}
     <label style="margin-top:20px">Poster review (${gfx.classes.length})</label>
     <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes to Eventbrite.</p>
-    ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}`;
+    ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}
+    <label style="margin-top:20px">Follow-up notes (${fu.classes.length})</label>
+    <p class="sub" style="margin-top:2px">Written by the instructor after the class. Nothing is sent until you approve it.</p>
+    ${fu.classes.map(c=>`<div class="card">
+      <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
+        <div class="meta">${esc(c.instructor_name)} &middot; ${esc(c.slot_date||'')}</div></div></div>
+      <div class="${c.attendance_known?'ok-note':'volbox'}" style="margin-top:10px">
+        ${c.attendance_known
+          ? `Eventbrite check-in was used, so this goes only to the <b>${c.followup_recipients}</b> who actually attended, and can thank them for coming.`
+          : `No one was checked in on Eventbrite, so we cannot tell who attended. This goes to all <b>${c.followup_recipients}</b> ticket holders and the wording will <b>not</b> assume they were there.`}
+      </div>
+      <label style="margin-top:10px">The instructor's note (edit if you need to)</label>
+      <textarea id="fa${c.id}">${esc(c.followup_note||'')}</textarea>
+      <div class="two" style="margin-top:10px">
+        <button class="btn warn" onclick="returnFollowup(${c.id})">Send back</button>
+        <button class="btn green" onclick="sendFollowup(${c.id})">Approve &amp; send</button></div>
+    </div>`).join('') || '<div class="muted">No follow-up notes waiting.</div>'}`;
   // If a publish is already running (e.g. after a reload, or another admin started
   // it), pick the live status back up instead of showing a stale idle card.
   window.__classes.filter(c=>c.publishing_in_progress).forEach(c=>startPublishPolling(c.id));
+}
+async function saveFollowup(id, save){
+  const note = $('#fu'+id).value;
+  const r = await api('/api/classes/'+id+'/followup-note','POST',{note, save});
+  alert(save ? 'Draft saved. Come back when you are ready.' : 'Sent to The Gibby for review.');
+  instrMine();
+}
+async function sendFollowup(id){
+  const r = await api('/api/classes/'+id+'/followup-send','POST',{note:$('#fa'+id).value});
+  if(!r.ok){ alert('Not sent.\n\n'+r.reason); return; }
+  alert(`Sent to ${r.sent_to} student${r.sent_to===1?'':'s'}.\n\n`
+      + (r.attendance_known ? 'Only people who checked in received it.'
+                            : 'Attendance was unknown, so it went to all ticket holders with neutral wording.'));
+  adminApprovals();
+}
+async function returnFollowup(id){
+  const note = prompt('What would you like changed? (the instructor sees this)');
+  if(note===null) return;
+  await api('/api/classes/'+id+'/followup-return','POST',{note});
+  adminApprovals();
 }
 async function saveGraphic(id){
   await api('/api/classes/'+id+'/graphic','POST',{headline:$('#gh'+id).value, subtitle:$('#gs'+id).value});
@@ -1074,7 +1110,25 @@ async function instrMine(){
   const [mine, dr] = await Promise.all([api('/api/classes/mine'), api('/api/drafts')]);
   const classes = mine.classes; window.__classes=classes;
   const drafts = dr.drafts || [];
+  const todo = classes.filter(c=>c.followup_status==='awaiting_instructor');
+  const waiting = classes.filter(c=>c.followup_status==='pending_admin');
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
+    ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
+      <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. An admin checks it before it goes out.</p>
+      ${todo.map(c=>`<div class="card">
+        <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
+          <div class="meta">${esc(c.slot_date||'')} ${esc(c.slot_time||'')}</div></div></div>
+        <label style="margin-top:10px">Your note to students</label>
+        <textarea id="fu${c.id}" placeholder="e.g. Thank you for a lovely afternoon. Your glaze will be ready to collect from the studio after the 14th, and I have popped a firing schedule on the noticeboard.">${esc(c.followup_note||'')}</textarea>
+        <div class="hint">The Gibby adds the greeting, the review link and the sign-off. Just write the part that is yours.</div>
+        <div class="two" style="margin-top:10px">
+          <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
+          <button class="btn dark" onclick="saveFollowup(${c.id},false)">Send for approval</button></div>
+      </div>`).join('')}`:''}
+    ${waiting.length?`<label style="margin-top:18px">With the Gibby for review (${waiting.length})</label>
+      ${waiting.map(c=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
+        <div class="meta">Your note is with an admin. You will hear if they need a change.</div></div>
+        <span class="pill ir">in review</span></div></div>`).join('')}`:''}
     ${drafts.length?`<label>Drafts (${drafts.length})</label>
       <p class="sub" style="margin-top:2px">Not submitted yet. The time is only held once you submit.</p>
       ${drafts.map(d=>`<div class="card">
@@ -1336,7 +1390,8 @@ async function submitClass(){
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
  'testEventbrite','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
- 'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations'
+ 'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
+ 'saveFollowup','sendFollowup','returnFollowup'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

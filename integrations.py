@@ -315,6 +315,13 @@ def normalize_attendee(a):
         "phone": (p.get("cell_phone") or p.get("home_phone") or p.get("work_phone") or "").strip(),
         # Eventbrite marks these separately; either means they are not coming.
         "refunded": bool(a.get("refunded") or a.get("cancelled")),
+        # Eventbrite's attendee object carries a checked_in boolean, and each
+        # barcode records whether it was scanned at the door. Either counts as
+        # "this person actually turned up". Both stay false when the venue never
+        # scans tickets, which the caller has to treat as "attendance unknown"
+        # rather than "nobody came".
+        "checked_in": bool(a.get("checked_in")) or any(
+            (b or {}).get("status") == "used" for b in (a.get("barcodes") or [])),
     }
 
 def sync_attendees(cls, cfg=None, _req_fn=None):
