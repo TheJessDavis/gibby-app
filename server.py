@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "3.2-session-expiry"
+VERSION = "3.3-drafts"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -64,6 +64,15 @@ def init_db():
       email_type TEXT NOT NULL, sent_at TEXT NOT NULL,
       recipients INTEGER DEFAULT 0, delivered INTEGER DEFAULT 0);
     CREATE UNIQUE INDEX IF NOT EXISTS email_log_once ON email_log(class_id, email_type);
+    -- Work-in-progress class proposals. A draft holds the FORM ONLY: it does not
+    -- claim any slots, otherwise an abandoned draft would sit on a Saturday nobody
+    -- else could book. Slots are still claimed at submit time.
+    CREATE TABLE IF NOT EXISTS drafts(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, instructor_id INTEGER NOT NULL,
+      title TEXT, payload TEXT, slot_ids TEXT, slot_date TEXT, slot_time TEXT, room TEXT,
+      is_series INTEGER DEFAULT 0, session_count INTEGER DEFAULT 1,
+      created TEXT, updated TEXT, deleted_at TEXT);
+    CREATE INDEX IF NOT EXISTS drafts_instructor ON drafts(instructor_id, deleted_at);
     -- Sliding-window rate limiting. One row per accepted request; rows outside the
     -- window are pruned on read. Transient bookkeeping, so these ARE hard deleted
     -- (unlike slots/classes/users, which soft delete).
@@ -929,6 +938,38 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"class_status": row["status"],
                                    "publishing": bool(row["publishing_in_progress"]),
                                    "platforms": out})
+        if p == "/api/drafts":
+            u = self.require("instructor")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""
+                SELECT id,title,slot_date,slot_time,room,is_series,session_count,created,updated
+                FROM drafts WHERE instructor_id=? AND deleted_at IS NULL
+                ORDER BY updated DESC""", (u["id"],))]
+            c.close()
+            return self.send_json({"drafts": rows})
+        if p.startswith("/api/drafts/"):
+            u = self.require("instructor")
+            if not u: return
+            try: did = int(p.split("/")[3])
+            except ValueError: return self.send_json({"error":"not found"},404)
+            c = db()
+            row = c.execute("SELECT * FROM drafts WHERE id=? AND instructor_id=? AND deleted_at IS NULL",
+                            (did, u["id"])).fetchone()
+            if not row: c.close(); return self.send_json({"error":"That draft is no longer there."},404)
+            d = dict(row)
+            d["payload"] = json.loads(d["payload"] or "{}")
+            ids = json.loads(d["slot_ids"] or "[]")
+            # A draft never held the slots, so they may be gone by the time it reopens.
+            still_free = True
+            if ids:
+                n = c.execute(f"""SELECT COUNT(*) FROM slots WHERE id IN ({','.join('?'*len(ids))})
+                                  AND status='available' AND deleted_at IS NULL""", ids).fetchone()[0]
+                still_free = (n == len(ids))
+            c.close()
+            d["slot_ids"] = ids
+            d["slots_available"] = still_free
+            return self.send_json({"draft": d})
         if p == "/api/classes/graphic-review":
             u = self.require("admin")
             if not u: return
@@ -1320,6 +1361,50 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error":"Those slots are no longer available."},400)
             return self.send_json({"ok":True, "sessions":sessions, "skipped":skipped,
                                    "requested":weeks, "found":len(sessions)})
+        if p == "/api/drafts":
+            # Save a work-in-progress form. No validation at all - the whole point is
+            # to keep a half-finished proposal. Nothing is published or claimed.
+            u = self.require("instructor")
+            if not u: return
+            b = self.read_json()
+            payload = b.get("payload") or {}
+            did = b.get("id")
+            c = db()
+            if did:
+                own = c.execute("SELECT id FROM drafts WHERE id=? AND instructor_id=? AND deleted_at IS NULL",
+                                (did, u["id"])).fetchone()
+                if not own: c.close(); return self.send_json({"error":"That draft is no longer there."},404)
+                c.execute("""UPDATE drafts SET title=?,payload=?,slot_ids=?,slot_date=?,slot_time=?,room=?,
+                             is_series=?,session_count=?,updated=? WHERE id=?""",
+                          ((payload.get("title") or "").strip()[:200], json.dumps(payload),
+                           json.dumps(b.get("slot_ids") or []), b.get("slot_date"), b.get("slot_time"),
+                           b.get("room"), 1 if b.get("is_series") else 0, b.get("session_count") or 1,
+                           now(), did))
+            else:
+                n = c.execute("SELECT COUNT(*) FROM drafts WHERE instructor_id=? AND deleted_at IS NULL",
+                              (u["id"],)).fetchone()[0]
+                if n >= 20:
+                    c.close(); return self.send_json({"error":"You already have 20 saved drafts. Delete one first."},400)
+                c.execute("""INSERT INTO drafts(instructor_id,title,payload,slot_ids,slot_date,slot_time,room,
+                             is_series,session_count,created,updated)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                          (u["id"], (payload.get("title") or "").strip()[:200], json.dumps(payload),
+                           json.dumps(b.get("slot_ids") or []), b.get("slot_date"), b.get("slot_time"),
+                           b.get("room"), 1 if b.get("is_series") else 0, b.get("session_count") or 1,
+                           now(), now()))
+                did = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "id":did, "saved_at":now()})
+        if p.startswith("/api/drafts/") and p.endswith("/delete"):
+            u = self.require("instructor")
+            if not u: return
+            try: did = int(p.split("/")[3])
+            except ValueError: return self.send_json({"error":"not found"},404)
+            c = db()
+            c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=? AND deleted_at IS NULL",
+                      (now(), did, u["id"]))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/classes":  # instructor submit (this is also where slots get claimed)
             u = self.require("instructor")
             if not u: return
@@ -1396,6 +1481,9 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")), now()))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
+            if b.get("draft_id"):        # the proposal is submitted; retire its draft
+                c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",
+                          (now(), b["draft_id"], u["id"]))
             admins = emails_for(c, "WHERE role='admin'")
             c.commit(); c.close()
             when = (f"{weeks} sessions starting {slot_date}" if is_series else f"{slot_date} {slot_time}")
