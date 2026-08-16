@@ -152,7 +152,8 @@ async function api(path, method='GET', body){
   const r = await fetch(path,{method,headers:body?{'Content-Type':'application/json'}:{},
     body:body?JSON.stringify(body):undefined});
   const j = await r.json().catch(()=>({}));
-  if(!r.ok) throw Object.assign(new Error(j.error||'error'), {data:j});
+  if(!r.ok) throw Object.assign(new Error(j.error||'error'), {data:j, status:r.status,
+    retryAfter: r.headers.get('Retry-After')});
   return j;
 }
 const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -202,7 +203,12 @@ function retrySection(){ if(LAST_SECTION) boundary(LAST_SECTION.section, LAST_SE
 function guard(section, fn){
   return async function(...a){
     try{ return await fn.apply(this, a); }
-    catch(e){ logClientError(section, e); alert('That action could not be completed.\n\n'+(e&&e.message||e)); }
+    catch(e){
+      // A rate-limit reply is already a clear, friendly sentence; show it as-is and
+      // do not report it as a bug.
+      if(e && e.status===429){ alert(e.message); return; }
+      logClientError(section, e); alert('That action could not be completed.\n\n'+(e&&e.message||e));
+    }
   };
 }
 /* Last-resort nets: anything that escapes a boundary still gets reported. */

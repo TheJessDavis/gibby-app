@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "3.0-soft-delete"
+VERSION = "3.1-rate-limit"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -64,6 +64,12 @@ def init_db():
       email_type TEXT NOT NULL, sent_at TEXT NOT NULL,
       recipients INTEGER DEFAULT 0, delivered INTEGER DEFAULT 0);
     CREATE UNIQUE INDEX IF NOT EXISTS email_log_once ON email_log(class_id, email_type);
+    -- Sliding-window rate limiting. One row per accepted request; rows outside the
+    -- window are pruned on read. Transient bookkeeping, so these ARE hard deleted
+    -- (unlike slots/classes/users, which soft delete).
+    CREATE TABLE IF NOT EXISTS rate_limit(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, bucket TEXT NOT NULL, ts REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS rate_limit_bucket ON rate_limit(bucket, ts);
     -- Durable queue for outbound platform calls. A publish never fails in front of
     -- the admin: the job is queued, retried with backoff, and only flagged after it
     -- has genuinely given up. Survives restarts because it lives in the database.
@@ -188,6 +194,47 @@ def seed(c):
 
 # Outbound posting now runs through the retry queue below (queue_publish), which
 # calls integrations.py one platform at a time so each can fail and retry alone.
+
+# ------------------------------------------------------------ rate limiting ----
+# A true sliding window: every accepted request is logged with its timestamp and a
+# caller is allowed through only if fewer than `limit` of their own requests fall
+# inside the trailing window. That avoids the burst-at-the-boundary problem you get
+# with fixed windows (10 at 10:59 plus 10 at 11:01).
+#
+# There is no Redis or cache layer in this app, so state lives in SQLite alongside
+# everything else: it survives the restart that happens on every deploy, which an
+# in-process dict would not.
+RATE_LIMITS = {                 # name: (max requests, window seconds)
+    "submit":  (5,  3600),      # class form submissions, per instructor
+    "approve": (20, 3600),      # approval decisions, per admin
+    "claim":   (10, 3600),      # slot claim attempts, per instructor
+}
+RATE_LABEL = {"submit": "class submissions", "approve": "approval decisions",
+              "claim": "slot claims"}
+
+def rate_check(name, user_id, count=True):
+    """Returns (allowed, retry_after_seconds, remaining). Fails OPEN: if the limiter
+    itself errors, the request is allowed rather than blocking real work."""
+    limit, window = RATE_LIMITS[name]
+    bucket = f"{name}:{user_id}"
+    t = time.time()
+    try:
+        c = db()
+        c.execute("DELETE FROM rate_limit WHERE bucket=? AND ts<?", (bucket, t - window))
+        hits = [r[0] for r in c.execute(
+            "SELECT ts FROM rate_limit WHERE bucket=? ORDER BY ts", (bucket,)).fetchall()]
+        if len(hits) >= limit:
+            retry_after = max(1, int(window - (t - hits[0])) + 1)
+            c.commit(); c.close()
+            print(f"[rate limit] {bucket}: {len(hits)}/{limit} in window, retry after {retry_after}s")
+            return False, retry_after, 0
+        if count:
+            c.execute("INSERT INTO rate_limit(bucket,ts) VALUES(?,?)", (bucket, t))
+        c.commit(); c.close()
+        return True, 0, limit - len(hits) - (1 if count else 0)
+    except Exception as e:
+        print("[rate limit] check failed, allowing request:", e)
+        return True, 0, limit
 
 def _age_bounds(label):
     """'Ages 8–10' -> (8,10); 'Ages 21+' -> (21,200); 'All Ages' -> (0,200)."""
@@ -697,14 +744,30 @@ class H(http.server.BaseHTTPRequestHandler):
         c.close()
         return dict(row) if row else None
 
-    def send_json(self, obj, code=200, cookie=None):
+    def send_json(self, obj, code=200, cookie=None, headers=None):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body)))
         if cookie: self.send_header("Set-Cookie", cookie)
+        for k, v in (headers or {}).items(): self.send_header(k, str(v))
         self.end_headers()
         self.wfile.write(body)
+
+    def rate_limited(self, name, user_id):
+        """Check one bucket. If the caller is over, send the 429 (with Retry-After)
+        and return True so the handler can just `return`."""
+        allowed, retry_after, remaining = rate_check(name, user_id)
+        if allowed: return False
+        limit, window = RATE_LIMITS[name]
+        mins = max(1, round(retry_after / 60))
+        self.send_json({"error": f"You have reached the limit of {limit} {RATE_LABEL[name]} per hour. "
+                                 f"Please try again in about {mins} minute{'s' if mins != 1 else ''}.",
+                        "retry_after": retry_after},
+                       429, headers={"Retry-After": retry_after,
+                                     "X-RateLimit-Limit": limit,
+                                     "X-RateLimit-Remaining": 0})
+        return True
 
     def read_json(self):
         n = int(self.headers.get("Content-Length","0") or 0)
@@ -1141,9 +1204,10 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error":"Those slots are no longer available."},400)
             return self.send_json({"ok":True, "sessions":sessions, "skipped":skipped,
                                    "requested":weeks, "found":len(sessions)})
-        if p == "/api/classes":  # instructor submit
+        if p == "/api/classes":  # instructor submit (this is also where slots get claimed)
             u = self.require("instructor")
             if not u: return
+            if self.rate_limited("submit", u["id"]): return
             b = self.read_json()
             req = ["title","age_range","length","room"]
             miss=[k for k in req if not str(b.get(k,"")).strip()]
@@ -1169,6 +1233,8 @@ class H(http.server.BaseHTTPRequestHandler):
             weeks = max(2, min(int(b.get("session_count") or 2), 26)) if is_series else 1
             sessions = []
             if ids:
+                # Slot claiming rides on this same endpoint, so it gets its own bucket.
+                if self.rate_limited("claim", u["id"]): c.close(); return
                 ph = ",".join("?"*len(ids))
                 rows = [dict(r) for r in c.execute(f"SELECT * FROM slots WHERE id IN ({ph}) AND deleted_at IS NULL", ids).fetchall()]
                 if len(rows) != len(ids):
@@ -1422,6 +1488,7 @@ class H(http.server.BaseHTTPRequestHandler):
         render) happens AFTER the commit so it never runs holding the write lock."""
         u = self.require("admin")
         if not u: return
+        if self.rate_limited("approve", u["id"]): return
         cid = int(p.split("/")[3])
         b = self.read_json()
         target = "graphic_review" if approve else "incomplete"
