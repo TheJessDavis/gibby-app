@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.6-series"
+VERSION = "2.7-retry-queue"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -64,6 +64,16 @@ def init_db():
       email_type TEXT NOT NULL, sent_at TEXT NOT NULL,
       recipients INTEGER DEFAULT 0, delivered INTEGER DEFAULT 0);
     CREATE UNIQUE INDEX IF NOT EXISTS email_log_once ON email_log(class_id, email_type);
+    -- Durable queue for outbound platform calls. A publish never fails in front of
+    -- the admin: the job is queued, retried with backoff, and only flagged after it
+    -- has genuinely given up. Survives restarts because it lives in the database.
+    CREATE TABLE IF NOT EXISTS job_queue(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, class_id INTEGER NOT NULL,
+      platform TEXT NOT NULL, payload TEXT DEFAULT '{}',
+      attempts INTEGER DEFAULT 0, next_run_at TEXT,
+      status TEXT DEFAULT 'queued',      -- queued | running | done | skipped | failed
+      last_error TEXT DEFAULT '', created TEXT, updated TEXT);
+    CREATE INDEX IF NOT EXISTS job_queue_due ON job_queue(status, next_run_at);
     -- Browser-side render/action failures reported by the UI error boundaries.
     CREATE TABLE IF NOT EXISTS client_errors(
       id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, section TEXT, message TEXT,
@@ -169,12 +179,8 @@ def seed(c):
         for i in integ: c.execute("INSERT INTO integrations(id,name,method,status) VALUES(?,?,?,?)", i)
     c.commit()
 
-# ------------------------------------------------ external posting ----
-def publish_class(cls):
-    """Real posting layer (integrations.py). Reads config.json for account keys;
-    each platform is skipped if unconfigured, and nothing is actually sent unless
-    config's "live" is true. Returns external IDs / per-platform results."""
-    return integrations.publish(cls)
+# Outbound posting now runs through the retry queue below (queue_publish), which
+# calls integrations.py one platform at a time so each can fail and retry alone.
 
 def audit(c, class_id, prev_status, new_status, actor_id):
     """Append one immutable entry recording a Class status change. Snapshots the
@@ -239,17 +245,130 @@ def start_graphic_review(c, cls, actor_id=None, spawn=True):
         threading.Thread(target=render_graphic_async, args=(prepared,), daemon=True).start()
     return prepared
 
+# ------------------------------------------------------- outbound job queue ----
+# Every call to an outside service goes through here. Failures are retried on a
+# backoff instead of surfacing to the admin; only a job that exhausts its retries
+# is flagged on the dashboard. The class itself stays approved throughout.
+BACKOFF = [60, 300, 900, 3600]        # 1 min, 5 min, 15 min, 1 hour
+MAX_ATTEMPTS = len(BACKOFF) + 1       # first try + 4 retries
+QUEUE_TICK = 20                       # seconds between sweeps
+PLATFORM_LABEL = {"canva":"Canva", "eventbrite":"Eventbrite", "facebook":"Facebook",
+                  "wix":"Wix", "descene":"Descene", "gcal":"Google Calendar"}
+
+def enqueue(c, class_id, platform, payload=None, delay=0):
+    when = (datetime.datetime.now() + datetime.timedelta(seconds=delay)).isoformat(timespec="seconds")
+    c.execute("""INSERT INTO job_queue(class_id,platform,payload,attempts,next_run_at,status,created,updated)
+                 VALUES(?,?,?,0,?,'queued',?,?)""",
+              (class_id, platform, json.dumps(payload or {}), when, now(), now()))
+
+def queue_publish(class_id, image_url=None, instructor_name=""):
+    """Queue every outbound post for a newly published class."""
+    c = db()
+    for platform in ("eventbrite", "facebook", "wix", "descene", "gcal"):
+        payload = {}
+        if platform == "eventbrite": payload["image_url"] = image_url
+        if platform == "gcal":       payload["instructor_name"] = instructor_name
+        enqueue(c, class_id, platform, payload)
+    c.commit(); c.close()
+    print(f"[queue] class #{class_id}: queued 5 publishing jobs")
+
 def render_graphic_async(cls):
-    """Off-request-thread: build the poster from the Canva brand template. Stores the
-    exported image URL (and, if it could not run, why) on the class. Never raises."""
+    """Queue the Canva poster build. The worker retries it on failure."""
+    c = db(); enqueue(c, cls["id"], "canva", {}); c.commit(); c.close()
+    print(f"[queue] class #{cls['id']}: queued Canva graphic")
+
+def _run_platform(platform, cls, payload):
+    """Do the actual outside call. Returns (outcome, detail) where outcome is
+    True (done), False (retryable failure) or None (nothing to do, e.g. no keys)."""
+    cfg = integrations.load_config()
     try:
-        res = integrations.render_canva(cls, integrations.load_config())
-        merge_external(cls["id"], {"canva_id": res.get("id"), "canva_image_url": res.get("image_url"),
-                                   "canva_status": res.get("error") or res.get("status")})
-        print(f"[graphic] class #{cls['id']}: {res.get('status') or res.get('error')}")
+        if platform == "canva":
+            res = integrations.render_canva(cls, cfg)
+        elif platform == "eventbrite":
+            res = integrations.post_eventbrite(cls, cfg, payload.get("image_url"))
+        elif platform == "facebook":
+            res = integrations.post_facebook(cls, cfg, None)
+        elif platform == "wix":
+            res = integrations.post_wix(cls, cfg)
+        elif platform == "descene":
+            res = integrations.post_descene(cls, cfg)
+        elif platform == "gcal":
+            gcfg = gcal.load_gcal_config()
+            if not gcal.configured(gcfg): return None, "Google Calendar is not connected"
+            eid = gcal.create_event({**cls, "instructor_name": payload.get("instructor_name","")}, gcfg)
+            return (True, {"id": eid}) if eid else (None, "dry-run or nothing to add")
+        else:
+            return None, "unknown platform"
     except Exception as e:
-        merge_external(cls["id"], {"canva_status": f"error: {e}"})
-        print("[graphic] error:", e)
+        return False, str(e)          # network/HTTP blow-ups are retryable
+    if res.get("ok"):
+        return True, res
+    status = str(res.get("status") or "")
+    if status.startswith("skipped") or status.startswith("manual"):
+        return None, status           # not configured / no API: nothing to retry
+    return False, (res.get("error") or status or "unknown error")
+
+def _record_success(class_id, platform, detail):
+    if not isinstance(detail, dict): return
+    ext = {}
+    if platform == "canva":
+        ext = {"canva_id": detail.get("id"), "canva_image_url": detail.get("image_url"),
+               "canva_status": detail.get("status")}
+    elif platform == "gcal":
+        ext = {"gcal_event_id": detail.get("id")}
+    elif detail.get("id"):
+        ext = {platform + "_id": detail.get("id")}
+    if ext: merge_external(class_id, ext)
+
+def process_due_jobs():
+    c = db()
+    due = [dict(r) for r in c.execute(
+        "SELECT * FROM job_queue WHERE status='queued' AND next_run_at<=? ORDER BY id LIMIT 25",
+        (now(),)).fetchall()]
+    c.close()
+    for job in due:
+        c = db()
+        claimed = c.execute("UPDATE job_queue SET status='running', updated=? WHERE id=? AND status='queued'",
+                            (now(), job["id"])).rowcount
+        if claimed == 1:
+            row = c.execute("SELECT * FROM classes WHERE id=?", (job["class_id"],)).fetchone()
+            cls = dict(row) if row else None
+        c.commit(); c.close()
+        if claimed != 1: continue
+        if not cls:
+            c = db(); c.execute("UPDATE job_queue SET status='skipped', last_error='class no longer exists', updated=? WHERE id=?",
+                                (now(), job["id"])); c.commit(); c.close(); continue
+
+        outcome, detail = _run_platform(job["platform"], cls, json.loads(job["payload"] or "{}"))
+        label = PLATFORM_LABEL.get(job["platform"], job["platform"])
+        attempts = job["attempts"] + 1
+        c = db()
+        if outcome is True:
+            c.execute("UPDATE job_queue SET status='done', attempts=?, last_error='', updated=? WHERE id=?",
+                      (attempts, now(), job["id"]))
+            print(f"[queue] class #{cls['id']} {label}: done")
+        elif outcome is None:
+            c.execute("UPDATE job_queue SET status='skipped', attempts=?, last_error=?, updated=? WHERE id=?",
+                      (attempts, str(detail)[:400], now(), job["id"]))
+            print(f"[queue] class #{cls['id']} {label}: skipped ({detail})")
+        elif attempts >= MAX_ATTEMPTS:
+            c.execute("UPDATE job_queue SET status='failed', attempts=?, last_error=?, updated=? WHERE id=?",
+                      (attempts, str(detail)[:400], now(), job["id"]))
+            print(f"[queue] class #{cls['id']} {label}: FAILED after {attempts} attempts -> {detail}")
+        else:
+            delay = BACKOFF[min(attempts, len(BACKOFF)) - 1]
+            nxt = (datetime.datetime.now() + datetime.timedelta(seconds=delay)).isoformat(timespec="seconds")
+            c.execute("UPDATE job_queue SET status='queued', attempts=?, last_error=?, next_run_at=?, updated=? WHERE id=?",
+                      (attempts, str(detail)[:400], nxt, now(), job["id"]))
+            print(f"[queue] class #{cls['id']} {label}: attempt {attempts} failed ({detail}); retrying in {delay}s")
+        c.commit(); c.close()
+        if outcome is True: _record_success(job["class_id"], job["platform"], detail)
+
+def queue_worker():
+    while True:
+        try: process_due_jobs()
+        except Exception as e: print("[queue] worker error:", e)
+        time.sleep(QUEUE_TICK)
 
 def publish_now(c, cls, actor_id=None, spawn=True):
     """Final step, after the admin has reviewed the graphic: post to Eventbrite with
@@ -274,16 +393,12 @@ def run_publish_side_effects(side):
                      args=(side["cls"], side["instructor_name"], side["image_url"]), daemon=True).start()
 
 def _publish_async(cls, instructor_name, image_url=None):
-    """Off-request-thread: post to Eventbrite (attaching the already-reviewed graphic)
-    and add the class to the Google Calendar. Ids merged in when done. Never raises."""
+    """Hand the outbound posting to the retry queue. Nothing is attempted inline, so
+    a platform being down never surfaces as an error to the admin."""
     try:
-        ext = integrations.publish(cls, image_url=image_url)
-        gid = gcal.create_event({**cls, "instructor_name": instructor_name}, gcal.load_gcal_config())
-        if gid: ext["gcal_event_id"] = gid
-        merge_external(cls["id"], ext)
-        print(f"[publish async] class #{cls['id']} external posting complete")
+        queue_publish(cls["id"], image_url=image_url, instructor_name=instructor_name)
     except Exception as e:
-        print("[publish async] error:", e)
+        print("[publish async] could not queue:", e)
 
 def emails_for(c, where, args=()):
     return [r[0] for r in c.execute(f"SELECT email FROM users {where}", args).fetchall() if r[0]]
@@ -351,7 +466,14 @@ def find_series_sessions(c, first_ids, weeks, year=2027):
         if len(ids) == len(times):
             sessions.append({"date": label, "start": times[0][0], "end": times[-1][1], "slot_ids": ids})
         else:
-            skipped.append(label)
+            skipped.append((week, label))
+    # Only report weeks skipped INSIDE the delivered run. Weeks looked at after the
+    # last session found are not "skipped", we simply ran out of calendar.
+    last_week = 0
+    if len(sessions) > 1:
+        last = parse_day(sessions[-1]["date"], year)
+        last_week = round((last - d0).days / 7)
+    skipped = [lbl for (w, lbl) in skipped if w < last_week]
     return sessions, skipped
 
 # Every automated class email must declare which class statuses it is valid for, and
@@ -649,6 +771,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             approved = self._classes("WHERE c.status='approved' ")
             return self.send_json({
+                "publish_failures": self._publish_failures(),
                 "pending": self._classes("WHERE c.status='pending' "),
                 "graphic": self._classes("WHERE c.status='graphic_review' "),
                 "returned": self._classes("WHERE c.status='incomplete' "),
@@ -674,6 +797,19 @@ class H(http.server.BaseHTTPRequestHandler):
             c.close()
             return self.send_json({"registrations":regs})
         self.send_json({"error":"not found"},404)
+
+    def _publish_failures(self):
+        """Jobs that exhausted their retries. These are the dashboard alerts: the
+        class is still approved, only this publishing step needs attention."""
+        c = db()
+        rows = [dict(r) for r in c.execute("""
+            SELECT j.id, j.class_id, j.platform, j.attempts, j.last_error, j.updated,
+                   cl.title AS class_title, cl.status AS class_status
+            FROM job_queue j LEFT JOIN classes cl ON cl.id = j.class_id
+            WHERE j.status='failed' ORDER BY j.updated DESC LIMIT 50""").fetchall()]
+        c.close()
+        for r in rows: r["platform_label"] = PLATFORM_LABEL.get(r["platform"], r["platform"])
+        return rows
 
     def _classes(self, where, args=()):
         c = db()
@@ -714,6 +850,26 @@ class H(http.server.BaseHTTPRequestHandler):
             if "gibby_session" in ck:
                 c=db(); c.execute("DELETE FROM sessions WHERE token=?",(ck["gibby_session"].value,)); c.commit(); c.close()
             return self.send_json({"ok":True}, cookie="gibby_session=; Path=/; Max-Age=0")
+        if p.startswith("/api/jobs/") and p.endswith("/retry"):
+            u = self.require("admin")
+            if not u: return
+            jid = int(p.split("/")[3]); c = db()
+            got = c.execute("""UPDATE job_queue SET status='queued', attempts=0, next_run_at=?, updated=?
+                               WHERE id=? AND status='failed'""", (now(), now(), jid)).rowcount
+            c.commit(); c.close()
+            if got != 1: return self.send_json({"error":"That job is not in a failed state."},409)
+            print(f"[queue] job #{jid} manually re-queued by {u['name']}")
+            return self.send_json({"ok":True})
+        if p == "/api/jobs":       # full queue, for diagnosis
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""
+                SELECT j.*, cl.title AS class_title FROM job_queue j
+                LEFT JOIN classes cl ON cl.id=j.class_id ORDER BY j.id DESC LIMIT 200""").fetchall()]
+            c.close()
+            for r in rows: r["platform_label"] = PLATFORM_LABEL.get(r["platform"], r["platform"])
+            return self.send_json({"jobs": rows})
         if p == "/api/client-error":
             # Deliberately unauthenticated: boundaries must be able to report a
             # failure that happened before or during sign-in. Fields are truncated
@@ -1179,6 +1335,7 @@ class Threaded(socketserver.ThreadingMixIn, http.server.HTTPServer):
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=scheduler_loop, daemon=True).start()   # daily lifecycle automations
+    threading.Thread(target=queue_worker, daemon=True).start()     # outbound posting + retries
     print(f"Gibby Class Manager running:  http://localhost:{PORT}   (data: {DB})")
     print("Sign in as admin:      jess@theeverett.org")
     print("Sign in as instructor: christin.smiertka@theeverett.org  (first.last of any roster name)")

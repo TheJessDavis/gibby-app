@@ -350,6 +350,15 @@ async function adminDashboard(){
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
     <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
+    ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
+      <div class="row"><div><h3>⚠ Publishing needs attention</h3>
+        <div class="meta">${d.publish_failures.length} step${d.publish_failures.length===1?'':'s'} could not be posted after ${5} tries. The class itself is still approved.</div></div></div>
+      ${d.publish_failures.map(f=>`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <div style="font-weight:800;font-size:13.5px">${esc(f.platform_label)} · ${esc(f.class_title||('Class #'+f.class_id))}</div>
+        <div class="meta" style="margin-top:3px;color:#B4442C">${esc(f.last_error||'unknown error')}</div>
+        <div class="meta" style="margin-top:3px">${f.attempts} attempts · last tried ${esc(f.updated||'')}</div>
+        <button class="btn ghost" style="margin-top:8px" onclick="retryJob(${f.id})">Try ${esc(f.platform_label)} again</button>
+      </div>`).join('')}</div>`:''}
     ${(d.graphic||[]).length?`<div class="card"><div class="row"><div><h3>Posters waiting on you</h3>
       <div class="meta">${d.graphic.map(c=>esc(c.title)).join(', ')} · approved but not yet on Eventbrite</div></div></div>
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review posters →</button></div>`:''}
@@ -373,6 +382,11 @@ function lowCard(c){
       <button class="btn ghost" onclick="promote(${c.id})">Promote</button>
       <button class="btn warn" onclick="cancelClass(${c.id})">Cancel &amp; refund</button></div></div>`;
 }
+async function retryJob(id){
+  await api('/api/jobs/'+id+'/retry','POST');
+  alert('Queued for another try. It runs within a minute.');
+  adminDashboard();
+}
 async function runScheduler(){
   const asof=prompt("Run the daily scheduler as of which date? (YYYY-MM-DD, blank = today)","2027-01-15");
   if(asof===null) return;
@@ -389,7 +403,7 @@ async function adminTemplates(){
     <div class="card">
       <label style="margin-top:0">New template title</label><input id="tt">
       <div class="two"><div><label>Category</label><input id="tc" placeholder="Painting"></div>
-        <div><label>Age</label><select id="ta"><option>All Ages</option><option>Toddlers</option><option>Ages 7–9</option><option>Ages 9–12</option><option>Ages 16+</option><option>Ages 21+</option></select></div></div>
+        <div><label>Age</label><select id="ta">${AGES.map(a=>`<option>${a}</option>`).join('')}</select></div></div>
       <label>Description</label><textarea id="td"></textarea>
       <div style="height:10px"></div><button class="btn dark" onclick="addTemplate()">Add template</button>
     </div>
@@ -676,7 +690,9 @@ async function decideClass(id, path, body){
   adminApprovals(); return true;
 }
 async function approve(id){ return decideClass(id,'approve'); }
-const AGES=['All Ages','Toddlers','Ages 7–9','Ages 9–12','Ages 16+','Ages 21+'];
+/* The single source of truth for age ranges. Used by the class form, the admin
+   edit form and the template editor. */
+const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14','Ages 14–18','Ages 18+','Ages 21+'];
 function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
 async function openEditForm(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
@@ -865,6 +881,14 @@ function confirmSel(){
     alert('Not enough open weeks for a series from that date. Try a different start, or fewer weeks.');
     return;
   }
+  // Never silently shorten a course: if the calendar cannot fit the requested run,
+  // say so plainly and make them choose.
+  if(series && SERIES_PREVIEW.found < SERIES_PREVIEW.requested){
+    const ok = confirm(`You asked for ${SERIES_PREVIEW.requested} weeks, but only ${SERIES_PREVIEW.found} are open `
+      + `(ending ${SERIES_PREVIEW.sessions[SERIES_PREVIEW.sessions.length-1].date}).\n\n`
+      + `Book it as a ${SERIES_PREVIEW.found}-week course?\n\nCancel to pick a different start date or fewer weeks.`);
+    if(!ok) return;
+  }
   openForm({ date:sel[0].date, room:sel[0].room, start:sel[0].start, end:sel[sel.length-1].end,
     time:sel[0].start+' – '+sel[sel.length-1].end, ids:SEL.slice(),
     series, sessions: series?SERIES_PREVIEW.sessions:null, weeks: series?SERIES_PREVIEW.sessions.length:1 });
@@ -899,7 +923,7 @@ function openForm(slot){
       <option>2.5 hours</option><option>3 hours</option><option>3.5 hours</option><option>4 hours</option></select>
 
     <label>Age range (choose all that apply)</label>
-    <div class="chkgrid" id="f_ages">${['All Ages','Toddlers','Ages 7–9','Ages 9–12','Ages 16+','Ages 21+'].map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
+    <div class="chkgrid" id="f_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
 
     <div id="f_volwrap" class="hidden">
       <label>Do you need a volunteer to assist with this class?</label>
@@ -944,7 +968,8 @@ function openForm(slot){
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   calc(); descCount(); loadTplOptions();
 }
-const KID_AGES=['Toddlers','Ages 7–9','Ages 9–12'];
+// Under-14 groups trigger the "do you need a volunteer assistant?" question.
+const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14'];
 function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
 function ageChanged(){ const kid=selectedAges().some(a=>KID_AGES.includes(a)); $('#f_volwrap').classList.toggle('hidden', !kid); }
 function alcSel(b){ segPick(b);
@@ -1017,7 +1042,7 @@ async function submitClass(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','runScheduler','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','runScheduler','retryJob','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
