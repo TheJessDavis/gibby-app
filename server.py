@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "4.1-profitability"
+VERSION = "4.2-registration-cutoff"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -146,6 +146,8 @@ def init_db():
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
+                     ("close_days","INTEGER DEFAULT 0"),
+                     ("headcount_sent","INTEGER DEFAULT 0"),
                      ("followup_note","TEXT"),("followup_status","TEXT"),
                      ("followup_requested_at","TEXT"),("followup_submitted_at","TEXT"),
                      ("publishing_in_progress","INTEGER DEFAULT 0")):
@@ -260,6 +262,9 @@ def sync_registrations(class_id, _req_fn=None):
     c.commit(); c.close()
     print(f"[registrations] class #{class_id}: {added} added, {updated} updated, {total} attending")
     return {"added": added, "updated": updated, "attending": total, "fetched": len(people)}
+
+def money_str(n):
+    return f"${float(n or 0):,.2f}".replace(".00", "")
 
 def class_finance(cls, enrolled):
     """What a class actually made.
@@ -846,6 +851,7 @@ EMAIL_RULES = {
     "cancel_instructor": {"statuses": ("cancelled",), "future_only": False, "label": "instructor cancellation notice"},
     "low_alert":         {"statuses": ("approved",),  "future_only": True,  "label": "low-enrollment alert"},
     "followup_request":  {"statuses": ("approved",),  "future_only": False, "label": "follow-up writing request"},
+    "headcount":         {"statuses": ("approved",),  "future_only": True,  "label": "confirmed headcount"},
 }
 
 def email_sent_at(c, class_id, email_type):
@@ -934,6 +940,26 @@ def run_scheduler(asof=None):
                 send_class_email(c, cancelled, "cancel_instructor", [instr[0]] if instr else [],
                                  "Your class was auto-cancelled", body, today, cfg)
                 actions.append(f"AUTO-CANCELLED (refunded {len(students)}): {cls['title']}"); continue
+            close_days = int(cls.get("close_days") or 0)
+            if close_days and days == close_days:
+                # Registration has just closed. This number will not move now, which
+                # is the whole point of the cutoff: shop for materials against it.
+                instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
+                if instr_row:
+                    first = (instr_row["name"] or "").split(" ")[0] or "there"
+                    mat_line = (f"At {money_str(cls.get('material_cost'))} a head that is "
+                                f"{money_str((cls.get('material_cost') or 0) * enrolled)} of materials.\n\n"
+                                if cls.get("material_cost") else "")
+                    sent, why = send_class_email(c, cls, "headcount", [instr_row["email"]],
+                        f"Final numbers for {cls['title']}: {enrolled} booked",
+                        f"Hi {first},\n\nRegistration for \"{cls['title']}\" has closed.\n\n"
+                        f"You have {enrolled} student{'' if enrolled==1 else 's'} booked "
+                        f"(room for {cls.get('max_p')}).\n\n{mat_line}"
+                        f"That number is settled now, so you can shop with confidence.\n\n"
+                        f"See you on {cls.get('slot_date','')}.\nThe Gibby", today, cfg)
+                    if sent:
+                        c.execute("UPDATE classes SET headcount_sent=1 WHERE id=?",(cls["id"],))
+                        actions.append(f"final headcount to {instr_row['name']} ({enrolled}): {cls['title']}")
             if days == 2:
                 subj, body = mailer.tmpl_reminder(cls, cfg)
                 sent, why = send_class_email(c, cls, "reminder", students, subj, body, today, cfg)
@@ -1817,15 +1843,16 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
                 length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
-                is_series,session_count,session_dates,age_label,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?, 'pending', ?)""",
+                is_series,session_count,session_dates,age_label,close_days,status,created)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),u["id"],slot_date,slot_time,room,
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
                  b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
-                 is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")), now()))
+                 is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
+                 max(0, min(int(b.get("close_days") or 0), 30)), now()))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
                 c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",
@@ -2066,7 +2093,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
             if "age_range" in b:                       # keep the published phrase in sync
                 sets.append("age_label=?"); vals.append(age_label(b["age_range"]))
-            for k in ("max_p","min_p","ticket_price","instructor_pay"):
+            for k in ("max_p","min_p","ticket_price","instructor_pay","close_days"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
             sets += ["status=?","admin_note=?"]; vals += ["instructor_review", b.get("note","")]

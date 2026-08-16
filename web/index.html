@@ -923,6 +923,7 @@ function cardCls(c){
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
     <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money0(c.instructor_pay)} pay</div>
+    ${c.close_days?`<div class="meta" style="margin-top:6px">Registration closes ${c.close_days} day${c.close_days===1?'':'s'} before</div>`:''}
     ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
@@ -1382,7 +1383,7 @@ function applyDraft(p){
   const set=(id,v)=>{ const el=$(id); if(el && v!=null) el.value=v; };
   set('#f_title',p.title); set('#f_desc',p.description); set('#f_len',p.length);
   set('#f_pre',p.pre_class); set('#f_links',p.links); set('#f_max',p.max_p); set('#f_min',p.min_p);
-  set('#c_mat',p.material_cost); set('#f_room',p.room);
+  set('#c_mat',p.material_cost); set('#f_room',p.room); set('#f_close',p.close_days);
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
   if($('#f_own')) $('#f_own').checked = !!p.own_materials;
@@ -1438,6 +1439,17 @@ function openForm(slot, draftPayload){
 
     <div class="two"><div><label>Max</label><input id="f_max" type="number" value="16" oninput="calc()"></div>
       <div><label>Min</label><input id="f_min" type="number" value="6" oninput="calc()"></div></div>
+
+    <label>Close registration</label>
+    <select id="f_close">
+      <option value="0">When the class starts</option>
+      <option value="1">1 day before</option>
+      <option value="2">2 days before</option>
+      <option value="3" selected>3 days before</option>
+      <option value="5">5 days before</option>
+      <option value="7">1 week before</option>
+      <option value="14">2 weeks before</option></select>
+    <div class="hint">Eventbrite stops selling at this point, so your headcount is settled before you shop for materials.</div>
 
     <label>Photo for the graphic</label>
     <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
@@ -1557,7 +1569,7 @@ function collectForm(){
     own_materials: $('#f_own').checked, material_cost:+$('#c_mat').value,
     alcohol: seg('#f_alc')==='yes', max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
-    links:$('#f_links').value, photo:PHOTO,
+    links:$('#f_links').value, photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
     room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,

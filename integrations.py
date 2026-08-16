@@ -259,9 +259,20 @@ def post_eventbrite(cls, cfg, image_url=None):
     ev = _req(f"https://www.eventbriteapi.com/v3/organizations/{cfg['eventbrite_org_id']}/events/",
         token=cfg["eventbrite_token"], json_body={"event": event})
     eid = ev.get("id")
+    ticket = {"name": "Admission", "quantity_total": cls.get("max_p"),
+              "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}
+    # Registration cutoff. sales_end is a writable field on the ticket class, so
+    # Eventbrite itself stops selling - the instructor gets a headcount that cannot
+    # then change under them.
+    close_days = int(cls.get("close_days") or 0)
+    if close_days > 0:
+        try:
+            cutoff = datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ") - datetime.timedelta(days=close_days)
+            ticket["sales_end"] = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        except Exception as e:
+            print("[eventbrite] could not set the registration cutoff:", e)
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
-        json_body={"ticket_class": {"name": "Admission", "quantity_total": cls.get("max_p"),
-            "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}})
+        json_body={"ticket_class": ticket})
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
     return _ok(eid, "event published" + (" with Canva graphic" if logo_id else ""))
 
