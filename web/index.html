@@ -592,6 +592,8 @@ function cardCls(c){
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='instructor' ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Volunteer requested</div>`:''}
+    ${c.status==='pending' && actingRole()==='admin' && c.reviewing_admin_name && (!ME||c.reviewing_admin_id!==ME.id) ? `
+      <div class="meta" style="margin-top:10px;color:#B45309;font-weight:800">👀 ${esc(c.reviewing_admin_name)} is reviewing this (since ${esc(c.review_started_at||'')})</div>`:''}
     ${c.status==='pending' && actingRole()==='admin' ? `
       <div class="two" style="margin-top:14px">
         <button class="btn warn" onclick="markIncomplete(${c.id})">Send back</button>
@@ -637,11 +639,29 @@ function cardCls(c){
     <div id="gfx${c.id}"></div>
   </div>`;
 }
-async function approve(id){ await api(`/api/classes/${id}/approve`,'POST'); adminApprovals(); }
+/* If another admin decided first the server answers 409 with a friendly line.
+   Show exactly that and refresh the queue so the stale card disappears. */
+async function decideClass(id, path, body){
+  try{
+    await api(`/api/classes/${id}/${path}`,'POST',body);
+  }catch(e){
+    if(e.data && e.data.status){ alert(e.message); adminApprovals(); return false; }
+    throw e;
+  }
+  adminApprovals(); return true;
+}
+async function approve(id){ return decideClass(id,'approve'); }
 const AGES=['All Ages','Toddlers','Ages 7–9','Ages 9–12','Ages 16+','Ages 21+'];
 function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
-function openEditForm(id){
+async function openEditForm(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
+  // Tell the server this submission is being reviewed, and find out if someone
+  // else already had it open.
+  try{
+    const r=await api(`/api/classes/${id}/review-open`,'POST');
+    if(r.status && r.status!=='pending'){ alert('This submission is no longer pending. Someone else has already acted on it.'); return adminApprovals(); }
+    if(r.also_reviewing) alert(`Heads up: ${r.also_reviewing.name} opened this submission at ${r.also_reviewing.since}.\n\nIf you both decide, only the first one counts.`);
+  }catch(_){ /* advisory only; never block the edit form on it */ }
   $('#view').innerHTML=`
     <h2>Edit &amp; <em>return</em></h2>
     <p class="sub">Make changes, then send to ${esc(c.instructor_name)} to approve before it publishes.</p>
@@ -675,7 +695,7 @@ async function instrDecline(id){ const note=prompt('Optional note back to the ad
 async function markIncomplete(id){
   const note = prompt("What needs fixing? (the instructor sees this)");
   if(note===null) return;
-  await api(`/api/classes/${id}/incomplete`,'POST',{note}); adminApprovals();
+  return decideClass(id,'incomplete',{note});
 }
 
 async function emailClass(id,kind){

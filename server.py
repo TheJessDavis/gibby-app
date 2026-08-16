@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "2.4-error-boundaries"
+VERSION = "2.5-approval-lock"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -87,7 +87,7 @@ def init_db():
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
-                     ("links","TEXT")):
+                     ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.commit()
@@ -184,6 +184,37 @@ def audit(c, class_id, prev_status, new_status, actor_id):
     c.execute("INSERT INTO audit_log(class_id,prev_status,new_status,actor_id,ts,snapshot) VALUES(?,?,?,?,?,?)",
               (class_id, prev_status, new_status, actor_id, now(), snap))
 
+# ------------------------------------------------- decision concurrency ----
+# SQLite has no SELECT ... FOR UPDATE (it has no row-level locks at all; it locks
+# the whole database file). The equivalent guarantee here is two-part:
+#   1. BEGIN IMMEDIATE takes the write lock at the START of the transaction, so a
+#      second admin's decision cannot interleave between our read and our write.
+#   2. The status change is a compare-and-swap: UPDATE ... WHERE status='pending'.
+#      rowcount tells us whether WE made the change or someone beat us to it. That
+#      CAS is the optimistic lock, and it holds even if the transaction is retried.
+def begin_immediate(c):
+    c.isolation_level = None          # take manual control of the transaction
+    c.execute("BEGIN IMMEDIATE")
+
+def decided_by(c, class_id, from_status="pending"):
+    """Who moved this class out of `from_status`, per the immutable audit log.
+    Pass 'graphic_review' to find who published it, not who approved it."""
+    r = c.execute("""SELECT u.name AS name FROM audit_log a
+                     LEFT JOIN users u ON u.id = a.actor_id
+                     WHERE a.class_id=? AND a.prev_status=? AND a.new_status<>a.prev_status
+                     ORDER BY a.id DESC LIMIT 1""", (class_id, from_status)).fetchone()
+    return (r["name"] if r and r["name"] else None)
+
+DECISION_WORD = {"graphic_review":"approved", "approved":"approved", "incomplete":"sent back",
+                 "instructor_review":"edited", "cancelled":"cancelled"}
+
+def lost_race_message(c, cls):
+    """The friendly 'someone beat you to it' line for a class that is no longer pending."""
+    who = decided_by(c, cls["id"])
+    what = DECISION_WORD.get(cls["status"], "updated")
+    return (f"This submission was just {what} by {who}."
+            if who else f"This submission was just {what} by another admin.")
+
 def merge_external(cid, updates):
     """Merge keys into a class's external_ids JSON without clobbering what's there."""
     c = db()
@@ -193,14 +224,18 @@ def merge_external(cid, updates):
     c.execute("UPDATE classes SET external_ids=? WHERE id=?",(json.dumps(cur), cid))
     c.commit(); c.close()
 
-def start_graphic_review(c, cls, actor_id=None):
+def start_graphic_review(c, cls, actor_id=None, spawn=True):
     """Admin approved the class: build the Canva graphic and HOLD for review.
     Nothing is posted publicly yet. The admin sees the poster, can adjust the
-    headline/script line, and only then publishes."""
+    headline/script line, and only then publishes. Pass spawn=False when calling
+    inside a transaction and start the render yourself after the commit."""
     head = (cls.get("headline") or "").strip() or (cls.get("title") or "")
     c.execute("UPDATE classes SET status='graphic_review', headline=? WHERE id=?",(head, cls["id"]))
     audit(c, cls["id"], cls.get("status"), "graphic_review", actor_id)
-    threading.Thread(target=render_graphic_async, args=({**dict(cls), "headline": head},), daemon=True).start()
+    prepared = {**dict(cls), "headline": head, "status": "graphic_review"}
+    if spawn:
+        threading.Thread(target=render_graphic_async, args=(prepared,), daemon=True).start()
+    return prepared
 
 def render_graphic_async(cls):
     """Off-request-thread: build the poster from the Canva brand template. Stores the
@@ -214,16 +249,27 @@ def render_graphic_async(cls):
         merge_external(cls["id"], {"canva_status": f"error: {e}"})
         print("[graphic] error:", e)
 
-def publish_now(c, cls, actor_id=None):
+def publish_now(c, cls, actor_id=None, spawn=True):
     """Final step, after the admin has reviewed the graphic: post to Eventbrite with
-    that graphic attached, add the class to the Google Calendar, email the instructor."""
+    that graphic attached, add the class to the Google Calendar, email the instructor.
+    Pass spawn=False inside a transaction and run the returned side effects after the
+    commit, so no network work happens while holding the write lock."""
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
     c.execute("UPDATE classes SET status='approved' WHERE id=?",(cls["id"],))
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
     seed_registrations(c, cls)
-    subj, body = mailer.tmpl_approved(cls, instr); mailer.send(instr["email"], subj, body)
+    subj, body = mailer.tmpl_approved(cls, instr)
     img = json.loads(cls.get("external_ids") or "{}").get("canva_image_url")
-    threading.Thread(target=_publish_async, args=(dict(cls), instr["name"], img), daemon=True).start()
+    side = {"to": instr["email"], "subject": subj, "body": body,
+            "cls": dict(cls), "instructor_name": instr["name"], "image_url": img}
+    if spawn: run_publish_side_effects(side)
+    return side
+
+def run_publish_side_effects(side):
+    if not side: return
+    mailer.send(side["to"], side["subject"], side["body"])
+    threading.Thread(target=_publish_async,
+                     args=(side["cls"], side["instructor_name"], side["image_url"]), daemon=True).start()
 
 def _publish_async(cls, instructor_name, image_url=None):
     """Off-request-thread: post to Eventbrite (attaching the already-reviewed graphic)
@@ -570,8 +616,11 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def _classes(self, where, args=()):
         c = db()
-        rows = c.execute(f"""SELECT c.*, u.name AS instructor_name FROM classes c
-                             JOIN users u ON u.id=c.instructor_id {where} ORDER BY c.created DESC""", args).fetchall()
+        rows = c.execute(f"""SELECT c.*, u.name AS instructor_name, ra.name AS reviewing_admin_name
+                             FROM classes c
+                             JOIN users u ON u.id=c.instructor_id
+                             LEFT JOIN users ra ON ra.id=c.reviewing_admin_id
+                             {where} ORDER BY c.created DESC""", args).fetchall()
         out=[]
         for r in rows:
             d=dict(r); d["supplies"]=json.loads(d["supplies"] or "[]"); d["external_ids"]=json.loads(d["external_ids"] or "{}")
@@ -783,6 +832,25 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.decide(p, approve=True)
         if p.startswith("/api/classes/") and p.endswith("/incomplete"):
             return self.decide(p, approve=False)
+        if p.startswith("/api/classes/") and p.endswith("/review-open"):
+            # An admin opened this submission. Record who and when, so the queue can
+            # warn the next admin before they collide. Advisory only: the real
+            # protection is the compare-and-swap in decide().
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); c = db()
+            row = c.execute("SELECT status, reviewing_admin_id, review_started_at FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            other = None
+            if row["reviewing_admin_id"] and row["reviewing_admin_id"] != u["id"]:
+                o = c.execute("SELECT name FROM users WHERE id=?",(row["reviewing_admin_id"],)).fetchone()
+                other = {"name": o["name"] if o else "another admin", "since": row["review_started_at"]}
+            # only claim a submission that is actually still awaiting a decision
+            if row["status"] == "pending":
+                c.execute("UPDATE classes SET reviewing_admin_id=?, review_started_at=? WHERE id=?",
+                          (u["id"], now(), cid))
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "status":row["status"], "also_reviewing":other})
         if p.startswith("/api/classes/") and p.endswith("/graphic"):   # save poster text + rebuild it
             u = self.require("admin")
             if not u: return
@@ -799,13 +867,32 @@ class H(http.server.BaseHTTPRequestHandler):
         if p.startswith("/api/classes/") and p.endswith("/publish"):   # admin approved the graphic -> go live
             u = self.require("admin")
             if not u: return
-            cid = p.split("/")[3]; c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
-            if not row: c.close(); return self.send_json({"error":"not found"},404)
-            cls = dict(row)
-            if cls["status"] != "graphic_review":
-                c.close(); return self.send_json({"error":"This class is not waiting on graphic review."},400)
-            publish_now(c, cls, u["id"]); c.commit(); c.close()
+            cid = int(p.split("/")[3]); c = db()
+            begin_immediate(c)      # same lock as decide(): two admins cannot both publish
+            try:
+                row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+                if not row:
+                    c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"not found"},404)
+                cls = dict(row)
+                if cls["status"] != "graphic_review":
+                    who = decided_by(c, cid, "graphic_review")   # the publisher, not the approver
+                    c.execute("ROLLBACK"); c.close()
+                    msg = (f"This submission was already published by {who}." if who and cls["status"]=="approved"
+                           else "This class is not waiting on graphic review.")
+                    return self.send_json({"error":msg, "status":cls["status"]}, 409)
+                # CAS: only one publisher can move graphic_review -> approved
+                if c.execute("UPDATE classes SET status='approved' WHERE id=? AND status='graphic_review'",
+                             (cid,)).rowcount != 1:
+                    c.execute("ROLLBACK"); c.close()
+                    return self.send_json({"error":"This class was just published by another admin.","status":"approved"},409)
+                pending_side_effects = publish_now(c, cls, u["id"], spawn=False)
+                c.execute("COMMIT")
+            except Exception:
+                try: c.execute("ROLLBACK")
+                except Exception: pass
+                c.close(); raise
+            c.close()
+            run_publish_side_effects(pending_side_effects)
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/promote"):
             u = self.require("admin")
@@ -926,26 +1013,66 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_json({"error":"not found"},404)
 
     def decide(self, p, approve):
+        """Approve or send back a pending submission, under a lock so that two admins
+        deciding at the same moment cannot both win. Network work (emails, the Canva
+        render) happens AFTER the commit so it never runs holding the write lock."""
         u = self.require("admin")
         if not u: return
-        cid = p.split("/")[3]
+        cid = int(p.split("/")[3])
         b = self.read_json()
-        c=db(); row=c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
-        if not row: c.close(); return self.send_json({"error":"not found"},404)
-        cls=dict(row)
-        instr=dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
-        if approve:
-            start_graphic_review(c, cls, u["id"])   # build the poster, hold for review
-        else:
-            c.execute("UPDATE classes SET status='incomplete', admin_note=? WHERE id=?",(b.get("note",""),cid))
-            audit(c, cid, cls.get("status"), "incomplete", u["id"])
-            # release all claimed slots back to available
-            sids = json.loads(cls.get("slot_ids") or "[]")
-            if sids:
-                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(sids))})", sids)
-            subj, body = mailer.tmpl_incomplete(cls, instr, b.get("note","")); mailer.send(instr["email"], subj, body)
-        c.commit(); c.close()
-        return self.send_json({"ok":True})
+        target = "graphic_review" if approve else "incomplete"
+        after_commit = None
+
+        c = db()
+        begin_immediate(c)                  # write lock for the whole decision
+        try:
+            row = c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone()
+            if not row:
+                c.execute("ROLLBACK"); c.close()
+                return self.send_json({"error": "not found"}, 404)
+            cls = dict(row)
+
+            # Guard 1: is it still pending? Guard 2 (the CAS below): did we win?
+            if cls["status"] != "pending":
+                msg = lost_race_message(c, cls)
+                c.execute("ROLLBACK"); c.close()
+                print(f"[decision race] class #{cid}: {u['name']} was too late. {msg}")
+                return self.send_json({"error": msg, "status": cls["status"]}, 409)
+
+            # Compare-and-swap. Only one caller can turn 'pending' into the target.
+            if c.execute("UPDATE classes SET status=? WHERE id=? AND status='pending'",
+                         (target, cid)).rowcount != 1:
+                fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
+                msg = lost_race_message(c, fresh)
+                c.execute("ROLLBACK"); c.close()
+                print(f"[decision race] class #{cid}: {u['name']} lost the compare-and-swap. {msg}")
+                return self.send_json({"error": msg, "status": fresh["status"]}, 409)
+
+            c.execute("UPDATE classes SET reviewing_admin_id=NULL, review_started_at=NULL WHERE id=?", (cid,))
+            instr = dict(c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone())
+            if approve:
+                prepared = start_graphic_review(c, cls, u["id"], spawn=False)
+                after_commit = ("render", prepared)
+            else:
+                c.execute("UPDATE classes SET admin_note=? WHERE id=?", (b.get("note",""), cid))
+                audit(c, cid, "pending", "incomplete", u["id"])
+                sids = json.loads(cls.get("slot_ids") or "[]")     # release the claimed slots
+                if sids:
+                    c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(sids))})", sids)
+                after_commit = ("email", mailer.tmpl_incomplete(cls, instr, b.get("note","")), instr["email"])
+            c.execute("COMMIT")
+        except Exception:
+            try: c.execute("ROLLBACK")
+            except Exception: pass
+            c.close(); raise
+        c.close()
+
+        if after_commit and after_commit[0] == "render":
+            threading.Thread(target=render_graphic_async, args=(after_commit[1],), daemon=True).start()
+        elif after_commit and after_commit[0] == "email":
+            (subj, body), to = after_commit[1], after_commit[2]
+            mailer.send(to, subj, body)
+        return self.send_json({"ok": True})
 
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 
