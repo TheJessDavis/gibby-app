@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "3.1-rate-limit"
+VERSION = "3.2-session-expiry"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -115,6 +115,17 @@ def init_db():
         try: c.execute(f"ALTER TABLE {tbl} ADD COLUMN deleted_at TEXT")
         except sqlite3.OperationalError: pass
         c.execute(f"CREATE INDEX IF NOT EXISTS {tbl}_deleted_at ON {tbl}(deleted_at)")
+    # Session lifetime + rotating refresh tokens.
+    for col, typ in (("expires_at","TEXT"), ("refresh_token","TEXT"),
+                     ("refresh_expires_at","TEXT"), ("revoked_at","TEXT"),
+                     ("rotated_from","TEXT"), ("revoked_reason","TEXT")):
+        try: c.execute(f"ALTER TABLE sessions ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError: pass
+    c.execute("CREATE INDEX IF NOT EXISTS sessions_refresh ON sessions(refresh_token)")
+    c.execute("CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id)")
+    # Any session created before expiry existed has no expires_at and would other-
+    # wise live forever. Retire them so everyone re-authenticates once.
+    c.execute("UPDATE sessions SET revoked_at=? WHERE expires_at IS NULL AND revoked_at IS NULL", (now(),))
     c.commit()
     seed(c)
     c.close()
@@ -194,6 +205,57 @@ def seed(c):
 
 # Outbound posting now runs through the retry queue below (queue_publish), which
 # calls integrations.py one platform at a time so each can fail and retry alone.
+
+# ---------------------------------------------------------------- sessions ----
+# These are opaque, database-backed session tokens, NOT JWTs. That matters: every
+# request looks the token up, so revoking a row takes effect on the very next
+# request. There is no window during which a logged-out token still works, and no
+# need for a separate blocklist to compensate for un-revocable tokens - revoked_at
+# on the row IS the blocklist, and it doubles as an audit trail.
+ACCESS_TTL  = 8 * 3600            # access token: 8 hours
+REFRESH_TTL = 30 * 24 * 3600      # refresh token: 30 days, single use
+
+def _ts(seconds_ahead=0):
+    return (datetime.datetime.now() + datetime.timedelta(seconds=seconds_ahead)).isoformat(timespec="seconds")
+
+def new_session(c, user_id, rotated_from=None):
+    """Issue a fresh access + refresh pair. Returns (access, refresh)."""
+    access, refresh = secrets.token_hex(24), secrets.token_hex(32)
+    c.execute("""INSERT INTO sessions(token,user_id,created,expires_at,refresh_token,
+                                      refresh_expires_at,rotated_from)
+                 VALUES(?,?,?,?,?,?,?)""",
+              (access, user_id, now(), _ts(ACCESS_TTL), refresh, _ts(REFRESH_TTL), rotated_from))
+    return access, refresh
+
+def session_cookies(access, refresh, secure=""):
+    return [f"gibby_session={access}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ACCESS_TTL}{secure}",
+            f"gibby_refresh={refresh}; Path=/; HttpOnly; SameSite=Lax; Max-Age={REFRESH_TTL}{secure}"]
+
+CLEAR_COOKIES = ["gibby_session=; Path=/; Max-Age=0", "gibby_refresh=; Path=/; Max-Age=0"]
+
+def revoke_session(c, token=None, refresh=None, reason="revoked"):
+    """reason matters: a token replayed after ROTATION is a theft signal, while one
+    replayed after a normal logout is just a stale tab."""
+    if token:   c.execute("UPDATE sessions SET revoked_at=?, revoked_reason=? WHERE token=? AND revoked_at IS NULL", (now(), reason, token))
+    if refresh: c.execute("UPDATE sessions SET revoked_at=?, revoked_reason=? WHERE refresh_token=? AND revoked_at IS NULL", (now(), reason, refresh))
+
+def revoke_all_for_user(c, user_id, why="", reason="revoked"):
+    n = c.execute("UPDATE sessions SET revoked_at=?, revoked_reason=? WHERE user_id=? AND revoked_at IS NULL",
+                  (now(), reason, user_id)).rowcount
+    if n: print(f"[session] revoked {n} session(s) for user {user_id} {why}")
+    return n
+
+def prune_sessions():
+    """Drop rows well past any possible use. Transient auth state, so a hard delete
+    is right here (same reasoning as the rate-limit table)."""
+    try:
+        c = db()
+        n = c.execute("DELETE FROM sessions WHERE refresh_expires_at IS NOT NULL AND refresh_expires_at < ?",
+                      (_ts(-7 * 24 * 3600),)).rowcount
+        c.commit(); c.close()
+        if n: print(f"[session] pruned {n} long-expired session row(s)")
+    except Exception as e:
+        print("[session] prune failed:", e)
 
 # ------------------------------------------------------------ rate limiting ----
 # A true sliding window: every accepted request is logged with its timestamp and a
@@ -726,6 +788,7 @@ def scheduler_loop():
             r = sync_calendar()
             if r: print("[gcal] sync", r)
         except Exception as e: print("[gcal] sync error:", e)
+        prune_sessions()          # tidy away long-dead auth rows
         time.sleep(3600)   # check hourly; day-based rules fire once per class
 
 # ------------------------------------------------------------- handler ----
@@ -733,14 +796,22 @@ class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass  # quiet
 
     # -- helpers --
-    def current_user(self):
+    def cookie(self, name):
         ck = http.cookies.SimpleCookie(self.headers.get("Cookie",""))
-        tok = ck["gibby_session"].value if "gibby_session" in ck else None
+        return ck[name].value if name in ck else None
+
+    def current_user(self):
+        """Every request re-checks the token against the database, so expiry,
+        logout and account removal all take effect immediately."""
+        tok = self.cookie("gibby_session")
         if not tok: return None
         c = db()
-        # A soft-deleted account loses its existing sessions immediately.
         row = c.execute("""SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id
-                           WHERE s.token=? AND u.deleted_at IS NULL""",(tok,)).fetchone()
+                           WHERE s.token=?
+                             AND u.deleted_at IS NULL          -- archived account
+                             AND s.revoked_at IS NULL          -- logged out / rotated
+                             AND s.expires_at > ?              -- access token still live
+                        """, (tok, now())).fetchone()
         c.close()
         return dict(row) if row else None
 
@@ -749,7 +820,9 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type","application/json")
         self.send_header("Content-Length",str(len(body)))
-        if cookie: self.send_header("Set-Cookie", cookie)
+        if cookie:
+            for ck in ([cookie] if isinstance(cookie, str) else cookie):
+                self.send_header("Set-Cookie", ck)
         for k, v in (headers or {}).items(): self.send_header(k, str(v))
         self.end_headers()
         self.wfile.write(body)
@@ -1005,17 +1078,60 @@ class H(http.server.BaseHTTPRequestHandler):
             h,_ = hash_pw(b.get("password",""), row["pw_salt"])
             if h != row["pw_hash"]:
                 c.close(); return self.send_json({"error":"Wrong password."},401)
-            tok = secrets.token_hex(24)
-            c.execute("INSERT INTO sessions(token,user_id,created) VALUES(?,?,?)",(tok,row["id"],now()))
+            access, refresh = new_session(c, row["id"])
             c.commit(); c.close()
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
-            ck = f"gibby_session={tok}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800{secure}"
-            return self.send_json({"user":{"name":row["name"],"role":row["role"],"email":row["email"]}}, cookie=ck)
+            return self.send_json({"user":{"name":row["name"],"role":row["role"],"email":row["email"]},
+                                   "expires_in": ACCESS_TTL},
+                                  cookie=session_cookies(access, refresh, secure))
+        if p == "/api/refresh":
+            # Single-use rotation: the presented refresh token is revoked and a brand
+            # new access+refresh pair is issued.
+            rtok = self.cookie("gibby_refresh")
+            if not rtok: return self.send_json({"error":"no refresh token"},401, cookie=CLEAR_COOKIES)
+            c = db()
+            row = c.execute("""SELECT s.*, u.deleted_at AS user_deleted FROM sessions s
+                               JOIN users u ON u.id = s.user_id WHERE s.refresh_token=?""",(rtok,)).fetchone()
+            if not row or row["user_deleted"]:
+                c.close(); return self.send_json({"error":"invalid refresh token"},401, cookie=CLEAR_COOKIES)
+            if row["revoked_at"]:
+                if row["revoked_reason"] == "rotated":
+                    # A single-use token presented twice after it was already spent
+                    # means it leaked. Kill every session this user has.
+                    revoke_all_for_user(c, row["user_id"], "(refresh token reuse detected)", reason="reuse")
+                    c.commit(); c.close()
+                    print(f"[session] REFRESH REUSE for user {row['user_id']}: all sessions revoked")
+                    return self.send_json({"error":"That sign-in was used somewhere else. For safety you have been signed out everywhere. Please sign in again."},
+                                          401, cookie=CLEAR_COOKIES)
+                # logged out, archived, or signed out everywhere: just refuse
+                c.close()
+                return self.send_json({"error":"Your session has ended. Please sign in again."},
+                                      401, cookie=CLEAR_COOKIES)
+            if row["refresh_expires_at"] and row["refresh_expires_at"] <= now():
+                revoke_session(c, refresh=rtok, reason="expired"); c.commit(); c.close()
+                return self.send_json({"error":"Your session has expired. Please sign in again."},
+                                      401, cookie=CLEAR_COOKIES)
+            revoke_session(c, token=row["token"], refresh=rtok, reason="rotated")   # old pair dies here
+            access, refresh = new_session(c, row["user_id"], rotated_from=row["token"])
+            urow = c.execute("SELECT name,role,email FROM users WHERE id=?",(row["user_id"],)).fetchone()
+            c.commit(); c.close()
+            secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
+            return self.send_json({"ok":True, "user":dict(urow), "expires_in": ACCESS_TTL},
+                                  cookie=session_cookies(access, refresh, secure))
         if p == "/api/logout":
-            ck = http.cookies.SimpleCookie(self.headers.get("Cookie",""))
-            if "gibby_session" in ck:
-                c=db(); c.execute("DELETE FROM sessions WHERE token=?",(ck["gibby_session"].value,)); c.commit(); c.close()
-            return self.send_json({"ok":True}, cookie="gibby_session=; Path=/; Max-Age=0")
+            # Revoke BOTH halves server-side. The next request with either token fails.
+            access_tok, refresh_tok = self.cookie("gibby_session"), self.cookie("gibby_refresh")
+            if access_tok or refresh_tok:
+                c = db()
+                if access_tok:  revoke_session(c, token=access_tok, reason="logout")
+                if refresh_tok: revoke_session(c, refresh=refresh_tok, reason="logout")
+                c.commit(); c.close()
+            return self.send_json({"ok":True}, cookie=CLEAR_COOKIES)
+        if p == "/api/logout-everywhere":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); n = revoke_all_for_user(c, u["id"], "(signed out everywhere)", reason="logout"); c.commit(); c.close()
+            return self.send_json({"ok":True, "revoked":n}, cookie=CLEAR_COOKIES)
         if p.startswith("/api/archive/"):
             # Soft delete / restore. Nothing is ever removed from the database; a row
             # with deleted_at set simply stops appearing in normal queries.
@@ -1042,7 +1158,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(sids))})", sids)
                     audit(c, rid, row["status"], "archived", u["id"])
                 if table == "users":
-                    c.execute("DELETE FROM sessions WHERE user_id=?", (rid,))   # sign them out now
+                    revoke_all_for_user(c, rid, "(account archived)", reason="archived")   # sign them out now
             else:
                 c.execute(f"UPDATE {table} SET deleted_at=NULL WHERE id=?", (rid,))
                 if table == "classes": audit(c, rid, "archived", row["status"], u["id"])

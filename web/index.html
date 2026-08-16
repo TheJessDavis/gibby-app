@@ -148,9 +148,27 @@
 <script>
 const $ = s => document.querySelector(s);
 const el = (h)=>{const d=document.createElement('div');d.innerHTML=h;return d.firstElementChild;};
-async function api(path, method='GET', body){
+/* The access token lasts 8 hours. When it expires the server answers 401; we spend
+   the 30-day refresh token once to get a new pair and replay the request. The
+   refresh is shared between concurrent calls so a burst of requests triggers one
+   rotation, not several (each rotation invalidates the last). */
+let REFRESHING = null;
+function refreshSession(){
+  if(!REFRESHING){
+    REFRESHING = fetch('/api/refresh',{method:'POST'})
+      .then(r=>r.ok)
+      .catch(()=>false)
+      .finally(()=>{ setTimeout(()=>{ REFRESHING=null; }, 0); });
+  }
+  return REFRESHING;
+}
+const NO_REFRESH = ['/api/login','/api/refresh','/api/logout','/api/me'];
+async function api(path, method='GET', body, _retried){
   const r = await fetch(path,{method,headers:body?{'Content-Type':'application/json'}:{},
     body:body?JSON.stringify(body):undefined});
+  if(r.status===401 && !_retried && !NO_REFRESH.includes(path)){
+    if(await refreshSession()) return api(path, method, body, true);
+  }
   const j = await r.json().catch(()=>({}));
   if(!r.ok) throw Object.assign(new Error(j.error||'error'), {data:j, status:r.status,
     retryAfter: r.headers.get('Retry-After')});
@@ -224,7 +242,10 @@ function boot(){ return boundary('boot', '#view', bootInner); }
 async function bootInner(){
   const params=new URLSearchParams(location.search);
   if(params.get('reset')){ $('#top').style.display='none'; return renderReset(params.get('reset')); }
-  const {user} = await api('/api/me');
+  let {user} = await api('/api/me');
+  // Access token gone but the refresh cookie may still be good (e.g. reopening the
+  // app the next morning). Spend it once before falling back to the login screen.
+  if(!user && await refreshSession()){ user = (await api('/api/me')).user; }
   ME=user;
   if(!user){ renderLogin(); $('#top').style.display='none'; return; }
   if(user.must_change_pw){ $('#top').style.display='flex'; $('#who').textContent=user.name; return renderChangePw(); }
