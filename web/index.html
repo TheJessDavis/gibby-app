@@ -152,11 +152,17 @@ const el = (h)=>{const d=document.createElement('div');d.innerHTML=h;return d.fi
    the 30-day refresh token once to get a new pair and replay the request. The
    refresh is shared between concurrent calls so a burst of requests triggers one
    rotation, not several (each rotation invalidates the last). */
+/* CSRF: the server hands us a per-session token in the response body (never a
+   cookie, so it cannot be sent automatically by a cross-site request). We keep it
+   in memory and echo it on every state-changing call. */
+let CSRF = null;
+function noteCsrf(j){ if(j && j.csrf_token) CSRF = j.csrf_token; }
+
 let REFRESHING = null;
 function refreshSession(){
   if(!REFRESHING){
     REFRESHING = fetch('/api/refresh',{method:'POST'})
-      .then(r=>r.ok)
+      .then(async r=>{ if(r.ok) noteCsrf(await r.json().catch(()=>({}))); return r.ok; })
       .catch(()=>false)
       .finally(()=>{ setTimeout(()=>{ REFRESHING=null; }, 0); });
   }
@@ -164,12 +170,19 @@ function refreshSession(){
 }
 const NO_REFRESH = ['/api/login','/api/refresh','/api/logout','/api/me'];
 async function api(path, method='GET', body, _retried){
-  const r = await fetch(path,{method,headers:body?{'Content-Type':'application/json'}:{},
-    body:body?JSON.stringify(body):undefined});
+  const headers = body ? {'Content-Type':'application/json'} : {};
+  if(method !== 'GET' && CSRF) headers['X-CSRF-Token'] = CSRF;
+  const r = await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined});
   if(r.status===401 && !_retried && !NO_REFRESH.includes(path)){
     if(await refreshSession()) return api(path, method, body, true);
   }
   const j = await r.json().catch(()=>({}));
+  // Token went stale (session rotated in another tab): re-sync once and retry.
+  if(r.status===403 && j.csrf && !_retried){
+    const me = await fetch('/api/me').then(x=>x.json()).catch(()=>null);
+    if(me && me.csrf_token){ noteCsrf(me); return api(path, method, body, true); }
+  }
+  noteCsrf(j);
   if(!r.ok) throw Object.assign(new Error(j.error||'error'), {data:j, status:r.status,
     retryAfter: r.headers.get('Retry-After')});
   return j;

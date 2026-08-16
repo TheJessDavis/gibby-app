@@ -18,7 +18,7 @@ DB   = os.path.join(DATA_DIR, "gibby.db")
 WEB  = os.path.join(ROOT, "web")
 PORT = int(os.environ.get("PORT", "8000"))
 SEED_PW = os.environ.get("SEED_PASSWORD", "gibby123")   # override in production!
-VERSION = "3.3-drafts"
+VERSION = "3.4-csrf"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -127,7 +127,7 @@ def init_db():
     # Session lifetime + rotating refresh tokens.
     for col, typ in (("expires_at","TEXT"), ("refresh_token","TEXT"),
                      ("refresh_expires_at","TEXT"), ("revoked_at","TEXT"),
-                     ("rotated_from","TEXT"), ("revoked_reason","TEXT")):
+                     ("rotated_from","TEXT"), ("revoked_reason","TEXT"), ("csrf_token","TEXT")):
         try: c.execute(f"ALTER TABLE sessions ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.execute("CREATE INDEX IF NOT EXISTS sessions_refresh ON sessions(refresh_token)")
@@ -228,19 +228,50 @@ def _ts(seconds_ahead=0):
     return (datetime.datetime.now() + datetime.timedelta(seconds=seconds_ahead)).isoformat(timespec="seconds")
 
 def new_session(c, user_id, rotated_from=None):
-    """Issue a fresh access + refresh pair. Returns (access, refresh)."""
+    """Issue a fresh access + refresh pair plus a CSRF token bound to the session.
+    Returns (access, refresh, csrf)."""
     access, refresh = secrets.token_hex(24), secrets.token_hex(32)
+    csrf = secrets.token_urlsafe(32)
     c.execute("""INSERT INTO sessions(token,user_id,created,expires_at,refresh_token,
-                                      refresh_expires_at,rotated_from)
-                 VALUES(?,?,?,?,?,?,?)""",
-              (access, user_id, now(), _ts(ACCESS_TTL), refresh, _ts(REFRESH_TTL), rotated_from))
-    return access, refresh
+                                      refresh_expires_at,rotated_from,csrf_token)
+                 VALUES(?,?,?,?,?,?,?,?)""",
+              (access, user_id, now(), _ts(ACCESS_TTL), refresh, _ts(REFRESH_TTL), rotated_from, csrf))
+    return access, refresh, csrf
 
 def session_cookies(access, refresh, secure=""):
     return [f"gibby_session={access}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ACCESS_TTL}{secure}",
             f"gibby_refresh={refresh}; Path=/; HttpOnly; SameSite=Lax; Max-Age={REFRESH_TTL}{secure}"]
 
 CLEAR_COOKIES = ["gibby_session=; Path=/; Max-Age=0", "gibby_refresh=; Path=/; Max-Age=0"]
+
+# Synchronizer-token CSRF. The token is generated per session and held server-side
+# on the session row; the client echoes it in X-CSRF-Token on every state change.
+#
+# Two notes on the shape of this app:
+#   * There are no HTML <form> elements - it is a SPA that sends JSON via fetch -
+#     so there is nowhere to put a hidden field. The header is the mechanism.
+#   * The token is deliberately NOT a cookie. It is handed to the page in an API
+#     response body and kept in memory, so it cannot ride along automatically the
+#     way a cookie would, which is the whole point.
+#
+# These routes are exempt because they run before a session exists (or authenticate
+# by another means entirely):
+CSRF_EXEMPT = {
+    "/api/login",         # no session yet
+    "/api/refresh",       # authenticated by the refresh cookie; issues the next CSRF token
+    "/api/forgot",        # anonymous
+    "/api/reset",         # authenticated by the emailed reset token
+    "/api/client-error",  # error boundaries must be able to report before sign-in
+}
+
+def session_csrf(token):
+    if not token: return None
+    c = db()
+    r = c.execute("""SELECT csrf_token FROM sessions
+                     WHERE token=? AND revoked_at IS NULL AND expires_at > ?""",
+                  (token, now())).fetchone()
+    c.close()
+    return r["csrf_token"] if r else None
 
 def revoke_session(c, token=None, refresh=None, reason="revoked"):
     """reason matters: a token replayed after ROTATION is a theft signal, while one
@@ -875,8 +906,26 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         p = urllib.parse.urlparse(self.path).path
-        if p.startswith("/api/"): return self.api_post(p)
-        self.send_error(404)
+        if not p.startswith("/api/"): return self.send_error(404)
+        # Single choke point: every state-changing request is checked here, so a new
+        # endpoint cannot forget to protect itself.
+        if not self.csrf_ok(p): return
+        return self.api_post(p)
+
+    def csrf_ok(self, path):
+        """Synchronizer token check. Sends the 403 itself and returns False on failure."""
+        if path in CSRF_EXEMPT: return True
+        cookie_tok = self.cookie("gibby_session")
+        if not cookie_tok: return True          # unauthenticated: the handler's own 401 applies
+        expected = session_csrf(cookie_tok)
+        if not expected: return True            # dead session: again, let the 401 happen
+        sent = self.headers.get("X-CSRF-Token") or ""
+        if sent and secrets.compare_digest(sent, expected): return True
+        print(f"[csrf] rejected {path} - {'missing' if not sent else 'mismatched'} token")
+        self.send_json({"error":"Your session security token was missing or out of date. "
+                                "Please refresh the page and try again.",
+                        "csrf": True}, 403)
+        return False
 
     # -- static files --
     def static(self, p):
@@ -902,7 +951,8 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.current_user()
             if not u: return self.send_json({"user": None})
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
-                "role":u["role"],"must_change_pw":u.get("must_change_pw",0)}})
+                "role":u["role"],"must_change_pw":u.get("must_change_pw",0)},
+                "csrf_token": session_csrf(self.cookie("gibby_session"))})
         if p == "/api/slots":
             u = self.require()
             if not u: return
@@ -1119,11 +1169,11 @@ class H(http.server.BaseHTTPRequestHandler):
             h,_ = hash_pw(b.get("password",""), row["pw_salt"])
             if h != row["pw_hash"]:
                 c.close(); return self.send_json({"error":"Wrong password."},401)
-            access, refresh = new_session(c, row["id"])
+            access, refresh, csrf = new_session(c, row["id"])
             c.commit(); c.close()
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
             return self.send_json({"user":{"name":row["name"],"role":row["role"],"email":row["email"]},
-                                   "expires_in": ACCESS_TTL},
+                                   "expires_in": ACCESS_TTL, "csrf_token": csrf},
                                   cookie=session_cookies(access, refresh, secure))
         if p == "/api/refresh":
             # Single-use rotation: the presented refresh token is revoked and a brand
@@ -1153,11 +1203,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error":"Your session has expired. Please sign in again."},
                                       401, cookie=CLEAR_COOKIES)
             revoke_session(c, token=row["token"], refresh=rtok, reason="rotated")   # old pair dies here
-            access, refresh = new_session(c, row["user_id"], rotated_from=row["token"])
+            access, refresh, csrf = new_session(c, row["user_id"], rotated_from=row["token"])
             urow = c.execute("SELECT name,role,email FROM users WHERE id=?",(row["user_id"],)).fetchone()
             c.commit(); c.close()
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
-            return self.send_json({"ok":True, "user":dict(urow), "expires_in": ACCESS_TTL},
+            return self.send_json({"ok":True, "user":dict(urow), "expires_in": ACCESS_TTL,
+                                   "csrf_token": csrf},
                                   cookie=session_cookies(access, refresh, secure))
         if p == "/api/logout":
             # Revoke BOTH halves server-side. The next request with either token fails.
