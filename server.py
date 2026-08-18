@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "4.5-season-generator"
+VERSION = "4.6-pay-and-pricing"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -147,6 +147,7 @@ def init_db():
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
                      ("close_days","INTEGER DEFAULT 0"),("poster","TEXT"),
+                     ("pay_model","TEXT DEFAULT 'flat'"),
                      ("headcount_sent","INTEGER DEFAULT 0"),
                      ("followup_note","TEXT"),("followup_status","TEXT"),
                      ("followup_requested_at","TEXT"),("followup_submitted_at","TEXT"),
@@ -276,25 +277,32 @@ def class_finance(cls, enrolled):
     not also be charged for those materials, or every such class reads as far less
     profitable than it was.
 
-    instructor_pay is the agreed fee on the record, which is what actually gets
-    paid. formula_pay shows what the 60% split would give at ACTUAL attendance, so
-    an under-filled class makes the gap visible."""
+    pay_model decides which number is real, because The Gibby runs both deals:
+      'flat'  - the agreed fee is paid regardless of attendance
+      'split' - the instructor takes 60% of the pool at ACTUAL attendance
+    actual_pay is the authoritative figure either way; formula_pay is kept so a
+    flat-fee class still shows what the split would have given."""
     ticket  = float(cls.get("ticket_price") or 0)
     mat     = float(cls.get("material_cost") or 0)
     pay     = float(cls.get("instructor_pay") or 0)
     own     = bool(cls.get("own_materials"))
     planned = int(cls.get("max_p") or 0)
+    model = (cls.get("pay_model") or "flat").strip() or "flat"
     revenue   = ticket * enrolled
     materials = mat * enrolled
     gibby_materials = 0.0 if own else materials      # see docstring
-    net = revenue - pay - gibby_materials
     pool = max(0.0, revenue - materials)
+    formula = pool * 0.6 + (materials if own else 0.0)
+    actual_pay = formula if model == "split" else pay
+    net = revenue - actual_pay - gibby_materials
     return {
         "planned": planned, "enrolled": enrolled,
         "fill": (enrolled / planned) if planned else 0,
         "ticket_price": ticket, "revenue": round(revenue, 2),
-        "instructor_pay": round(pay, 2),
-        "formula_pay": round(pool * 0.6 + (materials if own else 0.0), 2),
+        "pay_model": model,
+        "instructor_pay": round(actual_pay, 2),
+        "agreed_pay": round(pay, 2),
+        "formula_pay": round(formula, 2),
         "materials": round(materials, 2),
         "materials_paid_by": "instructor (reimbursed)" if own else "The Gibby",
         "gibby_materials": round(gibby_materials, 2),
@@ -951,6 +959,9 @@ def run_scheduler(asof=None):
                     mat_line = (f"At {money_str(cls.get('material_cost'))} a head that is "
                                 f"{money_str((cls.get('material_cost') or 0) * enrolled)} of materials.\n\n"
                                 if cls.get("material_cost") else "")
+                    if (cls.get("pay_model") or "flat") == "split":
+                        mat_line += (f"At the 60% split, your pay for this class comes to "
+                                     f"{money_str(class_finance(cls, enrolled)['instructor_pay'])}.\n\n")
                     sent, why = send_class_email(c, cls, "headcount", [instr_row["email"]],
                         f"Final numbers for {cls['title']}: {enrolled} booked",
                         f"Hi {first},\n\nRegistration for \"{cls['title']}\" has closed.\n\n"
@@ -1897,6 +1908,10 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
+            pm = b.get("pay_model")
+            if pm in ("flat", "split"):
+                c.execute("UPDATE classes SET pay_model=? WHERE id=?",
+                          (pm, c.execute("SELECT last_insert_rowid()").fetchone()[0]))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
                 c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",
@@ -2156,6 +2171,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 sets.append("age_label=?"); vals.append(age_label(b["age_range"]))
             for k in ("max_p","min_p","ticket_price","instructor_pay","close_days"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
+            if b.get("pay_model") in ("flat", "split"):
+                sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
             sets += ["status=?","admin_note=?"]; vals += ["instructor_review", b.get("note","")]
             vals.append(cid)

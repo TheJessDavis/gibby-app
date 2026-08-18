@@ -731,13 +731,16 @@ async function adminMoney(){
         c.status==='cancelled'?' &middot; cancelled':(c.actual?'':' &middot; upcoming')}</div></td>
       <td class="num">${c.enrolled}/${c.planned}</td>
       <td class="num">${money0(c.revenue)}</td>
-      <td class="num">${money0(c.instructor_pay)}${c.formula_pay!==c.instructor_pay?`<div class="meta">60% would be ${money0(c.formula_pay)}</div>`:''}</td>
+      <td class="num">${money0(c.instructor_pay)}<div class="meta">${c.pay_model==='split'
+        ? '60% of sales'
+        : ('flat' + (c.formula_pay!==c.instructor_pay ? ', 60% would be '+money0(c.formula_pay) : ''))}</div></td>
       <td class="num">${c.gibby_materials?money(c.gibby_materials):'&mdash;'}</td>
       <td class="num ${c.net>=0?'pos':'neg'}">${money0(c.net)}</td></tr>`).join('')}
     </tbody></table></div>
-    <div class="hint" style="margin-top:12px">Where an instructor supplies their own materials the cost is
-      reimbursed inside their pay, so it is not charged to The Gibby a second time. Pay shown is the agreed
-      fee on the record; where that differs from 60% of the actual pool, both are shown.</div>`;
+    <div class="hint" style="margin-top:12px">Pay follows each class's own deal: flat fee classes pay the
+      agreed amount whatever the turnout, and split classes pay 60% of actual ticket sales after materials.
+      Where an instructor supplies their own materials the cost is reimbursed inside their pay, so it is
+      not charged to The Gibby a second time.</div>`;
 }
 
 /* ---------------- audit log (read-only) ---------------- */
@@ -926,6 +929,35 @@ async function returnFollowup(id){
   await api('/api/classes/'+id+'/followup-return','POST',{note});
   adminApprovals();
 }
+const PRICING_GUIDE = 'https://thejessdavis.github.io/gibby-pricing/';
+function openPricingGuide(){
+  const src = PRICING_GUIDE + '?app=' + encodeURIComponent(location.origin);
+  const m = document.createElement('div'); m.id = 'pgmodal';
+  m.style.cssText = 'position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:60;display:flex;align-items:center;justify-content:center;padding:14px';
+  m.innerHTML = `<div style="background:#F6F2E8;border-radius:18px;width:min(1140px,96vw);height:min(92vh,1000px);display:flex;flex-direction:column;overflow:hidden">
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 14px">
+      <b style="font-size:14px">Pricing guide</b>
+      <a href="${src}" target="_blank" rel="noopener noreferrer" style="font-size:12px;margin-left:auto">Open in its own tab</a>
+      <button class="btn ghost" style="margin:0;padding:6px 12px" onclick="closePricingGuide()">Close</button></div>
+    <iframe src="${src}" style="border:0;flex:1;width:100%" title="Gibby pricing guide"></iframe></div>`;
+  m.addEventListener('click', e => { if (e.target === m) closePricingGuide(); });
+  document.body.appendChild(m);
+}
+function closePricingGuide(){ const m = $('#pgmodal'); if (m) m.remove(); }
+/* Numbers arriving from the guide. Only trusted from its exact origin, and only
+   ever fills form fields: nothing is saved or submitted by this. */
+window.addEventListener('message', e => {
+  if (e.origin !== 'https://thejessdavis.github.io') return;
+  const d = e.data || {};
+  if (d.type !== 'gibby-pricing-apply') return;
+  const set = (id, v, touch) => { const el = $(id); if (el && v) { el.value = v; if (touch) el.dataset.t = 1; } };
+  set('#c_pay', d.target_pay); set('#c_plan', d.planned); set('#c_mat', d.material_cost);
+  set('#f_max', d.planned); set('#f_min', d.min_students);
+  if ($('#c_pay') && typeof calc === 'function') calc();
+  set('#f_ticket', d.ticket, true); set('#f_pay', d.target_pay, true);
+  closePricingGuide();
+  const n = $('#draftnote'); if (n) n.textContent = 'Numbers brought in from the pricing guide. Check them and adjust freely.';
+});
 function attachPoster(id, ev){
   const f = ev.target.files[0]; if(!f) return;
   if(f.size > 5*1024*1024){ alert('That image is '+Math.round(f.size/1048576)+'MB. Please use one under 5MB.'); return; }
@@ -1158,6 +1190,7 @@ async function openEditForm(id){
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
     <div class="two"><div><label>Max</label><input id="e_max" type="number" value="${c.max_p}"></div><div><label>Min</label><input id="e_min" type="number" value="${c.min_p}"></div></div>
     <div class="two"><div><label>Ticket ($)</label><input id="e_ticket" type="number" value="${c.ticket_price}"></div><div><label>Instructor pay ($)</label><input id="e_pay" type="number" value="${c.instructor_pay}"></div></div>
+    <label>Pay model</label><select id="e_paym"><option value="flat" ${c.pay_model!=='split'?'selected':''}>Flat fee</option><option value="split" ${c.pay_model==='split'?'selected':''}>60% of ticket sales</option></select>
     <label>Graphic headline</label><input id="e_head" value="${esc(c.headline||'')}">
     <label>Script subtitle</label><input id="e_sub" value="${esc(c.subtitle||'')}">
     <label>Note to instructor (what you changed)</label><textarea id="e_note" placeholder="e.g. Raised the ticket to \$40 so materials are covered."></textarea>
@@ -1170,7 +1203,7 @@ async function submitEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
     alcohol:alc, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
-    ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value,
+    ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
     headline:$('#e_head').value, subtitle:$('#e_sub').value, note:$('#e_note').value};
   try{ await api('/api/classes/'+id+'/edit','POST',body); renderAdmin('approvals'); }
   catch(e){ showErr('eerr',e.message); }
@@ -1449,6 +1482,7 @@ function applyDraft(p){
   const pick=(seg,val)=>{ const s=$(seg); if(!s) return;
     s.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===val)); };
   pick('#f_alc', p.alcohol?'yes':'no');
+  pick('#f_paym', p.pay_model||'flat');
   pick('#f_vol', p.needs_volunteer?'yes':'no');
   if(p.photo){ PHOTO=p.photo; $('#f_photo').innerHTML='<img src="'+p.photo+'">'; }
   ageChanged(); descCount(); calc();
@@ -1523,6 +1557,15 @@ function openForm(slot, draftPayload){
     <div class="hint" id="matnote"></div>
 
     <label style="margin-top:16px">Pricing</label>
+    <label>How is your pay worked out?</label>
+    <div class="seg" id="f_paym">
+      <button class="on" data-v="flat" onclick="segPick(this)">Flat fee</button>
+      <button data-v="split" onclick="segPick(this)">60% of ticket sales</button></div>
+    <div class="hint">Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
+      ticket sales after materials, so it rises and falls with enrollment.</div>
+    <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
+    <div class="hint">Optional. A deeper tool with material lists, class tiers and what-ifs for low
+      enrollment. It can fill the numbers below in for you.</div>
     <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc()"></div>
       <div><label style="margin-top:0">Planned</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
     <div class="calc">
@@ -1629,6 +1672,7 @@ function collectForm(){
     alcohol: seg('#f_alc')==='yes', max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     links:$('#f_links').value, photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
+    pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
     room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,
@@ -1665,7 +1709,7 @@ async function submitClass(){
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
- 'attachPoster','removePoster','generateSeason'
+ 'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
