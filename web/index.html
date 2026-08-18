@@ -329,7 +329,9 @@ function boot(){ return boundary('boot', '#view', bootInner); }
 async function bootInner(){
   const params=new URLSearchParams(location.search);
   if(params.get('reset')){ $('#top').style.display='none'; return renderReset(params.get('reset')); }
-  let {user} = await api('/api/me');
+  const me0 = await api('/api/me');
+  let user = me0.user;
+  window.SEASON_START = me0.season_start || '2026-12-01';
   // Access token gone but the refresh cookie may still be good (e.g. reopening the
   // app the next morning). Spend it once before falling back to the login screen.
   if(!user && await refreshSession()){ user = (await api('/api/me')).user; }
@@ -576,6 +578,11 @@ async function archiveTpl(id){ await api('/api/templates/'+id+'/archive','POST')
 /* ---------------- calendar ---------------- */
 const MONIDX={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 const MONNAME=['January','February','March','April','May','June','July','August','September','October','November','December'];
+/* The season decides which year a month belongs to: Dec 2026 season start means
+   Dec sorts (and dates) before Jan 2027, not after. */
+function seasonPivot(){ const p=(window.SEASON_START||'2026-12-01').split('-'); return {y:+p[0], m:+p[1]-1}; }
+function seasonYearFor(m){ const p=seasonPivot(); return m>=p.m ? p.y : p.y+1; }
+function mOrd(m){ const p=seasonPivot(); return m>=p.m ? m-12 : m; }
 function parseDate(s){ if(!s)return null; const p=s.split(', '); const md=(p[1]||p[0]).trim().split(' ');
   const m=MONIDX[md[0]], d=parseInt(md[1]); if(m==null||isNaN(d))return null; return {m,d}; }
 let CAL_M=0;
@@ -592,7 +599,7 @@ function classState(c){
 async function adminCalendar(){
   const [{classes}, slotsRes] = await Promise.all([api('/api/classes/all'), api('/api/slots')]);
   const items=classes.map(c=>({...c,pd:parseDate(c.slot_date)})).filter(c=>c.pd);
-  const months=[...new Set(items.map(c=>c.pd.m))].sort((a,b)=>a-b);
+  const months=[...new Set(items.map(c=>c.pd.m))].sort((a,b)=>mOrd(a)-mOrd(b));
   if(!months.length){ $('#tab').innerHTML='<h2>Season</h2><div class="muted">No scheduled classes yet.</div>'; return; }
   if(!months.includes(CAL_M)) CAL_M=months[0];
   // dates that still have unclaimed slots: the gaps you can actually fill
@@ -633,16 +640,16 @@ function renderSeason(){
   const n = st => items.filter(c=>classState(c)[0]===st).length;
   // group by month, then by date
   const byMonth={};
-  items.slice().sort((a,b)=>a.pd.m-b.pd.m || a.pd.d-b.pd.d)
+  items.slice().sort((a,b)=>mOrd(a.pd.m)-mOrd(b.pd.m) || a.pd.d-b.pd.d)
        .forEach(c=>{ (byMonth[c.pd.m]=byMonth[c.pd.m]||{})[c.pd.d]=(byMonth[c.pd.m][c.pd.d]||[]).concat(c); });
   const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const body=Object.keys(byMonth).map(Number).sort((a,b)=>a-b).map(m=>`
+  const body=Object.keys(byMonth).map(Number).sort((a,b)=>mOrd(a)-mOrd(b)).map(m=>`
     <div class="smonth">${esc(MONNAME[m])}</div>
     ${Object.keys(byMonth[m]).map(Number).sort((a,b)=>a-b).map(d=>{
       const list=byMonth[m][d], open=openByDate[m+'-'+d]||0;
       const rooms=new Set(list.map(c=>c.room).filter(Boolean));
       const dow=(list[0].slot_date||'').includes(', ') ? list[0].slot_date.split(', ')[0]
-                                                       : DOW[new Date(2027,m,d).getDay()];
+                                                       : DOW[new Date(seasonYearFor(m),m,d).getDay()];
       return `<div class="srow">
         <div class="sdate">${d}<small>${esc(dow)}</small>
           <button class="dslink noprint" onclick="daySheet('${esc(list[0].slot_date)}')">day sheet</button></div>
@@ -674,7 +681,7 @@ function renderSeason(){
     ${body}`;
 }
 function renderCal(m){
-  const {months,items}=window.__cal, year=2027;
+  const {months,items}=window.__cal, year=seasonYearFor(m);
   const first=new Date(year,m,1).getDay(), days=new Date(year,m+1,0).getDate();
   const withCls=new Set(items.filter(c=>c.pd.m===m).map(c=>c.pd.d));
   let cells=['S','M','T','W','T','F','S'].map(x=>`<div class="cal-h">${x}</div>`).join('');
@@ -1366,7 +1373,7 @@ async function previewSeries(){
 function monthGridHTML(slots){
   const byDay={}; slots.forEach(s=>{ (byDay[s.date]=byDay[s.date]||[]).push(s); });
   const days=Object.keys(byDay).map(d=>({label:d, n:byDay[d].length, dt:parseDate(d)}))
-    .filter(d=>d.dt).sort((a,b)=>a.dt.m-b.dt.m || a.dt.d-b.dt.d);
+    .filter(d=>d.dt).sort((a,b)=>mOrd(a.dt.m)-mOrd(b.dt.m) || a.dt.d-b.dt.d);
   if(!days.length) return '<div class="muted">No open days right now.</div>';
   const MABBR=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const a=days[0].dt, z=days[days.length-1].dt;

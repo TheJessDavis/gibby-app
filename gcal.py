@@ -42,6 +42,11 @@ def load_gcal_config():
         "horizon_days": int(os.environ.get("GCAL_HORIZON_DAYS", "56") or 56),
         # Mon=0 .. Sun=6. "5" is Saturdays only. Empty means every day.
         "days": [int(x) for x in os.environ.get("GCAL_DAYS","").replace(" ","").split(",") if x.isdigit()],
+        # The booking season. Slots are generated for this whole window rather than
+        # a rolling few weeks from today, so a December-to-May season is visible
+        # the day booking opens. Overridable per season.
+        "season_start": os.environ.get("GCAL_SEASON_START", os.environ.get("SEASON_START", "2026-12-01")),
+        "season_end": os.environ.get("GCAL_SEASON_END", "2027-05-31"),
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     if os.path.isfile(path):
@@ -67,6 +72,15 @@ def _service(cfg):
         info, scopes=["https://www.googleapis.com/auth/calendar"])
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 
+def _season_window(cfg, today):
+    """(first_day, last_day) to generate slots for. The season bounds when set,
+    never reaching into the past."""
+    try: a = datetime.date.fromisoformat(cfg.get("season_start") or "")
+    except ValueError: a = today
+    try: b = datetime.date.fromisoformat(cfg.get("season_end") or "")
+    except ValueError: b = today + datetime.timedelta(days=cfg["horizon_days"])
+    return max(a, today), b
+
 def _fmt_date(d):  return f"{DOW[d.weekday()]}, {MONTHS[d.month-1]} {d.day}"
 def _fmt_time(dt): return dt.strftime("%-I:%M %p") if os.name != "nt" else dt.strftime("%I:%M %p").lstrip("0")
 
@@ -80,8 +94,9 @@ def sync_slots(cfg):
     try:
         svc = _service(cfg)
         now = datetime.datetime.now(TZ)
-        tmin = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        tmax = tmin + datetime.timedelta(days=cfg["horizon_days"])
+        w0, w1 = _season_window(cfg, now.date())
+        tmin = datetime.datetime(w0.year, w0.month, w0.day, tzinfo=TZ)
+        tmax = datetime.datetime(w1.year, w1.month, w1.day, tzinfo=TZ) + datetime.timedelta(days=1)
         fb = svc.freebusy().query(body={
             "timeMin": tmin.isoformat(), "timeMax": tmax.isoformat(),
             "items": [{"id": cfg["calendar_id"]}]}).execute()
@@ -90,8 +105,8 @@ def sync_slots(cfg):
     except Exception as e:
         print("[gcal] read error:", e); return None
     out, step = [], datetime.timedelta(minutes=cfg["slot_minutes"])
-    for day in range(cfg["horizon_days"]):
-        d = (tmin + datetime.timedelta(days=day)).date()
+    for day in range((w1 - w0).days + 1):
+        d = w0 + datetime.timedelta(days=day)
         if cfg["days"] and d.weekday() not in cfg["days"]: continue
         t = datetime.datetime(d.year, d.month, d.day, cfg["open_hour"], 0, tzinfo=TZ)
         end_day = datetime.datetime(d.year, d.month, d.day, cfg["close_hour"], 0, tzinfo=TZ)
@@ -180,13 +195,14 @@ def sync_slots_ical(cfg):
         print("[gcal] that URL did not return a calendar feed"); return None
 
     now = datetime.datetime.now(TZ).replace(tzinfo=None)
-    start_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    horizon_end = start_day + datetime.timedelta(days=cfg["horizon_days"])
+    w0, w1 = _season_window(cfg, now.date())
+    start_day = datetime.datetime(w0.year, w0.month, w0.day)
+    horizon_end = datetime.datetime(w1.year, w1.month, w1.day, 23, 59)
     busy = _ics_events(text, start_day, horizon_end)
 
     out, step = [], datetime.timedelta(minutes=cfg["slot_minutes"])
-    for day in range(cfg["horizon_days"]):
-        d = (start_day + datetime.timedelta(days=day)).date()
+    for day in range((w1 - w0).days + 1):
+        d = w0 + datetime.timedelta(days=day)
         if cfg["days"] and d.weekday() not in cfg["days"]: continue
         t = datetime.datetime(d.year, d.month, d.day, cfg["open_hour"], 0)
         close = datetime.datetime(d.year, d.month, d.day, cfg["close_hour"], 0)
@@ -218,11 +234,16 @@ def create_event(cls, cfg):
         print(f"[gcal] dry-run: would add {n} event(s) for '{cls.get('title')}'"); return None
     try:
         svc = _service(cfg)
-        year = datetime.datetime.now(TZ).year
+        # slot labels carry no year; infer it from the season, as the server does
+        try:
+            sd = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-12-01"))
+        except ValueError:
+            sd = datetime.date(2026, 12, 1)
         ids = []
         for i, s in enumerate(sessions, start=1):
             md = (s.get("date") or "").split(", ")[-1].split()
             mon, day = MONTHS.index(md[0]) + 1, int(md[1])
+            year = sd.year if mon >= sd.month else sd.year + 1
             span = s.get("time") or f"{s.get('start','')} – {s.get('end','')}"
             parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", (span or "").strip()) if p.strip()]
             def t(x):

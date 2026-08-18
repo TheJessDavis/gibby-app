@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "5.1-admin-polish"
+VERSION = "5.2-season-window"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -783,11 +783,28 @@ _MON_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov",
 _MONS = {m:i for i,m in enumerate(_MON_NAMES, start=1)}
 _DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-def parse_day(label, year=2027):
+# Slot labels carry no year, so the season decides one: months at or after the
+# season-start month belong to the start year, earlier months to the next year
+# (Dec -> 2026, Jan..May -> 2027 for a season starting 2026-12-01).
+SEASON_START = os.environ.get("SEASON_START", "2026-12-01")
+
+def _season_pivot():
+    try:
+        d = datetime.date.fromisoformat(SEASON_START)
+        return d.month, d.year
+    except ValueError:
+        return 12, 2026
+
+def season_year(month):
+    pm, py = _season_pivot()
+    return py if month >= pm else py + 1
+
+def parse_day(label, year=None):
     """'Sat, Jan 17' -> date(2027,1,17). Slot labels carry no year (see note below)."""
     try:
         p = (label or "").split(", ")[-1].split()
-        return datetime.date(year, _MONS[p[0]], int(p[1]))
+        mon = _MONS[p[0]]
+        return datetime.date(year if year else season_year(mon), mon, int(p[1]))
     except Exception:
         return None
 
@@ -795,11 +812,11 @@ def day_label(d):
     """date -> 'Sat, Jan 17', the format slots are stored in."""
     return f"{_DOW[d.weekday()]}, {_MON_NAMES[d.month-1]} {d.day}"
 
-def _class_date(cls, year=2027):
+def _class_date(cls, year=None):
     """First session. Used for the 48h reminder and the 1-week auto-cancel."""
     return parse_day(cls.get("slot_date"), year)
 
-def _class_end_date(cls, year=2027):
+def _class_end_date(cls, year=None):
     """Last session. A 6-week course finishes weeks after it starts, so the
     day-after follow-up has to key off the END, not the first meeting."""
     try:
@@ -810,7 +827,7 @@ def _class_end_date(cls, year=2027):
         pass
     return _class_date(cls, year)
 
-def find_series_sessions(c, first_ids, weeks, year=2027):
+def find_series_sessions(c, first_ids, weeks, year=None):
     """Given the slot ids for the FIRST session, find the same weekday+time+room on
     following weeks. Weeks that are already taken are skipped and the search keeps
     going forward, so a 6-week course still gets 6 sessions around a busy Saturday.
@@ -1172,9 +1189,10 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"version": VERSION})
         if p == "/api/me":
             u = self.current_user()
-            if not u: return self.send_json({"user": None})
+            if not u: return self.send_json({"user": None, "season_start": SEASON_START})
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
                 "role":u["role"],"must_change_pw":u.get("must_change_pw",0)},
+                "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
         if p == "/api/slots":
             u = self.require()

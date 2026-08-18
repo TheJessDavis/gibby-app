@@ -116,6 +116,15 @@ def _poll(url, token, pick, tries=40, delay=2):
 _MON = {m: i for i, m in enumerate(
     ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"], start=1)}
 
+def _season_year(month):
+    """Slot labels carry no year; the season decides it. Dec 2026 season start
+    means Dec is 2026 and Jan-May are 2027."""
+    try:
+        d = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-12-01"))
+        return d.year if month >= d.month else d.year + 1
+    except ValueError:
+        return 2027
+
 def _iso_times(cls, cfg):
     """Best-effort ISO start/end from slot_date ('Sat, Jan 17') + slot_time
     ('10:00 AM – 10:30 AM'). Returns (start, end) or (None, None). Times are
@@ -132,7 +141,7 @@ def _iso_times(cls, cfg):
         parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", span.strip()) if p.strip()]
         def t(s):
             dt = datetime.datetime.strptime(s, "%I:%M %p")
-            return datetime.datetime(cfg["year"], mon, day, dt.hour, dt.minute)
+            return datetime.datetime(_season_year(mon), mon, day, dt.hour, dt.minute)
         start = t(parts[0])
         end = t(parts[1]) if len(parts) > 1 else start + datetime.timedelta(minutes=30)
         f = "%Y-%m-%dT%H:%M:%SZ"
