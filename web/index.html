@@ -147,6 +147,13 @@
   .btn.ghost .spin,.btn.green .spin{border-color:rgba(0,0,0,.18);border-top-color:var(--ink)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .btn[disabled]{opacity:.62;cursor:not-allowed}
+  .missfield{outline:2px solid #B4442C;outline-offset:2px;border-radius:12px}
+  #todobar{position:fixed;bottom:86px;left:0;right:0;max-width:408px;margin:0 auto;z-index:29;
+    background:var(--white);border-radius:14px;padding:10px 14px;box-shadow:0 8px 20px rgba(0,0,0,.14);
+    font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:8px}
+  #todobar.ok{background:#DFF0D8;color:#3F7A32;cursor:default}
+  #todobar .cnt{background:#B4442C;color:#fff;border-radius:99px;min-width:20px;height:20px;
+    display:grid;place-items:center;font-size:11px;flex:none}
   .attachbox{margin-top:10px;background:var(--white);border:1px dashed var(--line);border-radius:14px;
     padding:14px 15px;font-size:12.5px;font-weight:600;color:var(--ink-soft);line-height:1.45}
   .attachbox b{display:block;font-size:14px;color:var(--ink);margin-bottom:4px}
@@ -1576,6 +1583,7 @@ function openForm(slot, draftPayload){
     <div class="two" style="margin-top:12px"><div><label style="margin-top:0">Ticket price ($)</label><input id="f_ticket" type="number" oninput="this.dataset.t=1"></div>
       <div><label style="margin-top:0">Your pay ($)</label><input id="f_pay" type="number" oninput="this.dataset.t=1"></div></div>
     <div class="hint" id="draftnote">${DRAFT_ID?'Resumed from a saved draft.':''}</div>
+    <div id="todobar"></div>
     <button class="btn ghost" style="margin-top:6px" onclick="saveDraft()">Save as draft</button>
     <div style="height:80px"></div>
     <div class="fab"><div class="two">
@@ -1583,6 +1591,7 @@ function openForm(slot, draftPayload){
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   calc(); descCount(); loadTplOptions();
   if(draftPayload) applyDraft(draftPayload);
+  initFormHelpers();
 }
 // Under-14 groups trigger the "do you need a volunteer assistant?" question.
 const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14'];
@@ -1639,24 +1648,74 @@ function wordCount(s){ return (s||'').trim().split(/\s+/).filter(Boolean).length
 function descCount(){ const n=wordCount($('#f_desc').value); const el=$('#f_desccount');
   if(el){ el.textContent=n+' / 50 words'+(n>=50?' ✓':''); el.style.color=n>=50?'#3F7A32':'var(--ink-soft)'; } }
 function validateForm(){
+  /* Each missing item carries the element to mark and jump to, so a failed submit
+     lands the instructor ON the gap instead of a list at the top of the page. */
   const miss=[];
   const num=id=>{ const v=$('#'+id).value; return v.trim()===''?null:+v; };
-  if(!$('#f_title').value.trim()) miss.push('Class title');
+  const add=(sel,label,short)=>miss.push({sel,label,short});
+  if(!$('#f_title').value.trim()) add('#f_title','Class title','title');
   const dw=wordCount($('#f_desc').value);
-  if(dw<50) miss.push('Description (at least 50 words'+(dw?', currently '+dw:'')+')');
-  if(!$('#f_len').value) miss.push('Class length');
-  if(selectedAges().length===0) miss.push('At least one age range');
-  if(!PHOTO) miss.push('A class photo');
+  if(dw<50) add('#f_desc','Description (at least 50 words'+(dw?', currently '+dw:'')+')','description');
+  if(!$('#f_len').value) add('#f_len','Class length','length');
+  if(selectedAges().length===0) add('#f_ages','At least one age range','ages');
+  if(!PHOTO) add('#f_photo','A class photo','photo');
   const max=num('f_max'), min=num('f_min');
-  if(!(max>0)) miss.push('Max students');
-  if(!(min>0)) miss.push('Min students');
-  if(max>0 && min>0 && min>max) miss.push('Min students can’t be more than Max');
+  if(!(max>0)) add('#f_max','Max students','max');
+  if(!(min>0)) add('#f_min','Min students','min');
+  if(max>0 && min>0 && min>max) add('#f_min','Min students can\u2019t be more than Max','min vs max');
   const mat=num('c_mat');
-  if(mat===null || mat<0) miss.push('Material cost per student');
+  if(mat===null || mat<0) add('#c_mat','Material cost per student','materials');
   const ticket=num('f_ticket'), pay=num('f_pay');
-  if(!(ticket>0)) miss.push('Ticket price');
-  if(!(pay>0)) miss.push('Your pay');
+  if(!(ticket>0)) add('#f_ticket','Ticket price','ticket');
+  if(!(pay>0)) add('#f_pay','Your pay','pay');
   return miss;
+}
+let SUBMIT_TRIED=false, AUTOSAVE_T=null;
+function markMissing(miss){
+  document.querySelectorAll('#view .missfield').forEach(el=>el.classList.remove('missfield'));
+  miss.forEach(m=>{ const el=$(m.sel); if(el) el.classList.add('missfield'); });
+}
+function jumpToFirst(miss){
+  const el=miss.length && $(miss[0].sel);
+  if(el){ el.scrollIntoView({block:'center',behavior:'smooth'}); if(el.focus) el.focus({preventScroll:true}); }
+}
+/* The what's-left bar: lives above the submit buttons, ticks down as they go, and
+   tapping it jumps to the first gap. */
+function updateTodo(){
+  const bar=$('#todobar'); if(!bar || !$('#f_title')) return;
+  const miss=validateForm();
+  if(SUBMIT_TRIED) markMissing(miss);
+  if(!miss.length){
+    bar.className='ok'; bar.innerHTML='Ready to submit \u2713'; bar.onclick=null;
+  } else {
+    const shorts=miss.map(m=>m.short);
+    bar.className=''; bar.onclick=()=>jumpToFirst(miss);
+    bar.innerHTML='<span class="cnt">'+miss.length+'</span> Still needed: '
+      + esc(shorts.slice(0,3).join(', ')) + (shorts.length>3?' +'+(shorts.length-3)+' more':'');
+  }
+}
+function scheduleAutosave(){
+  clearTimeout(AUTOSAVE_T);
+  AUTOSAVE_T=setTimeout(async ()=>{
+    if(!$('#f_title')) return;                       // form was closed
+    const f=collectForm();
+    if(!((f.title||'').trim() || (f.description||'').trim() || f.photo)) return;
+    try{
+      await saveDraft(true);
+      const n=$('#draftnote');
+      if(n) n.textContent='Draft saved automatically at '
+        + new Date().toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) + '.';
+    }catch(_){/* autosave never nags */}
+  }, 25000);
+}
+function initFormHelpers(){
+  SUBMIT_TRIED=false;
+  const v=$('#view'); if(!v) return;
+  v.addEventListener('input', ()=>{ updateTodo(); scheduleAutosave(); });
+  v.addEventListener('click', e=>{
+    if(e.target.closest('.seg,.chk,.photo,select')) setTimeout(()=>{ updateTodo(); scheduleAutosave(); },0);
+  });
+  updateTodo();
 }
 /* Read the form exactly once, so a draft saves precisely what would be submitted.
    Tolerates a half-filled form: nothing here validates. */
@@ -1693,7 +1752,10 @@ async function saveDraft(silent){
 }
 async function submitClass(){
   const miss=validateForm();
-  if(miss.length){ const x=$('#ferr'); x.textContent='Please complete: '+miss.join(', ')+'.'; x.classList.add('show'); window.scrollTo(0,0); return; }
+  if(miss.length){
+    SUBMIT_TRIED=true; markMissing(miss); updateTodo();
+    const x=$('#ferr'); x.textContent='Please complete: '+miss.map(m=>m.label).join(', ')+'.'; x.classList.add('show');
+    jumpToFirst(miss); return; }
   const body = {...collectForm(), draft_id: DRAFT_ID || undefined};
   try{ await api('/api/classes','POST',body); SEL=[]; DRAFT_ID=null; renderInstr('mine'); }
   catch(e){ const x=$('#ferr'); x.textContent=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message); x.classList.add('show'); window.scrollTo(0,0); }
