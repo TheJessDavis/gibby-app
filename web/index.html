@@ -147,6 +147,19 @@
   .btn.ghost .spin,.btn.green .spin{border-color:rgba(0,0,0,.18);border-top-color:var(--ink)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .btn[disabled]{opacity:.62;cursor:not-allowed}
+  .navbadge{background:#B4442C;color:#fff;border-radius:99px;font-size:10.5px;font-weight:800;
+    min-width:18px;height:18px;display:inline-grid;place-items:center;margin-left:6px;padding:0 5px;vertical-align:1px}
+  .tabs button.on .navbadge{background:var(--yellow,#FCD34D);color:var(--ink)}
+  .sheetrow{display:grid;grid-template-columns:22px 1fr auto;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:13px;align-items:center}
+  .sheetrow .bx{width:15px;height:15px;border:2px solid var(--ink);border-radius:4px}
+  .sheetrow .em{color:var(--ink-soft);font-size:11.5px}
+  .dslink{border:none;background:none;font-family:inherit;font-size:10.5px;font-weight:800;
+    color:var(--ink-soft);cursor:pointer;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
+  @media print{
+    #top,.tabs,.seasonbar,.noprint,#todobar{display:none!important}
+    body{background:#fff;padding:0}
+    .card{box-shadow:none;border:1px solid #ddd;break-inside:avoid}
+  }
   .eg{margin-top:6px}
   .eg summary{font-size:12px;font-weight:700;color:var(--ink-soft);cursor:pointer}
   .egbody{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:12px 14px;
@@ -448,15 +461,26 @@ async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; 
 async function renderAdmin(tab){
   ADMIN_TAB = tab;
   const v=$('#view');
-  const t=(k,l)=>`<button class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
+  const t=(k,l)=>`<button data-tab="${k}" class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
   v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
     templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
     all:adminAll, money:adminMoney, audit:adminAudit, archive:adminArchive};
+  loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
   return boundary('admin:'+tab, '#tab', fn);
+}
+async function loadNavBadges(){
+  try{
+    const c = await api('/api/admin/counts');
+    const put=(tabName,n)=>{ const b=document.querySelector(`.tabs button[data-tab="${tabName}"]`);
+      if(!b) return; const old=b.querySelector('.navbadge'); if(old) old.remove();
+      if(n>0) b.insertAdjacentHTML('beforeend', `<span class="navbadge">${n}</span>`); };
+    put('approvals', c.needs_you);
+    put('dashboard', c.failed);
+  }catch(_){/* badges are decoration; the queues are the truth */}
 }
 async function adminDashboard(){
   const d = await api('/api/dashboard');
@@ -577,6 +601,32 @@ async function adminCalendar(){
   window.__cal={months,items,openByDate};
   CAL_VIEW==='season' ? renderSeason() : renderCal(CAL_M);
 }
+async function daySheet(label){
+  const {classes} = await api('/api/classes/all');
+  const todays = classes.filter(c => c.status!=='cancelled' &&
+    (c.slot_date===label || (c.sessions||[]).some(x=>x.date===label)));
+  const blocks = [];
+  for (const c of todays){
+    let regs=[];
+    try{ ({registrations:regs} = await api('/api/class/'+c.id+'/registrations')); }catch(_){/* sheet still prints */}
+    regs = regs.filter(r=>!r.refunded);
+    blocks.push(`<div class="card">
+      <div class="row"><div><h3>${esc(c.title)}</h3>
+        <div class="meta">class ${esc(c.class_time||c.slot_time||'')} &middot; room booked ${esc(c.slot_time||'')} &middot; ${esc(c.room||'')}</div>
+        <div class="meta">${esc(c.instructor_name)} &middot; ${regs.length} of ${c.max_p} booked${c.is_series?` &middot; ${c.session_count}-week course`:''}</div></div>
+        ${c.status!=='approved'?`<span class="pill pend">not confirmed &middot; ${esc(c.status.replace('_',' '))}</span>`:''}</div>
+      ${regs.map(r=>`<div class="sheetrow"><span class="bx"></span>
+        <span>${esc(r.name)}</span><span class="em">${esc(r.phone||r.email||'')}</span></div>`).join('')
+        || '<div class="muted" style="margin-top:8px">No one booked yet.</div>'}
+    </div>`);
+  }
+  $('#tab').innerHTML = `<h2>${esc(label)} <em>day sheet</em></h2>
+    <p class="sub noprint">Check-in boxes for the door. Print it and clip it to the desk.</p>
+    <div class="two noprint" style="margin-bottom:14px">
+      <button class="btn ghost" onclick="renderAdmin('calendar')">Back to the season</button>
+      <button class="btn dark" onclick="window.print()">Print</button></div>
+    ${blocks.join('') || '<div class="muted">No classes on this day.</div>'}`;
+}
 function setCalView(v){ CAL_VIEW=v; CAL_VIEW==='season'?renderSeason():renderCal(CAL_M); }
 function renderSeason(){
   const {items,openByDate}=window.__cal;
@@ -594,7 +644,8 @@ function renderSeason(){
       const dow=(list[0].slot_date||'').includes(', ') ? list[0].slot_date.split(', ')[0]
                                                        : DOW[new Date(2027,m,d).getDay()];
       return `<div class="srow">
-        <div class="sdate">${d}<small>${esc(dow)}</small></div>
+        <div class="sdate">${d}<small>${esc(dow)}</small>
+          <button class="dslink noprint" onclick="daySheet('${esc(list[0].slot_date)}')">day sheet</button></div>
         <div class="schips">
           ${list.map(c=>{const [st,label]=classState(c);return `<div class="schip">
             <div class="bar st-${st}"></div>
@@ -1001,10 +1052,27 @@ async function saveGraphic(id){
   await api('/api/classes/'+id+'/graphic','POST',{headline:$('#gh'+id).value, subtitle:$('#gs'+id).value});
   adminApprovals();
 }
+const ST_LABEL={pending:'Awaiting approval',graphic_review:'Poster review',approved:'Approved',
+  instructor_review:'With the instructor',incomplete:'Sent back',cancelled:'Cancelled'};
 async function adminAll(){
   const {classes} = await api('/api/classes/all'); window.__classes=classes;
-  $('#tab').innerHTML = `<h2>All <em>classes</em></h2><p class="sub">${classes.length} total.</p>
-    ${classes.map(cardCls).join('') || '<div class="muted">No classes yet.</div>'}`;
+  $('#tab').innerHTML = `<h2>All <em>classes</em></h2>
+    <div class="two noprint"><div><label style="margin-top:0">Search</label>
+      <input id="q_all" placeholder="Title or instructor" oninput="filterAll()"></div>
+    <div><label style="margin-top:0">Status</label>
+      <select id="q_st" onchange="filterAll()"><option value="">Everything</option>
+      ${Object.entries(ST_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div></div>
+    <p class="sub" id="allcount"></p><div id="alllist"></div>`;
+  filterAll();
+}
+function filterAll(){
+  const q=($('#q_all').value||'').trim().toLowerCase(), st=$('#q_st').value;
+  const hit=(window.__classes||[]).filter(c=>
+    (!st || c.status===st) &&
+    (!q || (c.title||'').toLowerCase().includes(q) || (c.instructor_name||'').toLowerCase().includes(q)));
+  $('#allcount').textContent = hit.length===(window.__classes||[]).length
+    ? `${hit.length} total.` : `${hit.length} of ${(window.__classes||[]).length} match.`;
+  $('#alllist').innerHTML = hit.map(cardCls).join('') || '<div class="muted">Nothing matches.</div>';
 }
 const STMAP={approved:['appr','approved'],incomplete:['inc','sent back'],cancelled:['inc','cancelled'],
   instructor_review:['ir','instructor review'],graphic_review:['ir','graphic review'],pending:['pend','pending']};
@@ -1900,7 +1968,7 @@ async function submitClassNow(){
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
- 'closeReview','submitClassNow'
+ 'closeReview','submitClassNow','filterAll','daySheet'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

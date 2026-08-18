@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "5.0-form-polish"
+VERSION = "5.1-admin-polish"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1338,6 +1338,16 @@ class H(http.server.BaseHTTPRequestHandler):
                 summary.append(t)
             summary.sort(key=lambda t: (-t["again_yes"], t["title"]))
             return self.send_json({"responses": rows, "by_title": summary})
+        if p == "/api/admin/counts":
+            # What is waiting on an admin, cheap enough to fetch on every nav render.
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            q = lambda w: c.execute(f"SELECT COUNT(*) FROM classes WHERE deleted_at IS NULL AND {w}").fetchone()[0]
+            needs = q("status='pending'") + q("status='graphic_review'") + q("followup_status='pending_admin'")
+            failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
+            c.close()
+            return self.send_json({"needs_you": needs, "failed": failed})
         if p == "/api/classes/followup-review":
             u = self.require("admin")
             if not u: return
