@@ -26,7 +26,7 @@
   h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
   .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4}
   .tabs{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
-  .tabs button{flex:1 1 auto;min-width:60px;border:none;background:var(--white);padding:11px 8px;border-radius:14px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--ink);box-shadow:0 3px 9px rgba(0,0,0,.05)}
+  .tabs button{flex:0 1 auto;border:none;background:var(--white);padding:9px 16px;border-radius:999px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--ink);box-shadow:0 3px 9px rgba(0,0,0,.05)}
   .tabs button.on{background:var(--ink);color:#fff}
 
   .card{background:var(--white);border-radius:18px;padding:16px;margin-bottom:12px;box-shadow:0 6px 16px rgba(0,0,0,.05)}
@@ -138,7 +138,14 @@
   .dayhead{font-weight:800;font-size:14px;margin:0 0 10px}
   .tip{display:flex;gap:9px;align-items:flex-start;background:#FCE889;border-radius:16px;padding:12px 14px;font-size:12.5px;font-weight:700;line-height:1.35;margin-bottom:14px}
   /* one-day vs series, month/list toggle, week picker, session lists */
-  .kindseg{margin:0 0 14px}
+  .kindcards{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 14px}
+  .kindcard{border:2px solid var(--line);background:var(--white);border-radius:16px;padding:12px 14px;text-align:left;cursor:pointer;font-family:inherit;color:var(--ink)}
+  .kindcard b{display:block;font-size:14px;font-weight:800;margin-bottom:2px}
+  .kindcard span{font-size:11.5px;font-weight:700;color:var(--ink-soft);line-height:1.3;display:block}
+  .kindcard.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .kindcard.on b::before{content:'\2713  '}
+  .kindcard.on span{color:rgba(255,255,255,.75)}
+  @media(max-width:480px){.kindcards{grid-template-columns:1fr}}
   .viewtog{display:inline-flex;gap:4px;background:var(--white);border-radius:14px;padding:4px;margin:0 0 12px;box-shadow:0 3px 9px rgba(0,0,0,.05)}
   .viewtog button{border:none;background:none;font-family:inherit;font-weight:800;font-size:12.5px;color:var(--ink-soft);padding:7px 16px;border-radius:11px;cursor:pointer}
   .viewtog button.on{background:var(--ink);color:#fff}
@@ -1470,9 +1477,9 @@ async function instrOpen(){
   const p = SERIES_PREVIEW;
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
 
-    <div class="seg kindseg" id="kind">
-      <button class="${!series?'on':''}" onclick="setKind('single')">One-day class</button>
-      <button class="${series?'on':''}" onclick="setKind('series')">Series course</button>
+    <div class="kindcards" id="kind">
+      <button class="kindcard ${!series?'on':''}" onclick="setKind('single')"><b>One-day class</b><span>A single session on one date</span></button>
+      <button class="kindcard ${series?'on':''}" onclick="setKind('series')"><b>Series course</b><span>Repeats weekly · one ticket for the whole run</span></button>
     </div>
 
     ${series?`<div class="tip">📚 <span>Pick the <b>first</b> session below. The course repeats at the same time each week.</span></div>
@@ -1480,12 +1487,12 @@ async function instrOpen(){
       <div class="weekpick">${[4,6,8,10,12].map(n=>`<button class="${SERIES_WEEKS===n?'on':''}" onclick="setWeeks(${n})">${n}</button>`).join('')}
         <input type="number" min="2" max="26" value="${SERIES_WEEKS}" onchange="setWeeks(this.value)" aria-label="weeks">
       </div>`
-    :`<p class="sub">Tap a slot, or tap a run of back-to-back slots in the same room for a longer class.</p>`}
+    :``}
 
     ${calendarPickerHTML(slots)}
 
     <div class="dayhead">${esc(SLOTDAY)} · ${DAYSLOTS.length} open time${DAYSLOTS.length===1?'':'s'}</div>
-    <div class="tip">🕒 <span>Book an extra 30-minute slot before <b>and</b> after your class for setup and cleanup.</span></div>
+    <div class="tip">🕒 <span>Tap a time, or a run of back-to-back times, in the same room. Book an extra 30 minutes before <b>and</b> after for setup and cleanup.</span></div>
     <div class="slotgrid">${DAYSLOTS.map((s,i)=>{const on=SEL.includes(s.id);return `<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]} ${on?'sel':''}" onclick="toggleSlot(${s.id})">
       <span class="sg">${on?'✓':SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
       <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`;}).join('')}</div>
