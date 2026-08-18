@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "4.4-calendar-ical"
+VERSION = "4.5-season-generator"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1713,6 +1713,49 @@ class H(http.server.BaseHTTPRequestHandler):
             if r is None:
                 return self.send_json({"ok":False,"error":"Could not read the calendar. Check the service account key and that the calendar is shared with it."})
             return self.send_json({"ok":True, **r})
+        if p == "/api/slots/generate":
+            # A whole season in one click, since the calendar feed is blocked by the
+            # organisation's Workspace policy. Idempotent: existing slots are skipped,
+            # so re-running with wider hours only adds the new ones.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            try:
+                first = datetime.date.fromisoformat((b.get("start_date") or "").strip())
+            except ValueError:
+                return self.send_json({"error":"Please pick the first date."},400)
+            weeks = max(1, min(int(b.get("weeks") or 1), 30))
+            open_h = max(6, min(int(b.get("open_hour") or 9), 22))
+            close_h = max(open_h + 1, min(int(b.get("close_hour") or 17), 23))
+            rooms = [r for r in (b.get("rooms") or []) if r in ("Large Room", "Studio")]
+            if not rooms:
+                return self.send_json({"error":"Pick at least one room."},400)
+            c = db()
+            existing = {(r["date"], r["start"], r["room"]) for r in
+                        c.execute("SELECT date, start, room FROM slots WHERE deleted_at IS NULL")}
+            added = skipped = 0
+            for w in range(weeks):
+                d = first + datetime.timedelta(days=7 * w)
+                label = day_label(d)          # real weekday from the real date
+                t = datetime.datetime(d.year, d.month, d.day, open_h, 0)
+                close = datetime.datetime(d.year, d.month, d.day, close_h, 0)
+                step = datetime.timedelta(minutes=30)
+                while t + step <= close:
+                    st = t.strftime("%I:%M %p").lstrip("0")
+                    en = (t + step).strftime("%I:%M %p").lstrip("0")
+                    for room in rooms:
+                        if (label, st, room) in existing:
+                            skipped += 1
+                        else:
+                            c.execute("INSERT INTO slots(date,start,end,room,status,source) "
+                                      "VALUES(?,?,?,?,'available','manual')", (label, st, en, room))
+                            existing.add((label, st, room)); added += 1
+                    t += step
+            c.commit(); c.close()
+            last = first + datetime.timedelta(days=7 * (weeks - 1))
+            print(f"[slots] {u['name']} generated {added} slot(s), {first} to {last}, rooms {rooms}")
+            return self.send_json({"ok":True, "added":added, "skipped":skipped,
+                                   "first":day_label(first), "last":day_label(last)})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return

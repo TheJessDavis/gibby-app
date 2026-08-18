@@ -826,6 +826,22 @@ async function adminSlots(){
     <h2>Open <em>slots</em></h2>
     <p class="sub">Create time slots instructors can claim.</p>
     <div class="card">
+      <h3 style="font-size:1rem">Generate a season</h3>
+      <div class="meta" style="margin-top:2px">One click makes every slot for the run. Already-existing slots are skipped, so it is safe to run again.</div>
+      <div class="two" style="margin-top:10px">
+        <div><label style="margin-top:0">First date</label><input id="g_start" type="date"></div>
+        <div><label style="margin-top:0">How many weeks</label><input id="g_weeks" type="number" value="12" min="1" max="30"></div></div>
+      <div class="two"><div><label>Opens at</label><select id="g_open">${[8,9,10,11,12].map(h=>`<option value="${h}" ${h===9?'selected':''}>${h===12?'12:00 PM':h+':00 AM'}</option>`).join('')}</select></div>
+        <div><label>Closes at</label><select id="g_close">${[15,16,17,18,19,20,21,22].map(h=>`<option value="${h}" ${h===17?'selected':''}>${h-12}:00 PM</option>`).join('')}</select></div></div>
+      <label>Rooms</label>
+      <label class="chk" style="margin:4px 0"><input type="checkbox" id="g_large" checked> Large Room</label>
+      <label class="chk" style="margin:4px 0"><input type="checkbox" id="g_studio" checked> Studio</label>
+      <div style="height:10px"></div>
+      <button class="btn dark" onclick="generateSeason()">Generate the season</button>
+      <div class="hint" id="g_result"></div>
+    </div>
+    <label style="margin-top:14px">Or add one slot at a time</label>
+    <div class="card">
       <div class="two"><div><label>Date</label><input id="sd" placeholder="Sat, Feb 7"></div>
       <div><label>Room</label><select id="sr"><option>Large Room</option><option>Studio</option></select></div></div>
       <div class="two"><div><label>Start</label><input id="ss" placeholder="10:00 AM"></div>
@@ -837,6 +853,17 @@ async function adminSlots(){
     ${slots.map(s=>`<div class="card"><div class="row"><div><h3>${esc(s.date)}</h3>
       <div class="meta">${esc(s.start)} – ${esc(s.end)} · ${esc(s.room)}</div></div>
       <span class="pill appr">open</span></div></div>`).join('') || '<div class="muted">No open slots yet.</div>'}`;
+}
+async function generateSeason(){
+  const rooms=[];
+  if($('#g_large').checked) rooms.push('Large Room');
+  if($('#g_studio').checked) rooms.push('Studio');
+  const r = await api('/api/slots/generate','POST',{
+    start_date: $('#g_start').value, weeks: +$('#g_weeks').value,
+    open_hour: +$('#g_open').value, close_hour: +$('#g_close').value, rooms});
+  $('#g_result').textContent = `Made ${r.added} slots, ${r.first} through ${r.last}`
+    + (r.skipped ? ` (${r.skipped} already existed and were left alone).` : '.');
+  adminSlots();
 }
 async function addSlot(){
   await api('/api/slots','POST',{date:$('#sd').value,start:$('#ss').value,end:$('#se').value,room:$('#sr').value});
@@ -1638,7 +1665,7 @@ async function submitClass(){
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
- 'attachPoster','removePoster'
+ 'attachPoster','removePoster','generateSeason'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
