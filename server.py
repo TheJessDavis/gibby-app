@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "5.3-people"
+VERSION = "5.4-calendar-snapshot"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1186,7 +1186,13 @@ class H(http.server.BaseHTTPRequestHandler):
     # -- GET api --
     def api_get(self, p):
         if p == "/api/version":
-            return self.send_json({"version": VERSION})
+            # open_slots is deliberately public: it says nothing beyond what the
+            # published class listings do, and it lets a deploy be verified from
+            # outside (did the calendar sync produce slots?) without credentials.
+            c = db()
+            n = c.execute("SELECT COUNT(*) FROM slots WHERE status='available' AND deleted_at IS NULL").fetchone()[0]
+            c.close()
+            return self.send_json({"version": VERSION, "open_slots": n})
         if p == "/api/me":
             u = self.current_user()
             if not u: return self.send_json({"user": None, "season_start": SEASON_START})

@@ -34,6 +34,11 @@ def load_gcal_config():
         # Cloud project, no service account and no key file, which matters because
         # many Workspace organisations block service account keys outright.
         "ics_url": os.environ.get("GCAL_ICS_URL",""),
+        # Last-resort read route: a busy-times snapshot file shipped with the app
+        # (web/gibby-busy.ics, exported from the Gibby calendar). Lets slots appear
+        # before any live feed is reachable; a configured GCAL_ICS_URL always wins.
+        "ics_file": os.environ.get("GCAL_ICS_FILE",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "gibby-busy.ics")),
         # All tunable from the environment, because the defaults open every day
         # from 8am to 10pm, which is far more slots than a Saturday programme needs.
         "open_hour": int(os.environ.get("GCAL_OPEN_HOUR", "8") or 8),
@@ -57,8 +62,9 @@ def load_gcal_config():
     return cfg
 
 def configured(cfg):
-    """Can we read the calendar at all, by either route?"""
-    return bool(cfg.get("ics_url")) or bool(cfg["calendar_id"] and cfg["service_account_json"])
+    """Can we read the calendar at all, by any route?"""
+    return (bool(cfg.get("ics_url")) or os.path.isfile(cfg.get("ics_file") or "")
+            or bool(cfg["calendar_id"] and cfg["service_account_json"]))
 
 def can_write(cfg):
     """Writing classes back needs the API. The iCal feed is read-only."""
@@ -89,7 +95,7 @@ def sync_slots(cfg):
     calendar's busy times. Roomless (single shared space). None if it can't read.
     Uses the API when a service account is available, otherwise the iCal feed."""
     if not configured(cfg): return None
-    if not can_write(cfg) and cfg.get("ics_url"):
+    if not can_write(cfg) and (cfg.get("ics_url") or os.path.isfile(cfg.get("ics_file") or "")):
         return sync_slots_ical(cfg)
     try:
         svc = _service(cfg)
@@ -185,12 +191,23 @@ def _ics_events(text, horizon_start, horizon_end):
 def sync_slots_ical(cfg):
     """Open slots from the calendar's private iCal address. Same shape as
     sync_slots, so the rest of the app cannot tell which route was used."""
-    try:
-        req = urllib.request.Request(cfg["ics_url"], headers={"User-Agent": "GibbyClassManager/1.0"})
-        with urllib.request.urlopen(req, timeout=45) as r:
-            text = r.read().decode("utf-8", "replace")
-    except Exception as e:
-        print("[gcal] could not read the iCal feed:", e); return None
+    text = None
+    if cfg.get("ics_url"):
+        try:
+            req = urllib.request.Request(cfg["ics_url"], headers={"User-Agent": "GibbyClassManager/1.0"})
+            with urllib.request.urlopen(req, timeout=45) as r:
+                text = r.read().decode("utf-8", "replace")
+        except Exception as e:
+            print("[gcal] could not read the iCal feed:", e)
+    if text is None and os.path.isfile(cfg.get("ics_file") or ""):
+        # Bundled busy-times snapshot: also the safety net when the live feed is down.
+        try:
+            text = open(cfg["ics_file"], encoding="utf-8").read()
+            print("[gcal] using bundled snapshot", os.path.basename(cfg["ics_file"]))
+        except Exception as e:
+            print("[gcal] could not read the snapshot file:", e)
+    if text is None:
+        return None
     if "BEGIN:VCALENDAR" not in text:
         print("[gcal] that URL did not return a calendar feed"); return None
 
