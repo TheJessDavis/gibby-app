@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "5.2-season-window"
+VERSION = "5.3-people"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1194,6 +1194,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 "role":u["role"],"must_change_pw":u.get("must_change_pw",0)},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
+        if p == "/api/users":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [{"id":r["id"],"name":r["name"],"email":r["email"],"role":r["role"],
+                     "pending":bool(r["must_change_pw"])}
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw FROM users
+                                          WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
+            c.close(); return self.send_json({"users":rows})
         if p == "/api/slots":
             u = self.require()
             if not u: return
@@ -1671,21 +1680,44 @@ class H(http.server.BaseHTTPRequestHandler):
             name  = (b.get("name","") or "").strip() or email
             role  = b.get("role","instructor")
             pw    = b.get("password","")
-            if not (email and pw):
-                return self.send_json({"error":"email and password required"},400)
+            # An account IS its email: it is the login, and where invites, approvals,
+            # reminders and password resets go. Nothing gets created without a real one.
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                return self.send_json({"error":"A real email address is required. It is how they sign in and where every notification goes."},400)
+            if role not in ("instructor","admin"):
+                return self.send_json({"error":"Role must be instructor or admin."},400)
+            # No password supplied means "invite them": mint an unusable random one and
+            # email a set-your-password link instead of an admin ever knowing a password.
+            invited = not pw
+            if invited: pw = secrets.token_urlsafe(16)
             mc = 1 if b.get("must_change_pw", True) else 0
             h, s = hash_pw(pw); c = db()
             if c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone():
                 # Re-adding a deactivated person revives their account rather than
                 # failing on the unique email.
-                c.execute("""UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=?, must_change_pw=?,
-                             deleted_at=NULL WHERE email=?""",(name,role,h,s,mc,email))
+                if invited:   # re-invite must not clobber a password they already set
+                    c.execute("UPDATE users SET name=?, role=?, deleted_at=NULL WHERE email=?",(name,role,email))
+                else:
+                    c.execute("""UPDATE users SET name=?, role=?, pw_hash=?, pw_salt=?, must_change_pw=?,
+                                 deleted_at=NULL WHERE email=?""",(name,role,h,s,mc,email))
                 action = "updated"
             else:
                 c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt,must_change_pw) VALUES(?,?,?,?,?,?)",(name,email,role,h,s,mc))
                 action = "created"
+            if invited:
+                row = c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone()
+                tok = secrets.token_urlsafe(24)
+                exp = (datetime.datetime.now()+datetime.timedelta(days=7)).isoformat()
+                c.execute("INSERT INTO password_resets(token,user_id,expires) VALUES(?,?,?)",(tok,row["id"],exp))
+                proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+                mailer.send(email, "You're set up on the Gibby Class Manager",
+                    f"Hi {name.split()[0] if name != email else 'there'},\n\n"
+                    f"An account has been created for you on the Gibby Class Manager, where you claim "
+                    f"time slots and submit your classes.\n\n"
+                    f"Set your password here (link valid for 7 days):\n\n{proto}://{host}/?reset={tok}\n\n"
+                    f"After that, sign in any time with this email address.\n\nThe Gibby")
             c.commit(); c.close()
-            return self.send_json({"ok":True,"action":action,"email":email,"role":role})
+            return self.send_json({"ok":True,"action":action,"email":email,"role":role,"invited":invited})
         if p == "/api/change-password":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)

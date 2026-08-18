@@ -464,12 +464,12 @@ async function renderAdmin(tab){
   ADMIN_TAB = tab;
   const v=$('#view');
   const t=(k,l)=>`<button data-tab="${k}" class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
-  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
+  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('people','People')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
     templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
-    all:adminAll, money:adminMoney, audit:adminAudit, archive:adminArchive};
+    all:adminAll, money:adminMoney, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
   return boundary('admin:'+tab, '#tab', fn);
@@ -704,6 +704,42 @@ function calDay(m,d){ const {items}=window.__cal; const list=items.filter(c=>c.p
 function agendaRow(c){ const pill=c.status==='approved'?'appr':c.status==='cancelled'?'inc':'pend';
   return `<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill ${pill}">${esc(c.status)}</span></div>
     <div class="meta">${esc(c.instructor_name)} · ${esc(c.slot_date)} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div></div>`; }
+
+/* ---------------- people ---------------- */
+async function adminPeople(){
+  const d=await api('/api/users');
+  const row=u=>`<div class="card"><div class="row">
+      <div><h3>${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}</div></div>
+      <div>${u.role==='admin'?'<span class="pill appr">admin</span>':''}
+      ${u.pending?'<span class="pill pend">invite sent, no password yet</span>':''}
+      ${u.pending?`<button class="btn ghost" onclick="reinvite('${esc(u.email)}','${esc(u.name||'')}','${u.role}')">Re-send invite</button>`:''}</div>
+    </div></div>`;
+  $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
+    <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
+    <div class="card"><h3>Add a person</h3>
+      <label>Name</label><input id="np_name" placeholder="First Last">
+      <label>Email (required)</label><input id="np_email" type="email" placeholder="them@example.com">
+      <label>Role</label><select id="np_role"><option value="instructor" selected>Instructor</option><option value="admin">Admin</option></select>
+      <button class="btn dark" style="margin-top:12px" onclick="addPerson()">Add &amp; send invite</button>
+      <div class="hint" id="np_msg"></div></div>
+    ${d.users.map(row).join('')}`;
+}
+async function addPerson(){
+  const email=($('#np_email').value||'').trim().toLowerCase(), msg=$('#np_msg');
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    msg.textContent='Enter a real email address first. Accounts cannot be created without one.';
+    $('#np_email').focus(); return;
+  }
+  try{
+    const r=await api('/api/users','POST',{name:($('#np_name').value||'').trim(),email,role:$('#np_role').value});
+    msg.textContent=r.action==='created'?`Invite sent to ${email}.`:`${email} already had an account; it was updated and a fresh invite sent.`;
+    setTimeout(adminPeople, 900);
+  }catch(e){ msg.textContent=e.data&&e.data.error||'Could not add them. Try again.'; }
+}
+async function reinvite(email,name,role){
+  try{ await api('/api/users','POST',{email,name,role}); alert('Fresh invite sent to '+email+'.'); }
+  catch(e){ alert(e.data&&e.data.error||'Could not re-send.'); }
+}
 
 /* ---------------- connections ---------------- */
 async function adminConnections(){
@@ -1975,7 +2011,7 @@ async function submitClassNow(){
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
- 'closeReview','submitClassNow','filterAll','daySheet'
+ 'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
