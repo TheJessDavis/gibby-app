@@ -147,6 +147,14 @@
   .btn.ghost .spin,.btn.green .spin{border-color:rgba(0,0,0,.18);border-top-color:var(--ink)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .btn[disabled]{opacity:.62;cursor:not-allowed}
+  .eg{margin-top:6px}
+  .eg summary{font-size:12px;font-weight:700;color:var(--ink-soft);cursor:pointer}
+  .egbody{background:var(--white);border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+    font-size:12.5px;line-height:1.5;margin-top:8px;font-style:italic}
+  .egbody .meta{font-style:normal}
+  .rvrow{display:grid;grid-template-columns:92px 1fr;gap:10px;padding:7px 0;border-top:1px solid var(--line);font-size:13px}
+  .rvrow:first-of-type{border-top:none}
+  .rvrow b{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-soft);padding-top:1px}
   .fsec{display:flex;align-items:center;gap:10px;margin:26px 0 2px;padding-top:18px;border-top:2px solid var(--ink)}
   .fsec:first-of-type{border-top:none;padding-top:0;margin-top:18px}
   .fsec span{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:800;
@@ -1555,6 +1563,14 @@ function openForm(slot, draftPayload){
     <label>Class title</label><input id="f_title">
     <label>Description <span style="color:var(--ink-soft);font-weight:600">(at least 50 words)</span></label>
     <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 / 50 words</div>
+    <details class="eg"><summary>Stuck? See an example of the right length</summary>
+      <div class="egbody">&ldquo;Make a hanging stained-glass suncatcher in a single relaxed evening.
+      We&rsquo;ll cut and foil real glass, solder it the traditional way, and finish with a chain so
+      it&rsquo;s ready to hang. Every step is demonstrated slowly, and no experience is needed.
+      You&rsquo;ll leave with a finished piece and the itch to make another.&rdquo;
+      <div class="meta" style="margin-top:6px">53 words. Say what they&rsquo;ll make, what happens on
+      the night, and who it suits.</div></div>
+    </details>
 
     <label>Room</label>
     <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>
@@ -1599,6 +1615,8 @@ function openForm(slot, draftPayload){
     <label style="margin-top:0">Photo for the graphic</label>
     <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
     <input id="f_file" type="file" accept="image/*" class="hidden" onchange="onPhoto(event)">
+    <div class="hint">Bright, close-up, and no text on the image. The poster adds the words, so a busy
+      photo fights the headline. A finished piece or hands mid-make works best.</div>
 
     <label>Links <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <textarea id="f_links" placeholder="Add any links, one per line: supply lists, inspiration, examples, your portfolio."></textarea>
@@ -1830,6 +1848,42 @@ async function submitClass(){
     SUBMIT_TRIED=true; markMissing(miss); updateTodo();
     const x=$('#ferr'); x.textContent='Please complete: '+miss.map(m=>m.label).join(', ')+'.'; x.classList.add('show');
     jumpToFirst(miss); return; }
+  showReview();
+}
+/* The last look before it goes to The Gibby: everything they are agreeing to on
+   one card. Only reachable once the form is complete. */
+function showReview(){
+  const f = collectForm();
+  const when = SUBMIT_SLOT.series
+    ? `${SUBMIT_SLOT.weeks} weeks &middot; ${esc(SUBMIT_SLOT.sessions[0].date)} &ndash; ${esc(SUBMIT_SLOT.sessions[SUBMIT_SLOT.sessions.length-1].date)}`
+    : esc(SUBMIT_SLOT.date);
+  const planned = +$('#c_plan').value || f.max_p;
+  const mat = (+f.material_cost||0), tk = (+f.ticket_price||0);
+  const pool = Math.max(0, tk*planned - mat*planned);
+  const earn = f.pay_model==='split'
+    ? `about ${money0(pool*0.6 + (f.own_materials?mat*planned:0))} at ${planned} booked (60% of sales)`
+    : `${money(f.instructor_pay)} flat`;
+  const m = document.createElement('div'); m.id='rvmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px';
+  m.innerHTML = `<div style="background:#FFFDF8;border-radius:18px;max-width:420px;width:100%;padding:20px 22px">
+    <h2 style="margin:0 0 2px">One last <em>look</em></h2>
+    <p class="sub" style="margin:0 0 12px">This is what The Gibby reviews and what students will see.</p>
+    <div class="rvrow"><b>Class</b><span>${esc(f.title)}</span></div>
+    <div class="rvrow"><b>When</b><span>${when} &middot; class ${esc(f.class_start)} &ndash; ${esc(f.class_end)}</span></div>
+    <div class="rvrow"><b>Room</b><span>${esc(f.room)} &middot; booked ${esc(SUBMIT_SLOT.start)} &ndash; ${esc(SUBMIT_SLOT.end)}</span></div>
+    <div class="rvrow"><b>Ages</b><span>${esc(ageLabel(selectedAges()))}</span></div>
+    <div class="rvrow"><b>Students</b><span>${f.min_p} to ${f.max_p}${f.close_days?` &middot; registration closes ${f.close_days} day${f.close_days===1?'':'s'} before`:''}</span></div>
+    <div class="rvrow"><b>Ticket</b><span>${money(f.ticket_price)}${f.own_materials?` &middot; you supply materials (${money(f.material_cost)}/student, reimbursed)`:''}</span></div>
+    <div class="rvrow"><b>You earn</b><span>${earn}</span></div>
+    <div class="two" style="margin-top:16px">
+      <button class="btn ghost" onclick="closeReview()">Keep editing</button>
+      <button class="btn dark" onclick="submitClassNow()">Yes, submit it</button></div></div>`;
+  m.addEventListener('click', e=>{ if(e.target===m) closeReview(); });
+  document.body.appendChild(m);
+}
+function closeReview(){ const m=$('#rvmodal'); if(m) m.remove(); }
+async function submitClassNow(){
+  closeReview();
   const body = {...collectForm(), draft_id: DRAFT_ID || undefined};
   try{ await api('/api/classes','POST',body); SEL=[]; DRAFT_ID=null; renderInstr('mine'); }
   catch(e){ const x=$('#ferr'); x.textContent=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message); x.classList.add('show'); window.scrollTo(0,0); }
@@ -1845,7 +1899,8 @@ async function submitClass(){
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
- 'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev'
+ 'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
+ 'closeReview','submitClassNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
