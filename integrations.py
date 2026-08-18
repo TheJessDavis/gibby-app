@@ -126,7 +126,10 @@ def _iso_times(cls, cfg):
         date = (cls.get("slot_date") or "").split(", ")[-1].strip().split()  # ['Jan','17']
         mon, day = _MON[date[0]], int(date[1])
         # accept en dash, em dash or a plain hyphen: a hand-edited time should still publish
-        parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", (cls.get("slot_time") or "").strip()) if p.strip()]
+        # Students are told when the CLASS runs; the booked window around it is
+        # the instructor's setup and cleanup time.
+        span = cls.get("class_time") or cls.get("slot_time") or ""
+        parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", span.strip()) if p.strip()]
         def t(s):
             dt = datetime.datetime.strptime(s, "%I:%M %p")
             return datetime.datetime(cfg["year"], mon, day, dt.hour, dt.minute)

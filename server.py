@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "4.7-guided-form"
+VERSION = "4.8-class-times"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -147,7 +147,7 @@ def init_db():
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
                      ("close_days","INTEGER DEFAULT 0"),("poster","TEXT"),
-                     ("pay_model","TEXT DEFAULT 'flat'"),
+                     ("pay_model","TEXT DEFAULT 'flat'"),("class_time","TEXT"),
                      ("headcount_sent","INTEGER DEFAULT 0"),
                      ("followup_note","TEXT"),("followup_status","TEXT"),
                      ("followup_requested_at","TEXT"),("followup_submitted_at","TEXT"),
@@ -1852,6 +1852,14 @@ class H(http.server.BaseHTTPRequestHandler):
             if not (_num("instructor_pay") or 0) > 0: miss.append("instructor_pay")
             mc = _num("material_cost")
             if mc is None or mc < 0: miss.append("material_cost")
+            # The booked window includes setup and cleanup; the class itself must be
+            # marked inside it, because students are told the CLASS time.
+            cs, ce = (b.get("class_start") or "").strip(), (b.get("class_end") or "").strip()
+            try:
+                if not cs or not ce or tmin(cs) >= tmin(ce):
+                    miss.append("class start and end time")
+            except ValueError:
+                miss.append("class start and end time")
             if miss: return self.send_json({"error":"Missing required fields","fields":miss},400)
             c=db()
             ids = b.get("slot_ids") or ([b["slot_id"]] if b.get("slot_id") else [])
@@ -1886,6 +1894,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 else:
                     sessions = [{"date": rows[0]["date"], "start": rows[0]["start"],
                                  "end": rows[-1]["end"], "slot_ids": [r["id"] for r in rows]}]
+                if tmin(cs) < tmin(rows[0]["start"]) or tmin(ce) > tmin(rows[-1]["end"]):
+                    c.close(); return self.send_json({"error":"Class times must sit inside your booked window."},400)
                 # RACE-SAFE: claim ALL slots for every session atomically; if any got
                 # taken first, rowcount < N, we roll back (no commit) and reject.
                 claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
@@ -1908,10 +1918,11 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
+            new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            c.execute("UPDATE classes SET class_time=? WHERE id=?", (f"{cs} \u2013 {ce}", new_id))
             pm = b.get("pay_model")
             if pm in ("flat", "split"):
-                c.execute("UPDATE classes SET pay_model=? WHERE id=?",
-                          (pm, c.execute("SELECT last_insert_rowid()").fetchone()[0]))
+                c.execute("UPDATE classes SET pay_model=? WHERE id=?", (pm, new_id))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
                 c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",

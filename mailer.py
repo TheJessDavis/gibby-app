@@ -66,7 +66,7 @@ def tmpl_approved(cls, instr):
     return (f"Your class is approved: {cls['title']}",
         f"Hi {instr['name'].split()[0]},\n\n"
         f"Your class \"{cls['title']}\" is approved and going live.\n\n"
-        f"When: {cls.get('slot_date','')} {cls.get('slot_time','')}\n"
+        f"When: {cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time','')}\n"
         f"Where: The Gibby, {cls.get('room','')}\n"
         f"Ticket: ${cls.get('ticket_price','')}  |  Your pay: ${cls.get('instructor_pay','')}\n\n"
         f"It is now posted for registration. You will see enrollment as students sign up.\n\n"
@@ -89,7 +89,7 @@ def tmpl_cancel(cls):
 def tmpl_reminder(cls, cfg):
     return (f"See you soon: {cls['title']}",
         f"Hello,\n\nThis is a reminder for \"{cls['title']}\".\n\n"
-        f"When: {cls.get('slot_date','')} {cls.get('slot_time','')}\n"
+        f"When: {cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time','')}\n"
         f"Where: The Gibby, {cls.get('room','')}\n\n"
         f"{cfg['logistics']}\n\nSee you there,\nThe Gibby")
 

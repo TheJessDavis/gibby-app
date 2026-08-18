@@ -208,7 +208,7 @@ def create_event(cls, cfg):
     except Exception:
         sessions = []
     if not sessions:
-        sessions = [{"date": cls.get("slot_date"), "time": cls.get("slot_time")}]
+        sessions = [{"date": cls.get("slot_date"), "time": cls.get("class_time") or cls.get("slot_time")}]
     n = len(sessions)
 
     if not can_write(cfg):

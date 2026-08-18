@@ -147,6 +147,10 @@
   .btn.ghost .spin,.btn.green .spin{border-color:rgba(0,0,0,.18);border-top-color:var(--ink)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .btn[disabled]{opacity:.62;cursor:not-allowed}
+  .bookbanner{background:var(--ink);color:#fff;border-radius:16px;padding:14px 16px;margin:0 0 14px}
+  .bookbanner .bb-label{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--yellow,#FCD34D);opacity:.95}
+  .bookbanner .bb-main{font-size:17px;font-weight:800;margin-top:3px;line-height:1.25}
+  .bookbanner .bb-sub{font-size:11.5px;font-weight:700;color:rgba(255,255,255,.65);margin-top:3px}
   .missfield{outline:2px solid #B4442C;outline-offset:2px;border-radius:12px}
   #todobar{position:fixed;bottom:86px;left:0;right:0;max-width:408px;margin:0 auto;z-index:29;
     background:var(--white);border-radius:14px;padding:10px 14px;box-shadow:0 8px 20px rgba(0,0,0,.14);
@@ -1000,7 +1004,9 @@ function cardCls(c){
     <div class="row"><h3>${esc(c.title)}</h3>${pill}</div>
     <div class="meta">${esc(c.instructor_name)} · ${c.is_series&&c.sessions&&c.sessions.length
       ? `${c.sessions.length} sessions, ${esc(c.sessions[0].date)} – ${esc(c.sessions[c.sessions.length-1].date)}`
-      : esc(c.slot_date||'')} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div>
+      : esc(c.slot_date||'')} ${esc(c.class_time||c.slot_time||'')} · ${esc(c.room||'')}</div>
+    ${c.class_time && c.slot_time && c.class_time!==c.slot_time
+      ? `<div class="meta" style="margin-top:2px">Room booked ${esc(c.slot_time)} for setup and cleanup</div>`:''}
     ${c.is_series?`<div style="margin-top:8px"><span class="pill ir">📚 ${c.session_count||(c.sessions||[]).length}-week course</span></div>`:''}
     ${c.is_series&&c.sessions&&c.sessions.length?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">All ${c.sessions.length} dates</summary>
       <div class="sessionlist">${c.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div></details>`:''}
@@ -1483,6 +1489,7 @@ function applyDraft(p){
   set('#f_title',p.title); set('#f_desc',p.description); set('#f_len',p.length);
   set('#f_pre',p.pre_class); set('#f_links',p.links); set('#f_max',p.max_p); set('#f_min',p.min_p);
   set('#c_mat',p.material_cost); set('#f_room',p.room); set('#f_close',p.close_days);
+  set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
   if($('#f_own')) $('#f_own').checked = !!p.own_materials;
@@ -1497,13 +1504,38 @@ function applyDraft(p){
   if(p.ticket_price){ $('#f_ticket').value=p.ticket_price; $('#f_ticket').dataset.t=1; }
   if(p.instructor_pay){ $('#f_pay').value=p.instructor_pay; $('#f_pay').dataset.t=1; }
 }
+function fmtT(m){ let h=Math.floor(m/60), mm=m%60; const ap=h>=12?'PM':'AM';
+  h=h%12||12; return h+':'+String(mm).padStart(2,'0')+' '+ap; }
+function timeOpts(ws, we, which){
+  const a=tmin(ws), b=tmin(we);
+  // suggest 30 min inside each end when there is room for a real class between
+  const defStart = (b-a>=90) ? a+30 : a;
+  const defEnd   = (b-a>=90) ? b-30 : b;
+  let out='';
+  for(let m=a; m<=b; m+=30){
+    const sel = (which==='start' ? m===defStart : m===defEnd) ? ' selected' : '';
+    out+=`<option${sel}>${fmtT(m)}</option>`;
+  }
+  return out;
+}
 function openForm(slot, draftPayload){
   SUBMIT_SLOT=slot; PHOTO=null;
   $('#view').innerHTML = `
     <h2>New <em>class</em></h2>
-    <p class="sub">${slot.series
-      ? `${slot.weeks}-week course · ${esc(slot.sessions[0].date)} – ${esc(slot.sessions[slot.sessions.length-1].date)} · ${esc(slot.start)}–${esc(slot.end)}`
-      : `${esc(slot.date)} · ${esc(slot.start)}–${esc(slot.end)}${slot.room?' · '+esc(slot.room):''}`}</p>
+    <div class="bookbanner">
+      <div class="bb-label">Your booking</div>
+      <div class="bb-main">${slot.series
+        ? `${slot.weeks} weeks · ${esc(slot.sessions[0].date)} – ${esc(slot.sessions[slot.sessions.length-1].date)}`
+        : esc(slot.date)} · ${esc(slot.start)} – ${esc(slot.end)}</div>
+      <div class="bb-sub">${slot.room?esc(slot.room)+' · ':''}this window includes your setup and cleanup time</div>
+    </div>
+
+    <label style="margin-top:0">When does the class itself run?</label>
+    <div class="two">
+      <div><select id="f_cstart">${timeOpts(slot.start, slot.end, 'start')}</select></div>
+      <div><select id="f_cend">${timeOpts(slot.start, slot.end, 'end')}</select></div></div>
+    <div class="hint">This is what students are told and what goes on Eventbrite. The time either side
+      of it is yours for setting up and clearing away.</div>
     ${slot.series?`<div class="card" style="margin-bottom:14px"><h3 style="font-size:.95rem">${slot.weeks} sessions</h3>
       <div class="sessionlist">${slot.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)}</div>`).join('')}</div>
       <div class="meta" style="margin-top:8px">Students pay once and are enrolled in every session.</div></div>`:''}
@@ -1657,6 +1689,9 @@ function validateForm(){
   const dw=wordCount($('#f_desc').value);
   if(dw<50) add('#f_desc','Description (at least 50 words'+(dw?', currently '+dw:'')+')','description');
   if(!$('#f_len').value) add('#f_len','Class length','length');
+  const cs2=$('#f_cstart'), ce2=$('#f_cend');
+  if(cs2 && ce2 && tmin(cs2.value) >= tmin(ce2.value))
+    add('#f_cend','Class end time must be after it starts','class times');
   if(selectedAges().length===0) add('#f_ages','At least one age range','ages');
   if(!PHOTO) add('#f_photo','A class photo','photo');
   const max=num('f_max'), min=num('f_min');
@@ -1712,6 +1747,7 @@ function initFormHelpers(){
   SUBMIT_TRIED=false;
   const v=$('#view'); if(!v) return;
   v.addEventListener('input', ()=>{ updateTodo(); scheduleAutosave(); });
+  v.addEventListener('change', ()=>{ updateTodo(); scheduleAutosave(); });
   v.addEventListener('click', e=>{
     if(e.target.closest('.seg,.chk,.photo,select')) setTimeout(()=>{ updateTodo(); scheduleAutosave(); },0);
   });
@@ -1732,6 +1768,7 @@ function collectForm(){
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     links:$('#f_links').value, photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
+    class_start:($('#f_cstart')?$('#f_cstart').value:''), class_end:($('#f_cend')?$('#f_cend').value:''),
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
     room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,
