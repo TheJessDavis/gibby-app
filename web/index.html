@@ -147,6 +147,11 @@
   .btn.ghost .spin,.btn.green .spin{border-color:rgba(0,0,0,.18);border-top-color:var(--ink)}
   @keyframes sp{to{transform:rotate(360deg)}}
   .btn[disabled]{opacity:.62;cursor:not-allowed}
+  .fsec{display:flex;align-items:center;gap:10px;margin:26px 0 2px;padding-top:18px;border-top:2px solid var(--ink)}
+  .fsec:first-of-type{border-top:none;padding-top:0;margin-top:18px}
+  .fsec span{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:800;
+    background:var(--ink);color:#fff;border-radius:7px;width:24px;height:24px;display:grid;place-items:center;flex:none}
+  .fsec b{font-size:15px;font-weight:800;letter-spacing:-.01em}
   .bookbanner{background:var(--ink);color:#fff;border-radius:16px;padding:14px 16px;margin:0 0 14px}
   .bookbanner .bb-label{font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--yellow,#FCD34D);opacity:.95}
   .bookbanner .bb-main{font-size:17px;font-weight:800;margin-top:3px;line-height:1.25}
@@ -1530,6 +1535,7 @@ function openForm(slot, draftPayload){
       <div class="bb-sub">${slot.room?esc(slot.room)+' · ':''}this window includes your setup and cleanup time</div>
     </div>
 
+    <div class="fsec"><span>1</span><b>The class</b></div>
     <label style="margin-top:0">When does the class itself run?</label>
     <div class="two">
       <div><select id="f_cstart">${timeOpts(slot.start, slot.end, 'start')}</select></div>
@@ -1540,7 +1546,12 @@ function openForm(slot, draftPayload){
       <div class="sessionlist">${slot.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)}</div>`).join('')}</div>
       <div class="meta" style="margin-top:8px">Students pay once and are enrolled in every session.</div></div>`:''}
     <div class="err" id="ferr"></div>
-    <label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select>
+    <div class="two">
+      <div><label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select></div>
+      <div><label>Or copy a past class</label><select id="f_prev" onchange="applyPrev()"><option value="">Pick one&hellip;</option></select></div>
+    </div>
+    <div class="hint">Copying brings over everything except the date and times, so a repeat class is a
+      thirty-second job. Adjust whatever changed.</div>
     <label>Class title</label><input id="f_title">
     <label>Description <span style="color:var(--ink-soft);font-weight:600">(at least 50 words)</span></label>
     <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 / 50 words</div>
@@ -1553,7 +1564,8 @@ function openForm(slot, draftPayload){
       <option>30 minutes</option><option>1 hour</option><option>1.5 hours</option><option>2 hours</option>
       <option>2.5 hours</option><option>3 hours</option><option>3.5 hours</option><option>4 hours</option></select>
 
-    <label>Age range (choose all that apply)</label>
+    <div class="fsec"><span>2</span><b>Who it&rsquo;s for</b></div>
+    <label style="margin-top:0">Age range (choose all that apply)</label>
     <div class="chkgrid" id="f_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
     <div class="hint" id="f_agepreview"></div>
 
@@ -1583,19 +1595,20 @@ function openForm(slot, draftPayload){
       <option value="14">2 weeks before</option></select>
     <div class="hint">Eventbrite stops selling at this point, so your headcount is settled before you shop for materials.</div>
 
-    <label>Photo for the graphic</label>
+    <div class="fsec"><span>3</span><b>The poster</b></div>
+    <label style="margin-top:0">Photo for the graphic</label>
     <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
     <input id="f_file" type="file" accept="image/*" class="hidden" onchange="onPhoto(event)">
 
     <label>Links <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <textarea id="f_links" placeholder="Add any links, one per line: supply lists, inspiration, examples, your portfolio."></textarea>
 
-    <label style="margin-top:16px">Materials</label>
+    <div class="fsec"><span>4</span><b>Pricing</b></div>
+    <label style="margin-top:0">Materials</label>
     <label class="chk" style="margin:4px 0"><input type="checkbox" id="f_own" onchange="calc()"> I'm providing my own materials</label>
     <label>Material cost per student ($)</label><input id="c_mat" type="number" value="8" oninput="calc()">
     <div class="hint" id="matnote"></div>
 
-    <label style="margin-top:16px">Pricing</label>
     <label>How is your pay worked out?</label>
     <div class="seg" id="f_paym">
       <button class="on" data-v="flat" onclick="segPick(this)">Flat fee</button>
@@ -1621,7 +1634,7 @@ function openForm(slot, draftPayload){
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="leaveForm()">Cancel</button>
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
-  calc(); descCount(); loadTplOptions();
+  calc(); descCount(); loadTplOptions(); loadPrevOptions();
   if(draftPayload) applyDraft(draftPayload);
   initFormHelpers();
 }
@@ -1775,6 +1788,30 @@ function collectForm(){
     supplies:[]
   };
 }
+/* Their own submitted classes, newest first, one entry per title. Repeat
+   instructors mostly reuse their numbers, so a rerun should be a copy, not a
+   retype. */
+let PREV_CLASSES=[];
+async function loadPrevOptions(){
+  try{
+    const {classes} = await api('/api/classes/mine');
+    const seen=new Set(); PREV_CLASSES=[];
+    classes.forEach(c=>{ if(!seen.has(c.title)){ seen.add(c.title); PREV_CLASSES.push(c); } });
+    const sel=$('#f_prev');
+    if(sel && PREV_CLASSES.length){
+      sel.innerHTML='<option value="">Pick one&hellip;</option>'
+        + PREV_CLASSES.map((c,i)=>`<option value="${i}">${esc(c.title)}</option>`).join('');
+    } else if(sel){ sel.closest('div').style.display='none'; }
+  }catch(_){/* the picker is a convenience; the form works without it */}
+}
+function applyPrev(){
+  const i=$('#f_prev').value; if(i==='') return;
+  const c=PREV_CLASSES[+i]; if(!c) return;
+  applyDraft(c);                       // same keys as a draft payload
+  updateTodo();
+  const n=$('#draftnote');
+  if(n) n.textContent=`Copied from ${c.title}. The date and class times are fresh for this booking.`;
+}
 async function saveDraft(silent){
   const payload = collectForm();
   const r = await api('/api/drafts','POST',{
@@ -1808,7 +1845,7 @@ async function submitClass(){
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
- 'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide'
+ 'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
