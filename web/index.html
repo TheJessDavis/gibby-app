@@ -119,10 +119,23 @@
   .calc{background:var(--ink);color:#fff;border-radius:16px;padding:16px;margin-top:8px}
   .calc .o{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.12);font-size:13px}
   .calc .o:last-child{border-bottom:none}.calc .o b{font-weight:800}.calc .o .hero{color:var(--yellow);font-size:16px}
-  .daytabs{display:flex;gap:8px;overflow-x:auto;margin:0 0 12px;padding-bottom:4px}
-  .daytab{flex:none;border:none;background:var(--white);padding:9px 14px;border-radius:14px;font-weight:800;font-size:14px;cursor:pointer;box-shadow:0 3px 9px rgba(0,0,0,.05);color:var(--ink);text-align:center;line-height:1.1}
-  .daytab small{display:block;font-size:9.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);margin-top:2px}
-  .daytab.on{background:var(--ink);color:#fff}.daytab.on small{color:rgba(255,255,255,.7)}
+  /* pop-out style month calendar for picking a class date */
+  .cal{background:var(--white);border-radius:20px;padding:14px 14px 10px;box-shadow:0 3px 9px rgba(0,0,0,.05);margin:0 0 14px;max-width:420px}
+  .calhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .calmon{font-weight:800;font-size:16px}
+  .calnav{border:none;background:var(--paper);width:34px;height:34px;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;color:var(--ink);line-height:1}
+  .calnav:disabled{opacity:.25;cursor:default}
+  .caldow{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px}
+  .caldow div{text-align:center;font-size:9.5px;font-weight:800;letter-spacing:.08em;color:var(--ink-soft)}
+  .calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+  .calday{position:relative;aspect-ratio:1;border:none;border-radius:11px;font-family:inherit;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:13.5px;font-weight:800;background:none;color:var(--ink)}
+  .calday.off{color:var(--ink-soft);opacity:.32;font-weight:600}
+  .calday.has{background:#EAF4E2;cursor:pointer;color:var(--ink)}
+  .calday.has small{font-size:8.5px;font-weight:800;color:#3F7A32;line-height:1;margin-top:1px}
+  .calday.on{background:var(--ink);color:#fff}
+  .calday.on small{color:rgba(255,255,255,.75)}
+  .callegend{font-size:11px;font-weight:700;color:var(--ink-soft);margin-top:8px}
+  .dayhead{font-weight:800;font-size:14px;margin:0 0 10px}
   .tip{display:flex;gap:9px;align-items:flex-start;background:#FCE889;border-radius:16px;padding:12px 14px;font-size:12.5px;font-weight:700;line-height:1.35;margin-bottom:14px}
   /* one-day vs series, month/list toggle, week picker, session lists */
   .kindseg{margin:0 0 14px}
@@ -1390,9 +1403,9 @@ const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','�
 let DAYSLOTS=[], SEL=[];
 function tmin(t){ const m=(t||'').trim().match(/(\d+):(\d+)\s*(AM|PM)/i); if(!m)return 0; let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12; return h*60 + +m[2]; }
 let CLASSKIND='single';      // 'single' = one-day class, 'series' = multi-week course
-let SERIES_WEEKS=6, SLOTVIEW='list', SERIES_PREVIEW=null;
+let SERIES_WEEKS=6, CAL_PAGE=null, SERIES_PREVIEW=null;
 function setKind(k){ CLASSKIND=k; SERIES_PREVIEW=null; instrOpen(); }
-function setSlotView(v){ SLOTVIEW=v; instrOpen(); }
+function setCalPage(m){ CAL_PAGE=m; instrOpen(); }
 function setWeeks(n){ SERIES_WEEKS=Math.max(2,Math.min(+n||6,26)); SERIES_PREVIEW=null;
   if(SEL.length) previewSeries(); else instrOpen(); }
 
@@ -1404,24 +1417,42 @@ async function previewSeries(){
   instrOpen();
 }
 
-/* Month grid of open slots: every day in the next 30 days, shaded by how many
-   slots are still free. Tapping a day drops back into that day's slot list. */
-function monthGridHTML(slots){
+/* Month calendar for picking a class date: one real month at a time, paged with
+   arrows. Days with open times are green and tappable (the little number is how
+   many 30-minute times are free); everything else is dimmed. Tapping a day shows
+   its times below. */
+function calendarPickerHTML(slots){
   const byDay={}; slots.forEach(s=>{ (byDay[s.date]=byDay[s.date]||[]).push(s); });
-  const days=Object.keys(byDay).map(d=>({label:d, n:byDay[d].length, dt:parseDate(d)}))
-    .filter(d=>d.dt).sort((a,b)=>mOrd(a.dt.m)-mOrd(b.dt.m) || a.dt.d-b.dt.d);
-  if(!days.length) return '<div class="muted">No open days right now.</div>';
-  const MABBR=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const a=days[0].dt, z=days[days.length-1].dt;
-  // Say the real range rather than assuming a fixed window; open days can span months.
-  const range = `${MABBR[a.m]} ${a.d} – ${MABBR[z.m]} ${z.d}`;
-  return `<div class="monthhead">${days.length} open day${days.length===1?'':'s'} · ${esc(range)}</div>
-    <div class="monthgrid">${days.map(d=>`
-      <button class="mday ${d.label===SLOTDAY?'on':''}" onclick="pickDay('${d.label}')">
-        <div class="mdow">${esc(d.label.split(', ')[0])} · ${MABBR[d.dt.m]}</div>
-        <div class="mnum">${d.dt.d}</div>
-        <div class="mcount">${d.n} open</div>
-      </button>`).join('')}</div>`;
+  const months=[...new Set(Object.keys(byDay).map(d=>parseDate(d)).filter(Boolean).map(p=>p.m))]
+    .sort((a,b)=>mOrd(a)-mOrd(b));
+  if(!months.length) return '<div class="muted">No open days right now.</div>';
+  let m=CAL_PAGE;
+  if(m===null || !months.includes(m)){
+    const sd=parseDate(SLOTDAY);
+    m = (sd && months.includes(sd.m)) ? sd.m : months[0];
+  }
+  const y=seasonYearFor(m), idx=months.indexOf(m);
+  const openByNum={};
+  Object.keys(byDay).forEach(d=>{ const p=parseDate(d); if(p && p.m===m) openByNum[p.d]={label:d, n:byDay[d].length}; });
+  const lead=new Date(y,m,1).getDay(), dim=new Date(y,m+1,0).getDate();
+  let cells='';
+  for(let i=0;i<lead;i++) cells+='<div class="calday"></div>';
+  for(let d=1;d<=dim;d++){
+    const o=openByNum[d];
+    cells += o
+      ? `<button class="calday has ${o.label===SLOTDAY?'on':''}" onclick="pickDay('${o.label}')"><span>${d}</span><small>${o.n}</small></button>`
+      : `<div class="calday off"><span>${d}</span></div>`;
+  }
+  return `<div class="cal">
+    <div class="calhead">
+      <button class="calnav" ${idx===0?'disabled':''} onclick="setCalPage(${idx===0?m:months[idx-1]})" aria-label="earlier month">‹</button>
+      <div class="calmon">${MONNAME[m]} ${y}</div>
+      <button class="calnav" ${idx===months.length-1?'disabled':''} onclick="setCalPage(${idx===months.length-1?m:months[idx+1]})" aria-label="later month">›</button>
+    </div>
+    <div class="caldow"><div>SUN</div><div>MON</div><div>TUE</div><div>WED</div><div>THU</div><div>FRI</div><div>SAT</div></div>
+    <div class="calgrid">${cells}</div>
+    <div class="callegend">Green days have open times. Tap one to see them.</div>
+  </div>`;
 }
 
 async function instrOpen(){
@@ -1451,14 +1482,9 @@ async function instrOpen(){
       </div>`
     :`<p class="sub">Tap a slot, or tap a run of back-to-back slots in the same room for a longer class.</p>`}
 
-    <div class="viewtog">
-      <button class="${SLOTVIEW==='list'?'on':''}" onclick="setSlotView('list')">List</button>
-      <button class="${SLOTVIEW==='month'?'on':''}" onclick="setSlotView('month')">Month</button>
-    </div>
+    ${calendarPickerHTML(slots)}
 
-    ${SLOTVIEW==='month' ? monthGridHTML(slots) : `
-      <div class="daytabs">${days.map(d=>{const q=d.split(', ');return `<button class="daytab ${d===SLOTDAY?'on':''}" onclick="pickDay('${d}')">${esc(q[1]||d)}<small>${esc(q[0]||'')}</small></button>`;}).join('')}</div>`}
-
+    <div class="dayhead">${esc(SLOTDAY)} · ${DAYSLOTS.length} open time${DAYSLOTS.length===1?'':'s'}</div>
     <div class="tip">🕒 <span>Book an extra 30-minute slot before <b>and</b> after your class for setup and cleanup.</span></div>
     <div class="slotgrid">${DAYSLOTS.map((s,i)=>{const on=SEL.includes(s.id);return `<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]} ${on?'sel':''}" onclick="toggleSlot(${s.id})">
       <span class="sg">${on?'✓':SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
@@ -2011,7 +2037,7 @@ async function submitClassNow(){
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
- 'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite'
+ 'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

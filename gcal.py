@@ -34,6 +34,12 @@ def load_gcal_config():
         # Cloud project, no service account and no key file, which matters because
         # many Workspace organisations block service account keys outright.
         "ics_url": os.environ.get("GCAL_ICS_URL",""),
+        # Write route that works under the org's locked-down Workspace: a Google
+        # Apps Script web app (scripts/gcal-webhook.gs) deployed by someone with
+        # write access to the calendar. It runs as THEM, so no service account or
+        # OAuth client is ever needed. The key must match the one in the script.
+        "webhook_url": os.environ.get("GCAL_WEBHOOK_URL",""),
+        "webhook_key": os.environ.get("GCAL_WEBHOOK_KEY",""),
         # Last-resort read route: a busy-times snapshot file shipped with the app
         # (web/gibby-busy.ics, exported from the Gibby calendar). Lets slots appear
         # before any live feed is reachable; a configured GCAL_ICS_URL always wins.
@@ -67,8 +73,9 @@ def configured(cfg):
             or bool(cfg["calendar_id"] and cfg["service_account_json"]))
 
 def can_write(cfg):
-    """Writing classes back needs the API. The iCal feed is read-only."""
-    return bool(cfg["calendar_id"] and cfg["service_account_json"])
+    """Writing classes back needs the API or the Apps Script webhook. The iCal
+    feed (and the bundled snapshot) are read-only."""
+    return bool(cfg.get("webhook_url")) or bool(cfg["calendar_id"] and cfg["service_account_json"])
 
 def _service(cfg):
     from google.oauth2 import service_account
@@ -246,22 +253,21 @@ def create_event(cls, cfg):
 
     if not can_write(cfg):
         print(f"[gcal] read-only (iCal feed): cannot add {n} event(s) for "
-              f"'{cls.get('title')}'. A service account is needed to write."); return None
+              f"'{cls.get('title')}'. A webhook or service account is needed to write."); return None
     if not cfg["gcal_live"]:
         print(f"[gcal] dry-run: would add {n} event(s) for '{cls.get('title')}'"); return None
     try:
-        svc = _service(cfg)
         # slot labels carry no year; infer it from the season, as the server does
         try:
             sd = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-12-01"))
         except ValueError:
             sd = datetime.date(2026, 12, 1)
-        ids = []
+        events = []
         for i, s in enumerate(sessions, start=1):
             md = (s.get("date") or "").split(", ")[-1].split()
             mon, day = MONTHS.index(md[0]) + 1, int(md[1])
             year = sd.year if mon >= sd.month else sd.year + 1
-            span = s.get("time") or f"{s.get('start','')} – {s.get('end','')}"
+            span = s.get("time") or f"{s.get('start','')} \u2013 {s.get('end','')}"
             parts = [p.strip() for p in re.split(r"\s*[\u2013\u2014-]\s*", (span or "").strip()) if p.strip()]
             def t(x):
                 dt = datetime.datetime.strptime(x, "%I:%M %p")
@@ -272,12 +278,35 @@ def create_event(cls, cfg):
             desc = (f"Instructor: {cls.get('instructor_name','')}\nRoom: {cls.get('room','')}\n"
                     f"{cls.get('age_label') or cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}"
                     + (f"\nSession {i} of {n}" if n > 1 else "") + f"\n\n{cls.get('description','')}")
+            # Timezone-aware ISO strings: unambiguous for both the Apps Script
+            # webhook (new Date(...) honours the offset) and the Calendar API.
+            events.append({"title": title, "description": desc,
+                           "location": f"The Gibby, {cls.get('room','')}",
+                           "start": start.replace(tzinfo=TZ).isoformat(),
+                           "end": end.replace(tzinfo=TZ).isoformat()})
+
+        if cfg.get("webhook_url"):
+            payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "create",
+                                  "events": events}).encode()
+            req = urllib.request.Request(cfg["webhook_url"], data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.loads(r.read().decode("utf-8", "replace"))
+            if not res.get("ok"):
+                print("[gcal] webhook refused the events:", res.get("error", res)); return None
+            ids = [str(x) for x in (res.get("ids") or [])]
+            print(f"[gcal] created {len(ids)} event(s) for '{cls['title']}' via webhook")
+            return ",".join(i for i in ids if i) or None
+
+        svc = _service(cfg)
+        ids = []
+        for ev_body in events:
             ev = svc.events().insert(calendarId=cfg["calendar_id"], body={
-                "summary": title,
-                "description": desc,
-                "location": f"The Gibby — {cls.get('room','')}",
-                "start": {"dateTime": start.isoformat(), "timeZone": "America/New_York"},
-                "end":   {"dateTime": end.isoformat(),   "timeZone": "America/New_York"},
+                "summary": ev_body["title"],
+                "description": ev_body["description"],
+                "location": ev_body["location"],
+                "start": {"dateTime": ev_body["start"]},
+                "end":   {"dateTime": ev_body["end"]},
             }).execute()
             ids.append(ev.get("id"))
         print(f"[gcal] created {len(ids)} event(s) for '{cls['title']}'")
