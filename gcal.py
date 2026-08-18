@@ -102,7 +102,11 @@ def sync_slots(cfg):
     calendar's busy times. Roomless (single shared space). None if it can't read.
     Uses the API when a service account is available, otherwise the iCal feed."""
     if not configured(cfg): return None
-    if not can_write(cfg) and (cfg.get("ics_url") or os.path.isfile(cfg.get("ics_file") or "")):
+    # Reading open times: the iCal feed (or bundled snapshot) is the route unless
+    # a real service account exists. The write-only webhook must NOT divert this,
+    # even though it makes can_write() true.
+    if ((cfg.get("ics_url") or os.path.isfile(cfg.get("ics_file") or ""))
+            and not (cfg["calendar_id"] and cfg["service_account_json"])):
         return sync_slots_ical(cfg)
     try:
         svc = _service(cfg)
