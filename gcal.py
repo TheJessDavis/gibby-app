@@ -195,21 +195,33 @@ def _ics_events(text, horizon_start, horizon_end):
                 busy.append((s0, e0))
     return busy
 
+# What the last sync actually read: 'live' (the feed URL), 'snapshot' (the
+# bundled file), or None (nothing yet). Surfaced on /api/version so a wrong
+# feed URL is visible instead of silently riding the snapshot forever.
+LAST_SOURCE = None
+
 def sync_slots_ical(cfg):
     """Open slots from the calendar's private iCal address. Same shape as
     sync_slots, so the rest of the app cannot tell which route was used."""
+    global LAST_SOURCE
     text = None
     if cfg.get("ics_url"):
         try:
             req = urllib.request.Request(cfg["ics_url"], headers={"User-Agent": "GibbyClassManager/1.0"})
             with urllib.request.urlopen(req, timeout=45) as r:
                 text = r.read().decode("utf-8", "replace")
+            if "BEGIN:VCALENDAR" in text:
+                LAST_SOURCE = "live"
+            else:
+                print("[gcal] the feed URL answered but not with a calendar; falling back")
+                text = None
         except Exception as e:
             print("[gcal] could not read the iCal feed:", e)
     if text is None and os.path.isfile(cfg.get("ics_file") or ""):
         # Bundled busy-times snapshot: also the safety net when the live feed is down.
         try:
             text = open(cfg["ics_file"], encoding="utf-8").read()
+            LAST_SOURCE = "snapshot"
             print("[gcal] using bundled snapshot", os.path.basename(cfg["ics_file"]))
         except Exception as e:
             print("[gcal] could not read the snapshot file:", e)
