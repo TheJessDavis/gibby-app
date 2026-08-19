@@ -546,7 +546,12 @@ async function openContract(id){
   m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:14px';
   m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:480px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:18px 20px">
     <h2 style="margin:0 0 8px">Instructor <em>contract</em></h2>
-    <pre style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;margin:0">${esc(c.contract_text)}</pre>
+    <div style="flex:1;position:relative;min-height:120px;display:flex">
+      <pre id="ct_pre" style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;padding-bottom:34px;margin:0">${esc(c.contract_text)}</pre>
+      <div id="ct_fade" style="position:absolute;left:0;right:0;bottom:0;height:56px;border-radius:0 0 12px 12px;background:linear-gradient(rgba(251,247,239,0),#FBF7EF 78%);pointer-events:none;display:flex;align-items:flex-end;justify-content:center">
+        <span style="background:var(--ink);color:#fff;font-size:10.5px;font-weight:800;border-radius:999px;padding:5px 12px;margin-bottom:7px">↓ Scroll to read the rest</span>
+      </div>
+    </div>
     <div class="err" id="cterr"></div>
     <label>Type your full name (this is your signature)</label><input id="ct_name" placeholder="${esc(ME&&ME.name||'')}">
     <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
@@ -558,10 +563,16 @@ async function openContract(id){
     <div class="hint">Signed ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
     <div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="closeContract()">Not yet</button>
-      <button class="btn dark" onclick="signContractNow(${c.id})">Sign contract</button></div></div>`;
+      <button class="btn dark" id="ct_signbtn" onclick="signContractNow(${c.id})" disabled style="opacity:.45">Read to the end first</button></div></div>`;
   m.addEventListener('click',e=>{ if(e.target===m) closeContract(); });
   document.body.appendChild(m);
   padInit();
+  // The Sign button unlocks once they have actually seen the whole contract.
+  const pre=$('#ct_pre'), fade=$('#ct_fade'), btn=$('#ct_signbtn');
+  const unlock=()=>{ btn.disabled=false; btn.style.opacity='1'; btn.textContent='Sign contract'; fade.style.display='none'; };
+  const check=()=>{ if(pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24) unlock(); };
+  pre.addEventListener('scroll', check);
+  setTimeout(check, 250);   // short contracts that fit without scrolling unlock at once
 }
 let CT_DRAWN=false;
 function padInit(){

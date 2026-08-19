@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "6.5-finger-signature"
+VERSION = "6.6-contract-polish"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1278,6 +1278,8 @@ class H(http.server.BaseHTTPRequestHandler):
         with open(path,"rb") as f: data = f.read()
         self.send_response(200)
         is_text = ctype.startswith("text/") or "javascript" in ctype or "svg" in ctype
+        if is_text:
+            self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if is_text else ""))
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
@@ -1918,6 +1920,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET address=? WHERE id=?",(addr[:200], u["id"]))
             c.commit(); c.close()
             print(f"[contract] signed: class #{row['id']} by {name}")
+            first = (u.get("name") or "").split(" ")[0] or "there"
+            mailer.send(u["email"], f"Your signed contract for {row['title']}",
+                f"Hi {first},\n\nThank you! Your instructor contract for \"{row['title']}\" is signed "
+                f"and on file at The Gibby. Here is your copy for your records.\n\n"
+                f"Signed by: {name}\nAddress: {addr}\nDate: {now()[:10]}\n\n"
+                f"{'-'*40}\n{row['contract_text'] or ''}\n{'-'*40}\n\nThe Gibby")
             return self.send_json({"ok":True})
         mm = re.match(r"^/api/users/(\d+)/ask-to-teach$", p)
         if mm:
@@ -2597,12 +2605,14 @@ class H(http.server.BaseHTTPRequestHandler):
             # The contract goes out the moment the approval lands.
             _, _, instr2, cls2, ctext2 = after_commit
             first = (instr2.get("name") or "").split(" ")[0] or "there"
-            mailer.send(instr2["email"], f"Please sign your instructor contract: {cls2['title']}",
+            proto2 = self.headers.get("X-Forwarded-Proto","http"); host2 = self.headers.get("Host","localhost:8000")
+            mailer.send(instr2["email"], f"Action needed: sign your contract for {cls2['title']}",
                 f"Hi {first},\n\nGreat news: \"{cls2['title']}\" has been approved!\n\n"
-                f"One step before it goes live for you: your instructor contract is ready to sign. "
-                f"Log in to the Gibby Class Manager, open My classes, and tap Read and sign.\n\n"
-                f"For your records, here is the full text you will be signing:\n\n"
-                f"{'-'*40}\n{ctext2}\n{'-'*40}\n\nThe Gibby")
+                f"One quick step before it goes live: read and sign your instructor contract in the app.\n\n"
+                f"  1. Log in: {proto2}://{host2}\n"
+                f"  2. Open My classes\n"
+                f"  3. Tap Read and sign\n\n"
+                f"It takes about a minute. Once you sign, we will email you a copy for your records.\n\nThe Gibby")
         elif after_commit and after_commit[0] == "email":
             (subj, body), to = after_commit[1], after_commit[2]
             mailer.send(to, subj, body)
