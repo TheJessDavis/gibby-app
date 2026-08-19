@@ -979,6 +979,11 @@ function agendaRow(c){ const pill=c.status==='approved'?'appr':c.status==='cance
 /* ---------------- people ---------------- */
 let PEOPLE_SKILL=null;
 function peopleFilter(k){ PEOPLE_SKILL = (PEOPLE_SKILL===k?null:k); adminPeople(); }
+async function removePerson(id,name){
+  if(!confirm(`Remove ${name}?\n\nThey will be signed out and can no longer log in. Their classes and history stay, and you can bring them back any time from the Archive tab.`)) return;
+  try{ await api('/api/archive/users/'+id+'/delete','POST',{}); adminPeople(); }
+  catch(e){ alert(e.data&&e.data.error||'Could not remove them.'); }
+}
 async function askToTeach(id,name){
   const msg=prompt(`What would you like to ask ${name}?\n\nThis goes in an email from The Gibby.`,
     'We would love for you to teach a class this season. Any interest?');
@@ -999,7 +1004,8 @@ async function adminPeople(){
       <div style="text-align:right">${u.role==='admin'?'<span class="pill appr">admin</span>':''}
       ${u.pending?'<span class="pill pend">invite sent, no password yet</span>':''}
       ${u.pending?`<button class="btn ghost" onclick="reinvite('${esc(u.email)}','${esc(u.name||'')}','${u.role}')">Re-send invite</button>`
-                 :`<button class="btn ghost" style="margin-top:6px" onclick="askToTeach(${u.id},'${esc(u.name||u.email)}')">Ask to teach</button>`}</div>
+                 :`<button class="btn ghost" style="margin-top:6px" onclick="askToTeach(${u.id},'${esc(u.name||u.email)}')">Ask to teach</button>`}
+      ${ME&&u.id===ME.id?'':`<div><button class="btn ghost" style="margin-top:6px;color:#B4442C" onclick="removePerson(${u.id},'${esc(u.name||u.email)}')">Remove</button></div>`}</div>
     </div></div>`;
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
@@ -2382,7 +2388,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear','removePerson'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
