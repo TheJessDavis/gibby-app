@@ -9,6 +9,7 @@
     --cream:#F5EFE3;--paper:#FBF7EF;--ink:#171512;--ink-soft:#5A554C;--line:#E7DECB;
     --yellow:#F7D64B;--pink:#F4A9C8;--purple:#C6B4F0;--purple-deep:#7C5CD6;--blue:#A9C7EB;
     --mint:#AFD0A6;--coral:#F2765C;--green:#3F7A32;--white:#fff;
+    --t-rose:#F9DEE4;--t-lav:#E2DcF9;--t-mint:#D9EEDF;--t-peach:#FBE5CC;--t-butter:#F8EDBE;--t-blue:#DCE8F8;
     --disp:"Helvetica Neue",Arial,"Segoe UI",system-ui,sans-serif;--serif:Georgia,serif;
   }
   *{box-sizing:border-box}
@@ -19,8 +20,16 @@
   .top{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;position:sticky;top:0;
     background:var(--paper);z-index:5;border-bottom:1px solid var(--line)}
   .top .brand{font-weight:800;font-size:17px;letter-spacing:-.02em}
+  .homebtn{border:none;background:var(--ink);color:#fff;border-radius:12px;padding:9px 14px;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;flex:none}
+  .menu{position:fixed;top:62px;right:16px;background:var(--white);border-radius:16px;box-shadow:0 14px 34px rgba(0,0,0,.18);z-index:60;min-width:230px;padding:8px;border:1px solid var(--line)}
+  .menu .mwho{display:flex;align-items:center;gap:4px;padding:10px 12px;border-bottom:1px solid var(--line);margin-bottom:6px;font-weight:800;font-size:13.5px}
+  .menu .mwho small{display:block;font-weight:700;font-size:11px;color:var(--ink-soft)}
+  .menu button{display:block;width:100%;text-align:left;border:none;background:none;font-family:inherit;font-weight:800;font-size:13.5px;color:var(--ink);padding:11px 12px;border-radius:11px;cursor:pointer}
+  .menu button:hover{background:var(--paper)}
   .top .who{font-size:12px;color:var(--ink-soft);font-weight:700}
-  .top button.out{border:none;background:rgba(0,0,0,.06);border-radius:10px;padding:7px 12px;font-weight:800;font-size:12px;cursor:pointer;color:var(--ink)}
+  .top button.out{border:none;background:rgba(0,0,0,.06);border-radius:10px;padding:7px 12px;font-weight:800;font-size:12px;cursor:pointer;color:var(--ink);white-space:nowrap}
+  .top .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38vw}
+  @media(max-width:560px){.edithint{display:none}}
   .view{flex:1;padding:20px;padding-bottom:90px}
   h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
   h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
@@ -29,7 +38,27 @@
   .tabs button{flex:0 1 auto;border:none;background:var(--white);padding:9px 16px;border-radius:999px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--ink);box-shadow:0 3px 9px rgba(0,0,0,.05)}
   .tabs button.on{background:var(--ink);color:#fff}
 
-  .card{background:var(--white);border-radius:18px;padding:16px;margin-bottom:12px;box-shadow:0 6px 16px rgba(0,0,0,.05)}
+  .card{background:var(--white);border-radius:20px;padding:16px;margin-bottom:12px;box-shadow:0 6px 16px rgba(0,0,0,.05)}
+  #tab>.card:nth-of-type(5n+1){background:var(--t-rose)}
+  #tab>.card:nth-of-type(5n+2){background:var(--t-lav)}
+  #tab>.card:nth-of-type(5n+3){background:var(--t-mint)}
+  #tab>.card:nth-of-type(5n+4){background:var(--t-peach)}
+  #tab>.card:nth-of-type(5n){background:var(--t-blue)}
+  .hello{display:flex;align-items:center;gap:12px;margin:2px 0 16px}
+  .hello .ava,.hello .ava-i{width:46px;height:46px;font-size:17px;vertical-align:0;margin:0;border-radius:50%}
+  .hello b{font-size:20px;letter-spacing:-.02em;display:block;line-height:1.15}
+  .hello small{font-size:12px;font-weight:700;color:var(--ink-soft)}
+  #tab .clscard.cls-pending{background:var(--yellow)}
+  #tab .clscard.cls-review{background:var(--purple)}
+  #tab .clscard.cls-approved{background:#B9E2AE}
+  #tab .clscard.cls-back{background:var(--pink)}
+  #tab .clscard.cls-off{background:#E9E4D8}
+  .clstop{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .clspic{width:42px;height:42px;border-radius:50%;object-fit:cover;box-shadow:0 3px 8px rgba(0,0,0,.18);border:2px solid rgba(255,255,255,.75)}
+  .clspic-i{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,.7);font-size:19px}
+  .clswhen{font-size:12px;font-weight:800;color:rgba(23,21,18,.55)}
+  .clslab{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:rgba(23,21,18,.55)}
+  .clsname{font-size:20px;font-weight:800;letter-spacing:-.02em;margin:1px 0 3px}
   .card h3{margin:0 0 4px;font-size:16px;font-weight:800;letter-spacing:-.01em}
   .card .meta{font-size:12px;color:var(--ink-soft);font-weight:700}
   .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
@@ -64,9 +93,16 @@
   .photo img{max-width:100%;border-radius:10px;display:block}
   .fab{position:fixed;bottom:0;left:0;right:0;max-width:440px;margin:0 auto;padding:14px 20px 20px;
     background:linear-gradient(180deg,transparent,var(--paper) 40%)}
-  .login-wrap{padding:40px 24px;text-align:center}
-  .logo{width:230px;height:230px;margin:-10px auto -6px}
+  .login-wrap{min-height:calc(100vh - 48px);display:flex;flex-direction:column;justify-content:center;align-items:center;padding:24px;text-align:center}
+  .login-card{background:var(--white);border-radius:24px;box-shadow:0 18px 44px rgba(30,22,10,.10);padding:26px 26px 30px;width:100%;max-width:400px}
+  .logo{width:190px;height:190px;margin:-8px auto -4px}
   .logo img{width:100%;height:100%;object-fit:contain}
+  .login-card h2{font-size:30px;margin:0}
+  .login-card .sub{font-size:14.5px;margin:4px 0 16px}
+  .roleseg{background:var(--paper);border:2px solid var(--line);border-radius:14px;padding:4px;gap:4px}
+  .roleseg button{border:none;background:none;padding:9px;font-size:13.5px}
+  .roleseg button.on{background:var(--ink);color:#fff;border-radius:10px;border:none}
+  .flink{font-size:12.5px;color:var(--ink-soft);font-weight:800;text-decoration:underline;text-underline-offset:2px}
   .hidden{display:none!important}
   .money th,.money td{font-size:12.5px;padding:8px 0;font-variant-numeric:tabular-nums}
   .money td.num,.money th.num{text-align:right;white-space:nowrap;padding-left:10px}
@@ -136,6 +172,17 @@
   .calday.on small{color:rgba(255,255,255,.75)}
   .callegend{font-size:11px;font-weight:700;color:var(--ink-soft);margin-top:8px}
   .dayhead{font-weight:800;font-size:14px;margin:0 0 10px}
+  .ava{width:24px;height:24px;border-radius:50%;object-fit:cover;vertical-align:-7px;margin-right:7px}
+  .ava-i{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--ink);color:#fff;font-size:10px;font-weight:800;vertical-align:-7px;margin-right:7px}
+  .ava-big{width:96px;height:96px;border-radius:50%;object-fit:cover;display:block}
+  .ava-big-i{display:flex;align-items:center;justify-content:center;width:96px;height:96px;border-radius:50%;background:var(--ink);color:#fff;font-size:32px;font-weight:800}
+  .edithint{font-size:9.5px;font-weight:800;letter-spacing:.05em;color:var(--ink-soft);border:1.5px solid var(--line);border-radius:8px;padding:2px 7px;margin-left:7px;text-transform:uppercase}
+  .skillcloud{display:flex;flex-wrap:wrap;gap:7px;margin:8px 0 4px}
+  .skill{display:inline-flex;align-items:center;gap:5px;background:var(--white);border:1.5px solid var(--line);border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:800;color:var(--ink);cursor:pointer;font-family:inherit}
+  .skill.mine{background:var(--ink);border-color:var(--ink);color:#fff}
+  .skill.mini{padding:3px 9px;font-size:10.5px;cursor:default;background:#EAF4E2;border-color:#EAF4E2;color:#3F7A32}
+  .skill.mini.hit{background:var(--ink);border-color:var(--ink);color:#fff}
+  .skill b{font-weight:900}
   .tip{display:flex;gap:9px;align-items:flex-start;background:#FCE889;border-radius:16px;padding:12px 14px;font-size:12.5px;font-weight:700;line-height:1.35;margin-bottom:14px}
   /* one-day vs series, month/list toggle, week picker, session lists */
   .kindcards{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 14px}
@@ -230,11 +277,16 @@
 <body>
 <div class="app">
   <div class="top" id="top" style="display:none">
-    <div><div class="brand">The Gibby</div><div class="who" id="who" style="cursor:pointer" title="Edit your name" onclick="renderProfile()"></div></div>
-    <div style="display:flex;gap:8px">
+    <button class="homebtn" onclick="goHome()" title="Back to your home screen">🏠 Home</button>
+    <div style="display:flex;gap:8px;align-items:center">
       <button class="out" id="switchbtn" style="display:none;background:var(--purple);color:#fff" onclick="switchMode()"></button>
-      <button class="out" onclick="logout()">Sign out</button>
+      <button class="out" id="menubtn" onclick="toggleMenu(event)" title="Menu" style="font-size:16px;line-height:1">☰</button>
     </div>
+  </div>
+  <div id="menu" class="menu" style="display:none">
+    <div class="mwho" id="m_who"></div>
+    <button onclick="menuPick('profile')">✏️ Edit profile</button>
+    <button onclick="menuPick('logout')">👋 Sign out</button>
   </div>
   <div class="view" id="view"></div>
 </div>
@@ -357,15 +409,17 @@ async function bootInner(){
   if(!user && await refreshSession()){ user = (await api('/api/me')).user; }
   ME=user;
   if(!user){ renderLogin(); $('#top').style.display='none'; return; }
-  if(user.must_change_pw){ $('#top').style.display='flex'; $('#who').textContent=user.name; return renderChangePw(); }
+  if(user.must_change_pw){ $('#top').style.display='flex'; return renderChangePw(); }
   $('#top').style.display='flex';
   if(LOGIN_CHOICE && user.role==='admin') VIEWAS = LOGIN_CHOICE;   // honor the sign-in choice (admins only)
   else if(VIEWAS===null) VIEWAS = user.role;
   LOGIN_CHOICE=null;
   const sb=$('#switchbtn');
-  if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = VIEWAS==='admin'?'Instructor view':'Admin view'; }
+  // The purple button states the CURRENT view (tap to flip); the name carries no
+  // role text, so nothing in the header says the same thing twice.
+  if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = (VIEWAS==='admin'?'Admin':'Instructor')+' \u21c4'; sb.title='Switch to '+(VIEWAS==='admin'?'instructor':'admin')+' view'; }
   else sb.style.display='none';
-  $('#who').textContent = user.name+' · '+(user.role==='admin' ? (VIEWAS==='admin'?'admin':'instructor mode') : user.role);
+  $('#m_who').innerHTML = avaHTML(user) + `<span>${esc(user.name)}<small>${esc(user.email||'')}</small></span>`;
   if(actingRole()==='admin') renderAdmin('dashboard'); else renderInstr('open');
 }
 function renderChangePw(){
@@ -389,22 +443,97 @@ async function submitChangePw(){
   try{ await api('/api/change-password','POST',{new_password:a, name}); boot(); }
   catch(e){ showErr('cerr',e.message); }
 }
+function avaHTML(u, big){
+  const cls = big ? (u.photo?'ava-big':'ava-big-i') : (u.photo?'ava':'ava-i');
+  if(u.photo) return `<img class="${cls}" src="${u.photo}" alt="">`;
+  const init=(u.name||'?').split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
+  return `<span class="${cls}">${esc(init)}</span>`;
+}
+const SKILL_IDEAS=['Pottery & clay','Watercolor','Acrylic painting','Oil painting','Drawing & sketching',
+  'Stained glass','Mosaics','Jewelry making','Fiber arts & weaving','Knitting & crochet',
+  'Sewing & quilting','Embroidery','Printmaking','Collage & mixed media','Paper crafts & origami',
+  'Woodworking','Leather crafts','Candle making','Soap making','Floral design','Resin art','Macrame',
+  'Calligraphy & hand lettering','Cake decorating','Kids crafts',
+  'Digital illustration','Procreate & iPad art','Graphic design','Digital photography & photo editing',
+  'Animation','3D design & printing'];
+let PF_PHOTO=null, PF_SKILLS=null;
 function renderProfile(){
-  $('#view').innerHTML=`<div style="max-width:360px;margin:0 auto">
-    <h2>Your <em>profile</em></h2>
-    <p class="sub">Update the name shown on your classes.</p>
+  if(PF_PHOTO===null) PF_PHOTO = (ME&&ME.photo)||'';
+  if(PF_SKILLS===null) PF_SKILLS = ((ME&&ME.skills)||[]).slice();
+  const left = SKILL_IDEAS.filter(x=>!PF_SKILLS.includes(x));
+  $('#view').innerHTML=`<div style="max-width:420px;margin:0 auto">
+    <button class="btn ghost" style="padding:8px 16px" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">\u2190 Back to home</button>
+    <h2 style="margin-top:14px">Your <em>profile</em></h2>
+    <p class="sub">Your name, photo and skills, shown on your classes.</p>
     <div class="err" id="perr"></div>
+    <div style="display:flex;gap:16px;align-items:center;margin:6px 0 14px">
+      ${avaHTML({name:(ME&&ME.name)||'', photo:PF_PHOTO}, true)}
+      <div>
+        <button class="btn ghost" style="padding:8px 14px" onclick="document.getElementById('pf_file').click()">${PF_PHOTO?'Change photo':'Add a photo'}</button>
+        ${PF_PHOTO?`<button class="btn ghost" style="padding:8px 14px;margin-left:6px" onclick="pfClearPhoto()">Remove</button>`:''}
+        <div class="hint" style="margin-top:6px">Optional. It shows as a little circle next to your name.</div>
+      </div>
+    </div>
+    <input type="file" id="pf_file" accept="image/*" style="display:none" onchange="pfPickPhoto(event)">
     <label>Your name</label><input id="pf_name" value="${esc(ME&&ME.name||'')}">
+    <label>Your address</label><input id="pf_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
+    <div class="hint">Only The Gibby's admins see this (for payments and paperwork).</div>
+    <label style="margin-top:18px">Your skills</label>
+    <div class="skillcloud">${PF_SKILLS.length
+      ? PF_SKILLS.map(k=>`<button class="skill mine" onclick="pfRemoveSkill('${esc(k)}')">${esc(k)} <b>\u00d7</b></button>`).join('')
+      : '<div class="hint">None yet. Tap a + below to add one.</div>'}</div>
+    <label style="margin-top:14px">Add skills</label>
+    <div class="skillcloud">${left.map(k=>`<button class="skill" onclick="pfAddSkill('${esc(k)}')"><b>+</b> ${esc(k)}</button>`).join('')}</div>
+    <div class="two" style="margin-top:8px"><input id="pf_custom" placeholder="Something else? Type it here">
+      <button class="btn ghost" onclick="pfCustomSkill()">+ Add</button></div>
     <div style="height:14px"></div>
     <button class="btn dark" onclick="saveProfile()">Save</button>
     <div style="height:8px"></div>
-    <button class="btn ghost" onclick="boot()">Back</button>
+    <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
   </div>`;
+}
+function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; closeMenu(); boot(); }
+let RESUB=null, RESUB_OLD_ID=null;
+async function startResubmit(id){
+  const {classes}=await api('/api/classes/mine');
+  RESUB=(classes||[]).find(x=>x.id===id)||null;
+  if(!RESUB) return alert('Could not load that class.');
+  renderInstr('open');
+}
+function toggleMenu(ev){ if(ev) ev.stopPropagation();
+  const m=$('#menu'); m.style.display = m.style.display==='none' ? '' : 'none'; }
+function closeMenu(){ const m=$('#menu'); if(m) m.style.display='none'; }
+function menuPick(what){ closeMenu(); if(what==='profile') renderProfile(); else logout(); }
+document.addEventListener('click', e=>{ const m=$('#menu');
+  if(m && m.style.display!=='none' && !m.contains(e.target)) closeMenu(); });
+function pfAddSkill(k){ if(!PF_SKILLS.includes(k)) PF_SKILLS.push(k); renderProfile(); }
+function pfRemoveSkill(k){ PF_SKILLS=PF_SKILLS.filter(x=>x!==k); renderProfile(); }
+function pfCustomSkill(){
+  const v=($('#pf_custom').value||'').trim().slice(0,40);
+  if(v && !PF_SKILLS.includes(v)) PF_SKILLS.push(v);
+  renderProfile();
+}
+function pfClearPhoto(){ PF_PHOTO=''; renderProfile(); }
+function pfPickPhoto(ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const img=new Image(); const r=new FileReader();
+  r.onload=e=>{ img.onload=()=>{
+    // square-crop and shrink to 240px so the stored data URL stays small
+    const side=Math.min(img.width,img.height), c=document.createElement('canvas');
+    c.width=c.height=240; const g=c.getContext('2d');
+    g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,240,240);
+    PF_PHOTO=c.toDataURL('image/jpeg',.82); renderProfile();
+  }; img.src=e.target.result; };
+  r.readAsDataURL(f);
 }
 async function saveProfile(){
   const name=$('#pf_name').value.trim();
   if(!name) return showErr('perr','Name is required.');
-  try{ await api('/api/profile','POST',{name}); await api('/api/me').then(r=>ME=r.user); boot(); }
+  try{
+    await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value});
+    await api('/api/me').then(r=>ME=r.user);
+    PF_PHOTO=null; PF_SKILLS=null; boot();
+  }
   catch(e){ showErr('perr',e.message); }
 }
 function renderForgot(){
@@ -454,19 +583,21 @@ function renderLogin(){
   $('#top').style.display='none';
   $('#view').innerHTML = `
    <div class="login-wrap">
+    <div class="login-card">
      <div class="logo"><img src="opening.png?v=3" alt="The Gibby"></div>
-     <h2 style="font-size:34px">The Gibby</h2>
+     <h2>The Gibby</h2>
      <p class="sub">Class Manager. Sign in to continue.</p>
-     <div style="text-align:left;max-width:340px;margin:0 auto">
+     <div style="text-align:left">
        <div class="err" id="lerr"></div>
        <label>Email</label><input id="le" placeholder="you@theeverett.org" autocomplete="username">
-       <label>Password</label><input id="lp" type="password" autocomplete="current-password">
+       <label>Password</label><input id="lp" type="password" placeholder="Your password" autocomplete="current-password">
        <label>Sign in as</label>
-       <div class="seg" id="lrole"><button class="on" data-v="instructor" onclick="segPick(this)">Instructor</button><button data-v="admin" onclick="segPick(this)">Admin</button></div>
-       <div style="height:14px"></div>
+       <div class="seg roleseg" id="lrole"><button class="on" data-v="instructor" onclick="segPick(this)">Instructor</button><button data-v="admin" onclick="segPick(this)">Admin</button></div>
+       <div style="height:16px"></div>
        <button class="btn dark" onclick="doLogin()">Sign in →</button>
-       <div style="text-align:center;margin-top:14px"><a href="#" onclick="renderForgot();return false" style="font-size:12.5px;color:var(--purple-deep);font-weight:800;text-decoration:none">Forgot password?</a></div>
+       <div style="text-align:center;margin-top:14px"><a href="#" class="flink" onclick="renderForgot();return false">Forgot password?</a></div>
      </div>
+    </div>
    </div>`;
 }
 async function doLogin(){
@@ -480,11 +611,16 @@ async function doLogin(){
 async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; boot(); }
 
 /* ---------------- admin ---------------- */
+function helloHTML(){
+  if(!ME) return '';
+  const first=(ME.name||'').split(' ')[0]||'there';
+  return `<div class="hello">${avaHTML(ME)}<div><b>Hi, ${esc(first)}!</b><small>The Gibby Class Manager</small></div></div>`;
+}
 async function renderAdmin(tab){
   ADMIN_TAB = tab;
   const v=$('#view');
   const t=(k,l)=>`<button data-tab="${k}" class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
-  v.innerHTML = `<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('people','People')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
+  v.innerHTML = `${helloHTML()}<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('people','People')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
@@ -726,23 +862,44 @@ function agendaRow(c){ const pill=c.status==='approved'?'appr':c.status==='cance
     <div class="meta">${esc(c.instructor_name)} · ${esc(c.slot_date)} ${esc(c.slot_time||'')} · ${esc(c.room||'')}</div></div>`; }
 
 /* ---------------- people ---------------- */
+let PEOPLE_SKILL=null;
+function peopleFilter(k){ PEOPLE_SKILL = (PEOPLE_SKILL===k?null:k); adminPeople(); }
+async function askToTeach(id,name){
+  const msg=prompt(`What would you like to ask ${name}?\n\nThis goes in an email from The Gibby.`,
+    'We would love for you to teach a class this season. Any interest?');
+  if(msg===null) return;
+  try{
+    const r=await api('/api/users/'+id+'/ask-to-teach','POST',{message:msg});
+    alert(r.delivered?`Sent! ${name} has an email at ${r.to}.`:`Saved, but email is in dry-run mode so nothing was actually sent (would go to ${r.to}).`);
+  }catch(e){ alert(e.data&&e.data.error||'Could not send that.'); }
+}
 async function adminPeople(){
   const d=await api('/api/users');
+  const allSkills=[...new Set(d.users.flatMap(u=>u.skills||[]))].sort();
+  const shown = PEOPLE_SKILL ? d.users.filter(u=>(u.skills||[]).includes(PEOPLE_SKILL)) : d.users;
   const row=u=>`<div class="card"><div class="row">
-      <div><h3>${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}</div></div>
-      <div>${u.role==='admin'?'<span class="pill appr">admin</span>':''}
+      <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.address?' · '+esc(u.address):''}</div>
+        ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
+      </div>
+      <div style="text-align:right">${u.role==='admin'?'<span class="pill appr">admin</span>':''}
       ${u.pending?'<span class="pill pend">invite sent, no password yet</span>':''}
-      ${u.pending?`<button class="btn ghost" onclick="reinvite('${esc(u.email)}','${esc(u.name||'')}','${u.role}')">Re-send invite</button>`:''}</div>
+      ${u.pending?`<button class="btn ghost" onclick="reinvite('${esc(u.email)}','${esc(u.name||'')}','${u.role}')">Re-send invite</button>`
+                 :`<button class="btn ghost" style="margin-top:6px" onclick="askToTeach(${u.id},'${esc(u.name||u.email)}')">Ask to teach</button>`}</div>
     </div></div>`;
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
+    ${allSkills.length?`<div class="card"><h3>Find by skill</h3>
+      <div class="meta">Tap a skill to see who has it, then Ask to teach.</div>
+      <div class="skillcloud" style="margin-top:8px">${allSkills.map(k=>`<button class="skill ${k===PEOPLE_SKILL?'mine':''}" onclick="peopleFilter('${esc(k)}')">${esc(k)}</button>`).join('')}</div>
+      ${PEOPLE_SKILL?`<div class="hint" style="margin-top:8px">${shown.length} ${shown.length===1?'person has':'people have'} \u201c${esc(PEOPLE_SKILL)}\u201d \u00b7 <a href="#" onclick="peopleFilter(PEOPLE_SKILL);return false">clear filter</a></div>`:''}
+    </div>`:''}
     <div class="card"><h3>Add a person</h3>
       <label>Name</label><input id="np_name" placeholder="First Last">
       <label>Email (required)</label><input id="np_email" type="email" placeholder="them@example.com">
       <label>Role</label><select id="np_role"><option value="instructor" selected>Instructor</option><option value="admin">Admin</option></select>
       <button class="btn dark" style="margin-top:12px" onclick="addPerson()">Add &amp; send invite</button>
       <div class="hint" id="np_msg"></div></div>
-    ${d.users.map(row).join('')}`;
+    ${shown.map(row).join('')}`;
 }
 async function addPerson(){
   const email=($('#np_email').value||'').trim().toLowerCase(), msg=$('#np_msg');
@@ -1143,9 +1300,16 @@ const VOLUNTEERS=[['Maya Alvarez','maya.a@example.com'],['Theo Brandt','theo.b@e
   ['Priya Nair','priya.n@example.com'],['Sam Okafor','sam.o@example.com']];
 function cardCls(c){
   const [pc,pt]=STMAP[c.status]||STMAP.pending;
-  const pill = `<span class="pill ${pc}">${pt}</span>`;
-  return `<div class="card">
-    <div class="row"><h3>${esc(c.title)}</h3>${pill}</div>
+  const tone={pending:'cls-pending',graphic_review:'cls-review',instructor_review:'cls-review',
+              approved:'cls-approved',incomplete:'cls-back',cancelled:'cls-off'}[c.status]||'cls-pending';
+  const when=c.is_series&&c.sessions&&c.sessions.length?c.sessions[0].date:(c.slot_date||'');
+  return `<div class="card clscard ${tone}">
+    <div class="clstop">
+      ${c.photo?`<img class="clspic" src="${c.photo}" alt="" onerror="this.style.visibility='hidden'">`:`<span class="clspic clspic-i">\u{1F3A8}</span>`}
+      <span class="clswhen">${esc(when)}</span>
+    </div>
+    <div class="clslab">${pt}</div>
+    <h3 class="clsname">${esc(c.title)}</h3>
     <div class="meta">${esc(c.instructor_name)} · ${c.is_series&&c.sessions&&c.sessions.length
       ? `${c.sessions.length} sessions, ${esc(c.sessions[0].date)} – ${esc(c.sessions[c.sessions.length-1].date)}`
       : esc(c.slot_date||'')} ${esc(c.class_time||c.slot_time||'')} · ${esc(c.room||'')}</div>
@@ -1216,6 +1380,7 @@ function cardCls(c){
       ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="startPublishPolling(${c.id})">Show publishing status</button>`:''}`;})():''}
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
+    ${c.status==='incomplete' && actingRole()==='instructor' ? `<button class="btn dark" style="margin-top:10px" onclick="startResubmit(${c.id})">Fix and resubmit</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
@@ -1399,7 +1564,7 @@ function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+
   $('#f_title').value=t.title; $('#f_desc').value=t.description; descCount();
   const c=document.querySelector('#f_ages input[value="'+t.age+'"]'); if(c){c.checked=true; ageChanged();} }
 async function renderInstr(tab){
-  $('#view').innerHTML = `
+  $('#view').innerHTML = `${helloHTML()}
     <div class="tabs">
       <button class="${tab==='open'?'on':''}" onclick="renderInstr('open')">Open slots</button>
       <button class="${tab==='mine'?'on':''}" onclick="renderInstr('mine')">My classes</button>
@@ -1476,6 +1641,7 @@ async function instrOpen(){
   const series = CLASSKIND==='series';
   const p = SERIES_PREVIEW;
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
+    ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick a time (your old one was released), fix what was flagged, and submit again.</span></div>`:''}
 
     <div class="kindcards" id="kind">
       <button class="kindcard ${!series?'on':''}" onclick="setKind('single')"><b>One-day class</b><span>A single session on one date</span></button>
@@ -1805,6 +1971,8 @@ function openForm(slot, draftPayload){
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   calc(); descCount(); loadTplOptions(); loadPrevOptions();
   if(draftPayload) applyDraft(draftPayload);
+  else if(RESUB){ applyDraft(RESUB); RESUB_OLD_ID=RESUB.id; RESUB=null;
+    const n=$('#draftnote'); if(n) n.textContent='Resubmitting: fix what was flagged, then submit.'; }
   initFormHelpers();
 }
 // Under-14 groups trigger the "do you need a volunteer assistant?" question.
@@ -1989,6 +2157,7 @@ function collectForm(){
     alcohol: seg('#f_alc')==='yes', max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     waives_pay: !!($('#f_free')&&$('#f_free').checked),
+    resubmit_of: RESUB_OLD_ID||undefined,
     links:$('#f_links').value, photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
     class_start:($('#f_cstart')?$('#f_cstart').value:''), class_end:($('#f_cend')?$('#f_cend').value:''),
@@ -2094,7 +2263,8 @@ async function submitClassNow(){
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
- 'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage'
+ 'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

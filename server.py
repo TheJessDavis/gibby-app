@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "6.1-donated-time"
+VERSION = "6.2-profiles-and-color"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -134,6 +134,12 @@ def init_db():
     CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log
       BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
     """)
+    try: c.execute("ALTER TABLE users ADD COLUMN photo TEXT")
+    except sqlite3.OperationalError: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN skills TEXT")
+    except sqlite3.OperationalError: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN address TEXT")
+    except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE users ADD COLUMN must_change_pw INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE slots ADD COLUMN source TEXT DEFAULT 'manual'")
@@ -1230,7 +1236,9 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.current_user()
             if not u: return self.send_json({"user": None, "season_start": SEASON_START})
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
-                "role":u["role"],"must_change_pw":u.get("must_change_pw",0)},
+                "role":u["role"],"must_change_pw":u.get("must_change_pw",0),
+                "photo":u.get("photo") or "", "skills":json.loads(u.get("skills") or "[]"),
+                "address":u.get("address") or ""},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
         if p == "/api/users":
@@ -1238,8 +1246,9 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             c = db()
             rows = [{"id":r["id"],"name":r["name"],"email":r["email"],"role":r["role"],
-                     "pending":bool(r["must_change_pw"])}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw FROM users
+                     "pending":bool(r["must_change_pw"]), "photo":r["photo"] or "",
+                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or ""}
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             c.close(); return self.send_json({"users":rows})
         if p == "/api/slots":
@@ -1786,10 +1795,48 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/profile":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
-            name = (self.read_json().get("name") or "").strip()
+            b = self.read_json()
+            name = (b.get("name") or "").strip()
             if not name: return self.send_json({"error":"Name is required."},400)
-            c = db(); c.execute("UPDATE users SET name=? WHERE id=?",(name,u["id"])); c.commit(); c.close()
+            photo = b.get("photo")
+            if photo is not None:
+                photo = str(photo)
+                if photo and not photo.startswith("data:image/"):
+                    return self.send_json({"error":"That does not look like an image."},400)
+                if len(photo) > 400_000:
+                    return self.send_json({"error":"That photo is too large. Try a smaller one."},400)
+            address = b.get("address")
+            if address is not None: address = str(address).strip()[:200]
+            skills = b.get("skills")
+            if skills is not None:
+                if not isinstance(skills, list):
+                    return self.send_json({"error":"skills must be a list"},400)
+                skills = [str(x).strip()[:40] for x in skills if str(x).strip()][:20]
+            c = db()
+            c.execute("UPDATE users SET name=? WHERE id=?",(name,u["id"]))
+            if photo is not None:
+                c.execute("UPDATE users SET photo=? WHERE id=?",(photo or None,u["id"]))
+            if skills is not None:
+                c.execute("UPDATE users SET skills=? WHERE id=?",(json.dumps(skills),u["id"]))
+            if address is not None:
+                c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
+            c.commit(); c.close()
             return self.send_json({"ok":True})
+        mm = re.match(r"^/api/users/(\d+)/ask-to-teach$", p)
+        if mm:
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json(); msg = (b.get("message") or "").strip()
+            c = db(); row = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL",(int(mm.group(1)),)).fetchone()
+            c.close()
+            if not row: return self.send_json({"error":"No such person."},404)
+            first = (row["name"] or "").split(" ")[0] or "there"
+            proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+            body = (f"Hi {first},\n\n{u['name']} at The Gibby would love for you to teach a class.\n\n"
+                    + (f"{msg}\n\n" if msg else "")
+                    + f"If you're interested, log in and grab an open time slot:\n{proto}://{host}\n\nThe Gibby")
+            sent = mailer.send(row["email"], "Would you teach a class at The Gibby?", body)
+            return self.send_json({"ok":True, "delivered":bool(sent), "to":row["email"]})
         if p == "/api/forgot":
             email = (self.read_json().get("email","") or "").strip().lower()
             c = db(); row = c.execute("SELECT id FROM users WHERE email=? AND deleted_at IS NULL",(email,)).fetchone()
@@ -2053,6 +2100,14 @@ class H(http.server.BaseHTTPRequestHandler):
             elif pm in ("flat", "split"):
                 c.execute("UPDATE classes SET pay_model=? WHERE id=?", (pm, new_id))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
+            if b.get("resubmit_of"):
+                # A fixed version of a sent-back class: retire the old one so the
+                # instructor's list does not show both.
+                try: old = int(b["resubmit_of"])
+                except (TypeError, ValueError): old = 0
+                if old:
+                    c.execute("""UPDATE classes SET deleted_at=? WHERE id=? AND instructor_id=?
+                                 AND status='incomplete' AND deleted_at IS NULL""",(now(), old, u["id"]))
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
                 c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",
                           (now(), b["draft_id"], u["id"]))
