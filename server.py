@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "6.4-bottom-nav"
+VERSION = "6.5-finger-signature"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -150,7 +150,7 @@ def init_db():
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
-                     ("contract_address","TEXT"),("contract_signed_at","TEXT"),
+                     ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
@@ -1897,6 +1897,11 @@ class H(http.server.BaseHTTPRequestHandler):
             addr = (b.get("address") or "").strip()
             if not name: return self.send_json({"error":"Type your full name; it serves as your signature."},400)
             if not addr: return self.send_json({"error":"Your address is required on the contract."},400)
+            sig = str(b.get("signature") or "")
+            if not sig.startswith("data:image/"):
+                return self.send_json({"error":"Please sign in the signature box too."},400)
+            if len(sig) > 200_000:
+                return self.send_json({"error":"That signature drawing is too large. Tap Clear and sign again."},400)
             c = db()
             row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(int(mm.group(1)),)).fetchone()
             if not row or row["instructor_id"] != u["id"]:
@@ -1906,8 +1911,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if row["contract_status"] != "sent":
                 c.close(); return self.send_json({"error":"There is no contract waiting on this class."},400)
             c.execute("""UPDATE classes SET contract_status='signed', contract_name=?,
-                         contract_address=?, contract_signed_at=? WHERE id=?""",
-                      (name[:120], addr[:200], now(), row["id"]))
+                         contract_address=?, contract_signed_at=?, contract_signature=? WHERE id=?""",
+                      (name[:120], addr[:200], now(), sig, row["id"]))
             # remember the address on their profile too, so next time it prefills
             if not (u.get("address") or "").strip():
                 c.execute("UPDATE users SET address=? WHERE id=?",(addr[:200], u["id"]))

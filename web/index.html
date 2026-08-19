@@ -550,17 +550,46 @@ async function openContract(id){
     <div class="err" id="cterr"></div>
     <label>Type your full name (this is your signature)</label><input id="ct_name" placeholder="${esc(ME&&ME.name||'')}">
     <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
+    <label>Sign here with your finger (or mouse)</label>
+    <div style="background:#fff;border:2px solid var(--line);border-radius:12px;position:relative">
+      <canvas id="ct_pad" style="display:block;width:100%;height:120px;touch-action:none;border-radius:10px"></canvas>
+      <button type="button" onclick="padClear()" style="position:absolute;top:6px;right:8px;border:none;background:none;font-family:inherit;font-weight:800;font-size:11px;color:var(--ink-soft);cursor:pointer;text-decoration:underline">Clear</button>
+    </div>
     <div class="hint">Signed ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
     <div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="closeContract()">Not yet</button>
       <button class="btn dark" onclick="signContractNow(${c.id})">Sign contract</button></div></div>`;
   m.addEventListener('click',e=>{ if(e.target===m) closeContract(); });
   document.body.appendChild(m);
+  padInit();
+}
+let CT_DRAWN=false;
+function padInit(){
+  const cv=$('#ct_pad'); if(!cv) return;
+  const dpr=window.devicePixelRatio||1, w=cv.clientWidth, h=cv.clientHeight;
+  cv.width=w*dpr; cv.height=h*dpr;
+  const g=cv.getContext('2d'); g.scale(dpr,dpr);
+  g.lineWidth=2.5; g.lineCap='round'; g.lineJoin='round'; g.strokeStyle='#171512';
+  CT_DRAWN=false;
+  let down=false;
+  const pos=e=>{ const r=cv.getBoundingClientRect(); return [e.clientX-r.left, e.clientY-r.top]; };
+  cv.addEventListener('pointerdown',e=>{ e.preventDefault(); cv.setPointerCapture(e.pointerId);
+    down=true; const [x,y]=pos(e); g.beginPath(); g.moveTo(x,y); g.lineTo(x+.1,y+.1); g.stroke(); CT_DRAWN=true; });
+  cv.addEventListener('pointermove',e=>{ if(!down) return; const [x,y]=pos(e); g.lineTo(x,y); g.stroke(); });
+  const up=e=>{ down=false; };
+  cv.addEventListener('pointerup',up); cv.addEventListener('pointercancel',up);
+}
+function padClear(){
+  const cv=$('#ct_pad'); if(!cv) return;
+  cv.getContext('2d').clearRect(0,0,cv.width,cv.height); CT_DRAWN=false;
 }
 function closeContract(){ const m=$('#ctmodal'); if(m) m.remove(); }
 async function signContractNow(id){
+  const x=$('#cterr');
+  if(!CT_DRAWN){ x.textContent='Please sign in the box with your finger or mouse.'; x.classList.add('show'); return; }
   try{
-    await api('/api/classes/'+id+'/sign-contract','POST',{name:$('#ct_name').value,address:$('#ct_addr').value});
+    await api('/api/classes/'+id+'/sign-contract','POST',{name:$('#ct_name').value,address:$('#ct_addr').value,
+      signature:$('#ct_pad').toDataURL('image/png')});
     closeContract();
     ME = (await api('/api/me')).user;
     alert('Signed! The Gibby has your contract on file.');
@@ -1456,7 +1485,8 @@ function cardCls(c){
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
     ${c.status==='incomplete' && actingRole()==='instructor' ? `<button class="btn dark" style="margin-top:10px" onclick="startResubmit(${c.id})">Fix and resubmit</button>`:''}
-    ${c.contract_status==='signed'?`<div class="meta" style="margin-top:8px">\u{1F58A}\uFE0F Contract signed by ${esc(c.contract_name||'')} on ${esc((c.contract_signed_at||'').slice(0,10))}</div>`:''}
+    ${c.contract_status==='signed'?`<div class="meta" style="margin-top:8px">\u{1F58A}\uFE0F Contract signed by ${esc(c.contract_name||'')} on ${esc((c.contract_signed_at||'').slice(0,10))}</div>
+      ${c.contract_signature?`<img src="${c.contract_signature}" alt="signature" style="height:36px;margin-top:4px;background:#fff;border-radius:8px;padding:2px 8px">`:''}`:''}
     ${c.contract_status==='sent' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px;color:#B45309">\u{1F4DD} Contract sent, waiting on signature</div>`:''}
     ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
       <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
@@ -2341,7 +2371,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
