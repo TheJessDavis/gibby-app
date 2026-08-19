@@ -1781,14 +1781,17 @@ function openForm(slot, draftPayload){
     <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
     <div class="hint">Optional. A deeper tool with material lists, class tiers and what-ifs for low
       enrollment. It can fill the numbers below in for you.</div>
-    <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc()"></div>
-      <div><label style="margin-top:0">Planned</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
+    <div class="hint">Start from either end: type the <b>pay you want</b> and we suggest a ticket
+      price, or type a <b>ticket price</b> at the bottom and we work out what it pays. Planned
+      students is how many you expect to enroll.</div>
+    <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc('pay')"></div>
+      <div><label style="margin-top:0">Planned students</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
     <div class="calc">
-      <div class="o"><span>Recommended ticket${slot.series?' <small>(whole course)</small>':''}</span><b class="hero" id="o_t">$0</b></div>
+      <div class="o"><span id="o_tlab">Recommended ticket${slot.series?' <small>(whole course)</small>':''}</span><b class="hero" id="o_t">$0</b></div>
       <div class="o"><span>Your pay @ planned${slot.series?' <small>(whole course)</small>':''}</span><b id="o_p">$0</b></div>
     </div>
     ${slot.series?`<div class="hint">One ticket covers all ${slot.weeks} sessions. Set the price for the full course, not per week.</div>`:''}
-    <div class="two" style="margin-top:12px"><div><label style="margin-top:0">Ticket price ($)</label><input id="f_ticket" type="number" oninput="this.dataset.t=1"></div>
+    <div class="two" style="margin-top:12px"><div><label style="margin-top:0">Ticket price ($)</label><input id="f_ticket" type="number" oninput="calc('ticket')"></div>
       <div><label style="margin-top:0">Your pay ($)</label><input id="f_pay" type="number" oninput="this.dataset.t=1"></div></div>
     <div class="hint" id="draftnote">${DRAFT_ID?'Resumed from a saved draft.':''}</div>
     <div id="todobar"></div>
@@ -1837,19 +1840,35 @@ function alcSel(b){ segPick(b);
   if(b.dataset.v==='yes'){ const c=document.querySelector('#f_ages input[value="Ages 21+"]'); if(c){c.checked=true; ageChanged();} } }
 function onPhoto(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
   r.onload=ev=>{PHOTO=ev.target.result; $('#f_photo').innerHTML='<img src="'+PHOTO+'">';}; r.readAsDataURL(f); }
-function calc(){
-  const pay=+$('#c_pay').value||0, plan=Math.max(1,+$('#c_plan').value||1), mat=+$('#c_mat').value||0;
+let CALC_DIR='pay';   // which end the instructor is working from: 'pay' or 'ticket'
+function calc(dir){
+  if(dir) CALC_DIR=dir;
+  const plan=Math.max(1,+$('#c_plan').value||1), mat=+$('#c_mat').value||0;
   const own=$('#f_own') && $('#f_own').checked;
-  const ticket=Math.ceil(mat + (pay/0.6)/plan);
-  const rev=ticket*plan, pool=Math.max(0,rev-mat*plan);
   const reimb = own ? mat*plan : 0;             // instructor providing materials -> reimbursed
+  let ticket;
+  if(CALC_DIR==='ticket'){
+    // They typed a ticket price: work the pay out from it.
+    ticket = +$('#f_ticket').value||0;
+    const pool=Math.max(0,(ticket-mat)*plan);
+    if($('#c_pay')) $('#c_pay').value=Math.round(pool*0.6);
+  } else {
+    // They typed the pay they want: recommend a ticket for it.
+    const pay=+$('#c_pay').value||0;
+    ticket=Math.ceil(mat + (pay/0.6)/plan);
+    if($('#f_ticket')) $('#f_ticket').value=ticket;
+  }
+  const pool=Math.max(0,(ticket-mat)*plan);
   const yourPay = pool*0.6 + reimb;
   $('#o_t').textContent=money(ticket); $('#o_p').textContent=money(yourPay);
+  const lab=$('#o_tlab');
+  if(lab) lab.firstChild && lab.firstChild.nodeType===3
+    ? lab.firstChild.textContent=(CALC_DIR==='ticket'?'Your ticket':'Recommended ticket')
+    : null;
   const note=$('#matnote');
   if(note) note.textContent = own
     ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is added to your pay.`
     : 'The Gibby provides materials; the ticket price covers them.';
-  if($('#f_ticket') && !$('#f_ticket').dataset.t)$('#f_ticket').value=ticket;
   if($('#f_pay') && !$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
 }
 function wordCount(s){ return (s||'').trim().split(/\s+/).filter(Boolean).length; }
