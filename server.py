@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "6.2-profiles-and-color"
+VERSION = "6.3-contracts"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -149,6 +149,8 @@ def init_db():
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
+                     ("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
+                     ("contract_address","TEXT"),("contract_signed_at","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
@@ -801,6 +803,57 @@ def _season_pivot():
     except ValueError:
         return 12, 2026
 
+def season_label():
+    """'SPRING 2027' for a season that starts 2026-12-01."""
+    pm, py = _season_pivot()
+    return f"SPRING {py + 1}"
+
+def build_contract_text(cls, instructor_name):
+    """The Master Instructor Contract, word for word from The Gibby's form, with
+    the instructor, class, dates and pay filled in. Frozen at approval time so
+    what was signed can never drift."""
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception:
+        sessions = []
+    tm = cls.get("class_time") or cls.get("slot_time") or ""
+    if len(sessions) > 1:
+        when = (f"{len(sessions)} sessions, {sessions[0].get('date','')} through "
+                f"{sessions[-1].get('date','')}, {tm} weekly")
+    else:
+        when = f"{cls.get('slot_date','')}, {tm}"
+    if cls.get("waives_pay"):
+        rate = "$0 (time donated by the instructor)"
+    elif (cls.get("pay_model") or "flat") == "split":
+        rate = "60% of ticket sales after material costs"
+    else:
+        rate = f"${cls.get('instructor_pay') or 0} (flat fee)"
+    title = cls.get("title") or "the class"
+    return f"""VISUAL ARTS INSTRUCTOR CONTRACT
+
+The Everett Inc. contracts with {instructor_name} to be a Visual Arts Instructor at the Gilbert W. Perry Jr. Center for the Arts "The Gibby" located at 51 W. Main Street, Middletown, Delaware 19709 during The Gibby's {season_label()} ARTS programming for {title} taking place {when}.
+
+All programming taught at The Gibby may not be duplicated at another organization, business, or community event within 15 miles of 51 W. Main Street, Middletown, Delaware for a period of 90 days before and after the schedule event, workshop, or class at The Gibby.
+
+As an Instructor you commit to:
+
+- Having all planning and preparation as needed for the start of each program
+- Providing appropriate assistance and direction to the participant(s)
+- Being punctual arriving at least 30 minutes before the start of each workshop
+- Being accountable to The Gibby's Board of Director, Meghan Savage and/or the Director of Operations, Michelle Truban
+- Obtain student rosters and ensure The Gibby has contacted participant or their parent/guardian one week prior to class beginning
+- Check in with The Gibby Board Representative, or Director of Operations, to ensure you have everything you need for your class
+- Greet students upon arrival
+- For all participants under the age of 18 a contact name and number should be collected when dropping off on a sign-in sheet
+- Communicate with The Gibby Board Representative, or Director of Operations, any student who does not attend the class
+- Ensure all doors are locked, all lights are off, and the facility is left as you found it
+
+If you are unable to instruct during a date and time previously agreed upon you will inform The Gibby Board Representative, or Director of Operations, immediately so that The Gibby can arrange coverage accordingly or postpone the event/class if needed.
+
+In consideration of such service, The Everett Inc. agrees to pay you for your services at the rate of {rate} for {title} for this position. Breach of contract will result in ineligibility for future employment with The Everett Inc.
+
+My typed name below will serve as my signature on file."""
+
 def season_year(month):
     pm, py = _season_pivot()
     return py if month >= pm else py + 1
@@ -1090,24 +1143,32 @@ def sync_calendar():
     return reconcile_calendar_slots(slots)
 
 def scheduler_loop():
+    # Calendar slots refresh every 5 minutes so a change on the Gibby calendar
+    # shows up almost immediately. The heavier lifecycle work (emails, Eventbrite
+    # attendee sync) stays hourly; its day-based rules only fire once per class.
+    SYNC_EVERY, LIFECYCLE_EVERY = 300, 3600
+    last_lifecycle = 0
     while True:
-        try: run_scheduler()
-        except Exception as e: print("[scheduler] error:", e)
         try:
             r = sync_calendar()
-            if r: print("[gcal] sync", r)
+            if r and (r.get("added") or r.get("removed") or r.get("restored")):
+                print("[gcal] sync", r)
         except Exception as e: print("[gcal] sync error:", e)
-        prune_sessions()          # tidy away long-dead auth rows
-        try:
-            c = db()
-            live = [r["id"] for r in c.execute(
-                "SELECT id FROM classes WHERE status='approved' AND deleted_at IS NULL")]
-            c.close()
-            for cid in live:      # keeps enrolment honest for the low-enrollment rules
-                sync_registrations(cid)
-        except Exception as e:
-            print("[registrations] hourly sync error:", e)
-        time.sleep(3600)   # check hourly; day-based rules fire once per class
+        if time.time() - last_lifecycle >= LIFECYCLE_EVERY - 5:
+            last_lifecycle = time.time()
+            try: run_scheduler()
+            except Exception as e: print("[scheduler] error:", e)
+            prune_sessions()          # tidy away long-dead auth rows
+            try:
+                c = db()
+                live = [r["id"] for r in c.execute(
+                    "SELECT id FROM classes WHERE status='approved' AND deleted_at IS NULL")]
+                c.close()
+                for cid in live:      # keeps enrolment honest for the low-enrollment rules
+                    sync_registrations(cid)
+            except Exception as e:
+                print("[registrations] hourly sync error:", e)
+        time.sleep(SYNC_EVERY)
 
 # ------------------------------------------------------------- handler ----
 class H(http.server.BaseHTTPRequestHandler):
@@ -1235,10 +1296,15 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/me":
             u = self.current_user()
             if not u: return self.send_json({"user": None, "season_start": SEASON_START})
+            cq = db()
+            n_contracts = cq.execute("""SELECT COUNT(*) FROM classes WHERE instructor_id=?
+                AND contract_status='sent' AND deleted_at IS NULL""",(u["id"],)).fetchone()[0]
+            cq.close()
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
                 "role":u["role"],"must_change_pw":u.get("must_change_pw",0),
                 "photo":u.get("photo") or "", "skills":json.loads(u.get("skills") or "[]"),
-                "address":u.get("address") or ""},
+                "address":u.get("address") or "",
+                "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
         if p == "/api/users":
@@ -1821,6 +1887,32 @@ class H(http.server.BaseHTTPRequestHandler):
             if address is not None:
                 c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
             c.commit(); c.close()
+            return self.send_json({"ok":True})
+        mm = re.match(r"^/api/classes/(\d+)/sign-contract$", p)
+        if mm:
+            u = self.require("instructor")
+            if not u: return
+            b = self.read_json()
+            name = (b.get("name") or "").strip()
+            addr = (b.get("address") or "").strip()
+            if not name: return self.send_json({"error":"Type your full name; it serves as your signature."},400)
+            if not addr: return self.send_json({"error":"Your address is required on the contract."},400)
+            c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(int(mm.group(1)),)).fetchone()
+            if not row or row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            if row["contract_status"] == "signed":
+                c.close(); return self.send_json({"error":"This contract is already signed."},400)
+            if row["contract_status"] != "sent":
+                c.close(); return self.send_json({"error":"There is no contract waiting on this class."},400)
+            c.execute("""UPDATE classes SET contract_status='signed', contract_name=?,
+                         contract_address=?, contract_signed_at=? WHERE id=?""",
+                      (name[:120], addr[:200], now(), row["id"]))
+            # remember the address on their profile too, so next time it prefills
+            if not (u.get("address") or "").strip():
+                c.execute("UPDATE users SET address=? WHERE id=?",(addr[:200], u["id"]))
+            c.commit(); c.close()
+            print(f"[contract] signed: class #{row['id']} by {name}")
             return self.send_json({"ok":True})
         mm = re.match(r"^/api/users/(\d+)/ask-to-teach$", p)
         if mm:
@@ -2474,9 +2566,13 @@ class H(http.server.BaseHTTPRequestHandler):
 
             c.execute("UPDATE classes SET reviewing_admin_id=NULL, review_started_at=NULL WHERE id=?", (cid,))
             instr = dict(c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone())
+            # (instr is loaded before the branch: both paths need it)
             if approve:
                 prepared = start_graphic_review(c, cls, u["id"], spawn=False)
-                after_commit = ("render", prepared)
+                ctext = build_contract_text(cls, instr["name"])
+                c.execute("""UPDATE classes SET contract_status='sent', contract_text=? WHERE id=?""",
+                          (ctext, cid))
+                after_commit = ("render", prepared, instr, cls, ctext)
             else:
                 c.execute("UPDATE classes SET admin_note=? WHERE id=?", (b.get("note",""), cid))
                 audit(c, cid, "pending", "incomplete", u["id"])
@@ -2493,6 +2589,15 @@ class H(http.server.BaseHTTPRequestHandler):
 
         if after_commit and after_commit[0] == "render":
             threading.Thread(target=render_graphic_async, args=(after_commit[1],), daemon=True).start()
+            # The contract goes out the moment the approval lands.
+            _, _, instr2, cls2, ctext2 = after_commit
+            first = (instr2.get("name") or "").split(" ")[0] or "there"
+            mailer.send(instr2["email"], f"Please sign your instructor contract: {cls2['title']}",
+                f"Hi {first},\n\nGreat news: \"{cls2['title']}\" has been approved!\n\n"
+                f"One step before it goes live for you: your instructor contract is ready to sign. "
+                f"Log in to the Gibby Class Manager, open My classes, and tap Read and sign.\n\n"
+                f"For your records, here is the full text you will be signing:\n\n"
+                f"{'-'*40}\n{ctext2}\n{'-'*40}\n\nThe Gibby")
         elif after_commit and after_commit[0] == "email":
             (subj, body), to = after_commit[1], after_commit[2]
             mailer.send(to, subj, body)

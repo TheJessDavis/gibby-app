@@ -20,7 +20,7 @@
   .top{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;position:sticky;top:0;
     background:var(--paper);z-index:5;border-bottom:1px solid var(--line)}
   .top .brand{font-weight:800;font-size:17px;letter-spacing:-.02em}
-  .homebtn{border:none;background:var(--ink);color:#fff;border-radius:12px;padding:9px 14px;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;flex:none}
+  .homebtn{border:none;background:var(--ink);color:#fff;border-radius:12px;width:40px;height:38px;font-size:17px;line-height:1;cursor:pointer;font-family:inherit;flex:none}
   .menu{position:fixed;top:62px;right:16px;background:var(--white);border-radius:16px;box-shadow:0 14px 34px rgba(0,0,0,.18);z-index:60;min-width:230px;padding:8px;border:1px solid var(--line)}
   .menu .mwho{display:flex;align-items:center;gap:4px;padding:10px 12px;border-bottom:1px solid var(--line);margin-bottom:6px;font-weight:800;font-size:13.5px}
   .menu .mwho small{display:block;font-weight:700;font-size:11px;color:var(--ink-soft)}
@@ -277,7 +277,7 @@
 <body>
 <div class="app">
   <div class="top" id="top" style="display:none">
-    <button class="homebtn" onclick="goHome()" title="Back to your home screen">🏠 Home</button>
+    <button class="homebtn" onclick="goHome()" title="Home" aria-label="Home">🏠</button>
     <div style="display:flex;gap:8px;align-items:center">
       <button class="out" id="switchbtn" style="display:none;background:var(--purple);color:#fff" onclick="switchMode()"></button>
       <button class="out" id="menubtn" onclick="toggleMenu(event)" title="Menu" style="font-size:16px;line-height:1">☰</button>
@@ -493,6 +493,35 @@ function renderProfile(){
   </div>`;
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; closeMenu(); boot(); }
+async function openContract(id){
+  const {classes}=await api('/api/classes/mine');
+  const c=(classes||[]).find(x=>x.id===id);
+  if(!c||!c.contract_text) return alert('Could not load the contract.');
+  const m=document.createElement('div'); m.id='ctmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:14px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:480px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:18px 20px">
+    <h2 style="margin:0 0 8px">Instructor <em>contract</em></h2>
+    <pre style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;margin:0">${esc(c.contract_text)}</pre>
+    <div class="err" id="cterr"></div>
+    <label>Type your full name (this is your signature)</label><input id="ct_name" placeholder="${esc(ME&&ME.name||'')}">
+    <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
+    <div class="hint">Signed ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+    <div class="two" style="margin-top:10px">
+      <button class="btn ghost" onclick="closeContract()">Not yet</button>
+      <button class="btn dark" onclick="signContractNow(${c.id})">Sign contract</button></div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) closeContract(); });
+  document.body.appendChild(m);
+}
+function closeContract(){ const m=$('#ctmodal'); if(m) m.remove(); }
+async function signContractNow(id){
+  try{
+    await api('/api/classes/'+id+'/sign-contract','POST',{name:$('#ct_name').value,address:$('#ct_addr').value});
+    closeContract();
+    ME = (await api('/api/me')).user;
+    alert('Signed! The Gibby has your contract on file.');
+    renderInstr('mine');
+  }catch(e){ const x=$('#cterr'); x.textContent=e.message; x.classList.add('show'); }
+}
 let RESUB=null, RESUB_OLD_ID=null;
 async function startResubmit(id){
   const {classes}=await api('/api/classes/mine');
@@ -614,7 +643,8 @@ async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; 
 function helloHTML(){
   if(!ME) return '';
   const first=(ME.name||'').split(' ')[0]||'there';
-  return `<div class="hello">${avaHTML(ME)}<div><b>Hi, ${esc(first)}!</b><small>The Gibby Class Manager</small></div></div>`;
+  const today=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
+  return `<div class="hello">${avaHTML(ME)}<div><b>Hi, ${esc(first)}!</b><small>${today}</small></div></div>`;
 }
 async function renderAdmin(tab){
   ADMIN_TAB = tab;
@@ -1381,6 +1411,10 @@ function cardCls(c){
     ${c.status==='cancelled' ? `<div class="meta" style="margin-top:10px;color:#B4442C;font-weight:800">Cancelled · students refunded</div>`:''}
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
     ${c.status==='incomplete' && actingRole()==='instructor' ? `<button class="btn dark" style="margin-top:10px" onclick="startResubmit(${c.id})">Fix and resubmit</button>`:''}
+    ${c.contract_status==='signed'?`<div class="meta" style="margin-top:8px">\u{1F58A}\uFE0F Contract signed by ${esc(c.contract_name||'')} on ${esc((c.contract_signed_at||'').slice(0,10))}</div>`:''}
+    ${c.contract_status==='sent' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px;color:#B45309">\u{1F4DD} Contract sent, waiting on signature</div>`:''}
+    ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
+      <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
@@ -1564,10 +1598,11 @@ function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+
   $('#f_title').value=t.title; $('#f_desc').value=t.description; descCount();
   const c=document.querySelector('#f_ages input[value="'+t.age+'"]'); if(c){c.checked=true; ageChanged();} }
 async function renderInstr(tab){
+  const nSign = (ME && ME.contracts_to_sign) || 0;
   $('#view').innerHTML = `${helloHTML()}
     <div class="tabs">
       <button class="${tab==='open'?'on':''}" onclick="renderInstr('open')">Open slots</button>
-      <button class="${tab==='mine'?'on':''}" onclick="renderInstr('mine')">My classes</button>
+      <button class="${tab==='mine'?'on':''}" onclick="renderInstr('mine')">My classes${nSign?`<span class="navbadge">${nSign}</span>`:''}</button>
     </div><div id="tab"></div>`;
   return boundary('instructor:'+tab, '#tab', tab==='open'?instrOpen:instrMine);
 }
@@ -2264,7 +2299,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
