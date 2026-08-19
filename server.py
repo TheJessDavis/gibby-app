@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "5.8-read-route-fix"
+VERSION = "5.9-monthly-reveal"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -799,6 +799,38 @@ def season_year(month):
     pm, py = _season_pivot()
     return py if month >= pm else py + 1
 
+# Booking opens month by month: instructors see the season's first month, and on
+# the LAST DAY of every month the next not-yet-shown month unlocks. The anchor is
+# the month the rollout began; every month-end since then reveals one more month.
+REVEAL_ANCHOR = os.environ.get("SLOT_REVEAL_ANCHOR", "2026-08")
+_MON_FULL = ["January","February","March","April","May","June","July","August",
+             "September","October","November","December"]
+
+def _month_last_day(d):
+    return (d.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
+
+def visible_month_count(today=None):
+    t = today or datetime.date.today()
+    try:
+        ay, am = (int(x) for x in REVEAL_ANCHOR.split("-")[:2])
+    except ValueError:
+        ay, am = 2026, 8
+    elapsed = max(0, (t.year * 12 + t.month) - (ay * 12 + am))
+    if t == _month_last_day(t):
+        elapsed += 1          # today IS a month-end: today's unlock counts
+    return 1 + elapsed
+
+def _season_key(m):
+    return (season_year(m), m)
+
+def _avail_months(c):
+    rows = c.execute("SELECT DISTINCT date FROM slots WHERE status='available' AND deleted_at IS NULL").fetchall()
+    return sorted({p.month for p in (parse_day(r[0]) for r in rows) if p}, key=_season_key)
+
+def month_is_visible(c, month, today=None):
+    months = _avail_months(c)
+    return month in set(months[:visible_month_count(today)])
+
 def parse_day(label, year=None):
     """'Sat, Jan 17' -> date(2027,1,17). Slot labels carry no year (see note below)."""
     try:
@@ -1214,7 +1246,21 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require()
             if not u: return
             c = db(); rows=[dict(r) for r in c.execute("SELECT * FROM slots WHERE status='available' AND deleted_at IS NULL ORDER BY id").fetchall()]; c.close()
-            return self.send_json({"slots":rows})
+            notice = None
+            if u["role"] == "instructor":
+                # Months unlock one at a time; hide the rest and say when the next opens.
+                months = sorted({p.month for p in (parse_day(r["date"]) for r in rows) if p}, key=_season_key)
+                show = set(months[:visible_month_count()])
+                rows = [r for r in rows if (lambda p: p and p.month in show)(parse_day(r["date"]))]
+                hidden = [m for m in months if m not in show]
+                if hidden:
+                    t = datetime.date.today()
+                    unlock = _month_last_day(t)
+                    if unlock == t:
+                        unlock = _month_last_day(unlock + datetime.timedelta(days=1))
+                    notice = (f"{_MON_FULL[hidden[0]-1]} dates open on {day_label(unlock)}. "
+                              f"A new month opens on the last day of every month.")
+            return self.send_json({"slots": rows, "notice": notice})
         if p in ("/api/templates","/api/templates/all"):
             u = self.require()
             if not u: return
@@ -1963,6 +2009,13 @@ class H(http.server.BaseHTTPRequestHandler):
                                  "end": rows[-1]["end"], "slot_ids": [r["id"] for r in rows]}]
                 if tmin(cs) < tmin(rows[0]["start"]) or tmin(ce) > tmin(rows[-1]["end"]):
                     c.close(); return self.send_json({"error":"Class times must sit inside your booked window."},400)
+                # The month must have unlocked (hiding it in the picker is not enough).
+                # Only the FIRST session matters: a series may legitimately run on into
+                # months that have not opened yet.
+                if u["role"] == "instructor":
+                    p0 = parse_day(rows[0]["date"])
+                    if p0 and not month_is_visible(c, p0.month):
+                        c.close(); return self.send_json({"error":"Those dates have not opened for booking yet. A new month opens on the last day of every month."},400)
                 # RACE-SAFE: claim ALL slots for every session atomically; if any got
                 # taken first, rowcount < N, we roll back (no commit) and reject.
                 claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount

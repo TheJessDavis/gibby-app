@@ -1463,7 +1463,7 @@ function calendarPickerHTML(slots){
 }
 
 async function instrOpen(){
-  const {slots} = await api('/api/slots');
+  const {slots, notice} = await api('/api/slots');
   // The view can change while that request is in flight (tap a slot, then hit
   // Continue before the list redraws). If our target is gone, drop the render.
   if(!$('#tab')) return;
@@ -1490,6 +1490,7 @@ async function instrOpen(){
     :``}
 
     ${calendarPickerHTML(slots)}
+    ${notice?`<div class="hint" style="margin:-6px 0 14px">🔓 ${esc(notice)}</div>`:''}
 
     <div class="dayhead">${esc(SLOTDAY)} · ${DAYSLOTS.length} open time${DAYSLOTS.length===1?'':'s'}</div>
     <div class="tip">🕒 <span>Tap a time, or a run of back-to-back times, in the same room. Book an extra 30 minutes before <b>and</b> after for setup and cleanup.</span></div>
