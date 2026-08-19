@@ -56,6 +56,8 @@
   #tab>.card:nth-of-type(5n){background:var(--t-blue)}
   .hello{display:flex;align-items:center;gap:12px;margin:2px 0 16px}
   .hello .ava,.hello .ava-i{width:46px;height:46px;font-size:17px;vertical-align:0;margin:0;border-radius:50%}
+  .helloava{position:relative;border:none;background:none;padding:0;cursor:pointer;line-height:0}
+  .helloava .avaedit{position:absolute;right:-3px;bottom:-3px;font-size:11px;background:var(--white);border-radius:50%;width:19px;height:19px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.18)}
   .hello b{font-size:20px;letter-spacing:-.02em;display:block;line-height:1.15}
   .hello small{font-size:12px;font-weight:700;color:var(--ink-soft)}
   #tab .clscard.cls-pending{background:var(--yellow)}
@@ -461,9 +463,10 @@ function avaHTML(u, big){
   const init=(u.name||'?').split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
   return `<span class="${cls}">${esc(init)}</span>`;
 }
-const SKILL_IDEAS=['Pottery & clay','Watercolor','Acrylic painting','Oil painting','Drawing & sketching',
-  'Stained glass','Mosaics','Jewelry making','Fiber arts & weaving','Knitting & crochet',
-  'Sewing & quilting','Embroidery','Printmaking','Collage & mixed media','Paper crafts & origami',
+const SKILL_IDEAS=['Pottery & clay','Hand building pottery','Watercolor','Acrylic painting','Oil painting',
+  'Drawing & sketching','Stained glass','Mosaics','Jewelry making','Fiber arts & weaving','Knitting & crochet',
+  'Sewing','Quilting','Embroidery','Printmaking','Relief printmaking','Linocut','Screen printing',
+  'Bookbinding','Miniatures','Collage & mixed media','Paper crafts & origami',
   'Woodworking','Leather crafts','Candle making','Soap making','Floral design','Resin art','Macrame',
   'Calligraphy & hand lettering','Cake decorating','Kids crafts',
   'Digital illustration','Procreate & iPad art','Graphic design','Digital photography & photo editing',
@@ -729,7 +732,9 @@ function helloHTML(){
   if(!ME) return '';
   const first=(ME.name||'').split(' ')[0]||'there';
   const today=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
-  return `<div class="hello">${avaHTML(ME)}<div><b>Hi, ${esc(first)}!</b><small>${today}</small></div></div>`;
+  return `<div class="hello">
+    <button class="helloava" onclick="renderProfile()" title="Edit your profile" aria-label="Edit your profile">${avaHTML(ME)}<span class="avaedit">\u270F\uFE0F</span></button>
+    <div><b>Hi, ${esc(first)}!</b><small>${today}</small></div></div>`;
 }
 async function renderAdmin(tab){
   ADMIN_TAB = tab;
