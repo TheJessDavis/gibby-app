@@ -195,6 +195,12 @@
   .skill.mini{padding:3px 9px;font-size:10.5px;cursor:default;background:#EAF4E2;border-color:#EAF4E2;color:#3F7A32}
   .skill.mini.hit{background:var(--ink);border-color:var(--ink);color:#fff}
   .skill b{font-weight:900}
+  .sgg{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--white);border-radius:14px;box-shadow:0 14px 32px rgba(0,0,0,.18);z-index:25;overflow:hidden;border:1px solid var(--line)}
+  .sgg button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;border:none;background:none;font-family:inherit;padding:10px 12px;cursor:pointer}
+  .sgg button:hover{background:var(--paper)}
+  .sgg button b{display:block;font-size:13px;font-weight:800;color:var(--ink)}
+  .sgg button small{display:block;font-size:10.5px;font-weight:700;color:var(--ink-soft)}
+  .sgg .bi{font-size:16px;width:24px;text-align:center}
   .tip{display:flex;gap:9px;align-items:flex-start;background:#FCE889;border-radius:16px;padding:12px 14px;font-size:12.5px;font-weight:700;line-height:1.35;margin-bottom:14px}
   /* one-day vs series, month/list toggle, week picker, session lists */
   .kindcards{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 14px}
@@ -989,17 +995,48 @@ async function removePerson(id,name){
   try{ await api('/api/archive/users/'+id+'/delete','POST',{}); adminPeople(); }
   catch(e){ alert(e.data&&e.data.error||'Could not remove them.'); }
 }
-async function askToTeach(id,name){
-  const msg=prompt(`What would you like to ask ${name}?\n\nThis goes in an email from The Gibby.`,
-    'We would love for you to teach a class this season. Any interest?');
-  if(msg===null) return;
-  try{
-    const r=await api('/api/users/'+id+'/ask-to-teach','POST',{message:msg});
-    alert(r.delivered?`Sent! ${name} has an email at ${r.to}.`:`Saved, but email is in dry-run mode so nothing was actually sent (would go to ${r.to}).`);
-  }catch(e){ alert(e.data&&e.data.error||'Could not send that.'); }
+let ASK_SKILL=null;
+function askPickSkill(k){ ASK_SKILL=k;
+  document.querySelectorAll('#askmodal .skill').forEach(b=>b.classList.toggle('mine', b.dataset.k===k));
+  const cu=$('#ask_custom'); if(cu && cu.value.trim()!==k) cu.value='';
 }
-let PEOPLE_Q='';
-function peopleSearch(v){ PEOPLE_Q=v||''; adminPeople(); }
+async function askToTeach(id,name){
+  const {users}=await api('/api/users');
+  const u=(users||[]).find(x=>x.id===id); if(!u) return;
+  ASK_SKILL=null;
+  const m=document.createElement('div'); m.id='askmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:420px;width:100%;padding:20px 22px;max-height:92vh;overflow:auto">
+    <h2 style="margin:0 0 2px">Ask ${esc(name)} <em>to teach</em></h2>
+    <p class="sub" style="margin:0 0 10px">Pick the skill you want a class in. It goes in the email.</p>
+    <div class="err" id="askerr"></div>
+    ${(u.skills||[]).length?`<label>Their skills</label>
+      <div class="skillcloud">${u.skills.map(k=>`<button class="skill" data-k="${esc(k)}" onclick="askPickSkill('${esc(k)}')">${esc(k)}</button>`).join('')}</div>`
+      :`<div class="hint">${esc(name)} has not added skills to their profile yet. Type one below.</div>`}
+    <label>Or type a skill</label><input id="ask_custom" placeholder="e.g. Linocut" oninput="askPickSkill(this.value.trim())">
+    <label>Add a note (optional)</label>
+    <textarea id="ask_msg" rows="3" style="width:100%">We would love for you to teach this at The Gibby this season. Any interest?</textarea>
+    <div class="two" style="margin-top:12px">
+      <button class="btn ghost" onclick="document.getElementById('askmodal').remove()">Cancel</button>
+      <button class="btn dark" onclick="askSendNow(${id},'${esc(name)}')">Send the ask</button></div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+async function askSendNow(id,name){
+  const skill=(ASK_SKILL||'').trim();
+  if(!skill){ const x=$('#askerr'); x.textContent='Pick one of their skills, or type one.'; x.classList.add('show'); return; }
+  try{
+    const r=await api('/api/users/'+id+'/ask-to-teach','POST',{skill, message:$('#ask_msg').value});
+    document.getElementById('askmodal').remove();
+    alert(r.delivered?`Sent! ${name} was asked to teach ${skill}.`:`Saved, but email is in dry-run mode so nothing was actually sent (would go to ${r.to}).`);
+  }catch(e){ const x=$('#askerr'); x.textContent=e.data&&e.data.error||'Could not send that.'; x.classList.add('show'); }
+}
+let PEOPLE_Q='', PEOPLE_PICKED=false;
+function peopleSearch(v){ PEOPLE_Q=v||''; PEOPLE_PICKED=false; adminPeople(); }
+function peoplePick(kind, val){
+  if(kind==='skill'){ PEOPLE_Q=''; PEOPLE_PICKED=false; peopleFilter(val); return; }
+  PEOPLE_Q=val; PEOPLE_PICKED=true; adminPeople();
+}
 async function adminPeople(){
   const d=await api('/api/users');
   const allSkills=[...new Set(d.users.flatMap(u=>u.skills||[]))].sort();
@@ -1022,7 +1059,20 @@ async function adminPeople(){
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
     <div class="card"><h3>Find someone</h3>
-      <input id="q_people" placeholder="Search by name or skill (pottery, watercolor...)" value="${esc(PEOPLE_Q)}" oninput="peopleSearch(this.value)" style="margin-top:8px">
+      <div style="position:relative">
+      <input id="q_people" placeholder="Search by name or skill (pottery, watercolor...)" value="${esc(PEOPLE_Q)}" oninput="peopleSearch(this.value)" autocomplete="off" style="margin-top:8px">
+      ${(()=>{ // typeahead: people and skills that match what has been typed so far
+        const t=PEOPLE_Q.trim().toLowerCase();
+        if(!t || PEOPLE_PICKED) return '';
+        const ppl=d.users.filter(u=>(u.name||'').toLowerCase().includes(t)||(u.email||'').toLowerCase().includes(t)).slice(0,5);
+        const sks=allSkills.filter(k=>k.toLowerCase().includes(t)).slice(0,4);
+        if(!ppl.length && !sks.length) return '';
+        return `<div class="sgg">
+          ${ppl.map(u=>`<button onclick="peoplePick('person','${esc(u.name||u.email)}')">${avaHTML(u)}<span><b>${esc(u.name||u.email)}</b><small>${esc((u.skills||[]).slice(0,3).join(', ')||u.email)}</small></span></button>`).join('')}
+          ${sks.map(k=>`<button onclick="peoplePick('skill','${esc(k)}')"><span class="bi">\u{1F3F7}\uFE0F</span><span><b>${esc(k)}</b><small>${d.users.filter(u=>(u.skills||[]).includes(k)).length} ${d.users.filter(u=>(u.skills||[]).includes(k)).length===1?'person':'people'}</small></span></button>`).join('')}
+        </div>`;
+      })()}
+      </div>
       ${allSkills.length?`<div class="meta" style="margin-top:10px">Or tap a skill to see who has it, then Ask to teach.</div>
       <div class="skillcloud" style="margin-top:8px">${allSkills.map(k=>`<button class="skill ${k===PEOPLE_SKILL?'mine':''}" onclick="peopleFilter('${esc(k)}')">${esc(k)}</button>`).join('')}</div>`
       :`<div class="hint" style="margin-top:10px">No one has added skills yet. Instructors add them on their Profile (bottom bar), and skill buttons will appear here as they do.</div>`}
@@ -2405,7 +2455,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear','removePerson','peopleSearch'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

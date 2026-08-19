@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "6.9-avatar-edit"
+VERSION = "7.0-typeahead-ask"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1932,15 +1932,18 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             b = self.read_json(); msg = (b.get("message") or "").strip()
+            skill = (b.get("skill") or "").strip()[:60]
+            if not skill:
+                return self.send_json({"error":"Pick the skill you want them to teach."},400)
             c = db(); row = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL",(int(mm.group(1)),)).fetchone()
             c.close()
             if not row: return self.send_json({"error":"No such person."},404)
             first = (row["name"] or "").split(" ")[0] or "there"
             proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
-            body = (f"Hi {first},\n\n{u['name']} at The Gibby would love for you to teach a class.\n\n"
+            body = (f"Hi {first},\n\n{u['name']} at The Gibby would love for you to teach a {skill} class.\n\n"
                     + (f"{msg}\n\n" if msg else "")
                     + f"If you're interested, log in and grab an open time slot:\n{proto}://{host}\n\nThe Gibby")
-            sent = mailer.send(row["email"], "Would you teach a class at The Gibby?", body)
+            sent = mailer.send(row["email"], f"Would you teach a {skill} class at The Gibby?", body)
             return self.send_json({"ok":True, "delivered":bool(sent), "to":row["email"]})
         if p == "/api/forgot":
             email = (self.read_json().get("email","") or "").strip().lower()
