@@ -993,10 +993,17 @@ async function askToTeach(id,name){
     alert(r.delivered?`Sent! ${name} has an email at ${r.to}.`:`Saved, but email is in dry-run mode so nothing was actually sent (would go to ${r.to}).`);
   }catch(e){ alert(e.data&&e.data.error||'Could not send that.'); }
 }
+let PEOPLE_Q='';
+function peopleSearch(v){ PEOPLE_Q=v||''; adminPeople(); }
 async function adminPeople(){
   const d=await api('/api/users');
   const allSkills=[...new Set(d.users.flatMap(u=>u.skills||[]))].sort();
-  const shown = PEOPLE_SKILL ? d.users.filter(u=>(u.skills||[]).includes(PEOPLE_SKILL)) : d.users;
+  let shown = PEOPLE_SKILL ? d.users.filter(u=>(u.skills||[]).includes(PEOPLE_SKILL)) : d.users;
+  const ql=PEOPLE_Q.trim().toLowerCase();
+  if(ql) shown = shown.filter(u =>
+    (u.name||'').toLowerCase().includes(ql) ||
+    (u.email||'').toLowerCase().includes(ql) ||
+    (u.skills||[]).some(k=>k.toLowerCase().includes(ql)));
   const row=u=>`<div class="card"><div class="row">
       <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
@@ -1009,11 +1016,13 @@ async function adminPeople(){
     </div></div>`;
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
-    ${allSkills.length?`<div class="card"><h3>Find by skill</h3>
-      <div class="meta">Tap a skill to see who has it, then Ask to teach.</div>
-      <div class="skillcloud" style="margin-top:8px">${allSkills.map(k=>`<button class="skill ${k===PEOPLE_SKILL?'mine':''}" onclick="peopleFilter('${esc(k)}')">${esc(k)}</button>`).join('')}</div>
+    <div class="card"><h3>Find someone</h3>
+      <input id="q_people" placeholder="Search by name or skill (pottery, watercolor...)" value="${esc(PEOPLE_Q)}" oninput="peopleSearch(this.value)" style="margin-top:8px">
+      ${allSkills.length?`<div class="meta" style="margin-top:10px">Or tap a skill to see who has it, then Ask to teach.</div>
+      <div class="skillcloud" style="margin-top:8px">${allSkills.map(k=>`<button class="skill ${k===PEOPLE_SKILL?'mine':''}" onclick="peopleFilter('${esc(k)}')">${esc(k)}</button>`).join('')}</div>`
+      :`<div class="hint" style="margin-top:10px">No one has added skills yet. Instructors add them on their Profile (bottom bar), and skill buttons will appear here as they do.</div>`}
       ${PEOPLE_SKILL?`<div class="hint" style="margin-top:8px">${shown.length} ${shown.length===1?'person has':'people have'} \u201c${esc(PEOPLE_SKILL)}\u201d \u00b7 <a href="#" onclick="peopleFilter(PEOPLE_SKILL);return false">clear filter</a></div>`:''}
-    </div>`:''}
+    </div>
     <div class="card"><h3>Add a person</h3>
       <label>Name</label><input id="np_name" placeholder="First Last">
       <label>Email (required)</label><input id="np_email" type="email" placeholder="them@example.com">
@@ -1021,6 +1030,9 @@ async function adminPeople(){
       <button class="btn dark" style="margin-top:12px" onclick="addPerson()">Add &amp; send invite</button>
       <div class="hint" id="np_msg"></div></div>
     ${shown.map(row).join('')}`;
+  // typing re-renders the list; keep the cursor in the search box
+  const q=$('#q_people');
+  if(q && PEOPLE_Q){ q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
 }
 async function addPerson(){
   const email=($('#np_email').value||'').trim().toLowerCase(), msg=$('#np_msg');
@@ -2388,7 +2400,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear','removePerson'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear','removePerson','peopleSearch'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
