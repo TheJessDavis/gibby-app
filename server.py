@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "6.0-two-way-pricing"
+VERSION = "6.1-donated-time"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -142,7 +142,7 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
-                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
+                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
@@ -1962,7 +1962,11 @@ class H(http.server.BaseHTTPRequestHandler):
             if not (mn and mn > 0): miss.append("min_p")
             if mx and mn and mn > mx: miss.append("min_p (cannot exceed max)")
             if not (_num("ticket_price") or 0) > 0: miss.append("ticket_price")
-            if not (_num("instructor_pay") or 0) > 0: miss.append("instructor_pay")
+            waives = 1 if b.get("waives_pay") else 0
+            # $0 pay is allowed only as a deliberate choice (donating their time);
+            # otherwise a zero is almost always the calculator left untouched.
+            if not waives and not (_num("instructor_pay") or 0) > 0: miss.append("instructor_pay")
+            if waives and (_num("instructor_pay") or 0) < 0: miss.append("instructor_pay")
             mc = _num("material_cost")
             if mc is None or mc < 0: miss.append("material_cost")
             # The booked window includes setup and cleanup; the class itself must be
@@ -2041,7 +2045,12 @@ class H(http.server.BaseHTTPRequestHandler):
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             c.execute("UPDATE classes SET class_time=? WHERE id=?", (f"{cs} \u2013 {ce}", new_id))
             pm = b.get("pay_model")
-            if pm in ("flat", "split"):
+            if waives:
+                # Donated time: teaching pay is fixed at whatever remains (their own
+                # materials reimbursement, or zero), never the split formula.
+                c.execute("""UPDATE classes SET waives_pay=1, pay_model='flat',
+                             instructor_pay=COALESCE(instructor_pay,0) WHERE id=?""", (new_id,))
+            elif pm in ("flat", "split"):
                 c.execute("UPDATE classes SET pay_model=? WHERE id=?", (pm, new_id))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
             if b.get("draft_id"):        # the proposal is submitted; retire its draft

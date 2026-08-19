@@ -1156,7 +1156,7 @@ function cardCls(c){
       <div class="sessionlist">${c.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div></details>`:''}
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
-    <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${money0(c.instructor_pay)} pay</div>
+    <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${c.waives_pay?'\u{1F49B} volunteering (no teaching pay)':money0(c.instructor_pay)+' pay'}</div>
     ${c.close_days?`<div class="meta" style="margin-top:6px">Registration closes ${c.close_days} day${c.close_days===1?'':'s'} before</div>`:''}
     ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
@@ -1651,6 +1651,7 @@ function applyDraft(p){
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
   if($('#f_own')) $('#f_own').checked = !!p.own_materials;
+  if($('#f_free')) $('#f_free').checked = !!p.waives_pay;
   const pick=(seg,val)=>{ const s=$(seg); if(!s) return;
     s.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===val)); };
   pick('#f_alc', p.alcohol?'yes':'no');
@@ -1778,6 +1779,8 @@ function openForm(slot, draftPayload){
       <button data-v="split" onclick="segPick(this)">60% of ticket sales</button></div>
     <div class="hint">Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
       ticket sales after materials, so it rises and falls with enrollment.</div>
+    <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_free" onchange="calc()"> I'm donating my teaching time for this class</label>
+    <div class="hint" id="freenote" style="display:none"></div>
     <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
     <div class="hint">Optional. A deeper tool with material lists, class tiers and what-ifs for low
       enrollment. It can fill the numbers below in for you.</div>
@@ -1846,6 +1849,30 @@ function calc(dir){
   const plan=Math.max(1,+$('#c_plan').value||1), mat=+$('#c_mat').value||0;
   const own=$('#f_own') && $('#f_own').checked;
   const reimb = own ? mat*plan : 0;             // instructor providing materials -> reimbursed
+  const free=$('#f_free') && $('#f_free').checked;
+  const fn=$('#freenote');
+  if(fn){
+    fn.style.display = free ? '' : 'none';
+    fn.textContent = free
+      ? (own ? `Thank you! Ticket sales go to The Gibby. You are still reimbursed ${money(reimb)} for the materials you provide.`
+             : 'Thank you! All ticket sales for this class go to The Gibby.')
+      : '';
+  }
+  if($('#f_pay')) $('#f_pay').disabled = !!free;
+  if($('#c_pay')) $('#c_pay').disabled = !!free;
+  if(free){
+    if($('#c_pay')) $('#c_pay').value = 0;
+    const ticket=+$('#f_ticket').value||0;
+    if($('#f_pay')){ $('#f_pay').value = Math.round(reimb); delete $('#f_pay').dataset.t; }
+    $('#o_t').textContent=money(ticket); $('#o_p').textContent=money(reimb);
+    const lab=$('#o_tlab');
+    if(lab && lab.firstChild && lab.firstChild.nodeType===3) lab.firstChild.textContent='Your ticket';
+    const note=$('#matnote');
+    if(note) note.textContent = own
+      ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is reimbursed to you.`
+      : 'The Gibby provides materials; the ticket price covers them.';
+    return;
+  }
   let ticket;
   if(CALC_DIR==='ticket'){
     // They typed a ticket price: work the pay out from it.
@@ -1897,7 +1924,7 @@ function validateForm(){
   if(mat===null || mat<0) add('#c_mat','Material cost per student','materials');
   const ticket=num('f_ticket'), pay=num('f_pay');
   if(!(ticket>0)) add('#f_ticket','Ticket price','ticket');
-  if(!(pay>0)) add('#f_pay','Your pay','pay');
+  if(!($('#f_free')&&$('#f_free').checked) && !(pay>0)) add('#f_pay','Your pay','pay');
   return miss;
 }
 let SUBMIT_TRIED=false, AUTOSAVE_T=null;
@@ -1961,6 +1988,7 @@ function collectForm(){
     own_materials: $('#f_own').checked, material_cost:+$('#c_mat').value,
     alcohol: seg('#f_alc')==='yes', max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
+    waives_pay: !!($('#f_free')&&$('#f_free').checked),
     links:$('#f_links').value, photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
     class_start:($('#f_cstart')?$('#f_cstart').value:''), class_end:($('#f_cend')?$('#f_cend').value:''),
@@ -2024,7 +2052,9 @@ function showReview(){
   const planned = +$('#c_plan').value || f.max_p;
   const mat = (+f.material_cost||0), tk = (+f.ticket_price||0);
   const pool = Math.max(0, tk*planned - mat*planned);
-  const earn = f.pay_model==='split'
+  const earn = f.waives_pay
+    ? `${money(f.instructor_pay)} \u00b7 you're donating your time${f.own_materials?' (materials reimbursed)':''} \u2764\ufe0f`
+    : f.pay_model==='split'
     ? `about ${money0(pool*0.6 + (f.own_materials?mat*planned:0))} at ${planned} booked (60% of sales)`
     : `${money(f.instructor_pay)} flat`;
   const m = document.createElement('div'); m.id='rvmodal';
