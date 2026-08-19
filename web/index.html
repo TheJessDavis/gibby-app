@@ -469,12 +469,32 @@ function avaHTML(u, big){
   const init=(u.name||'?').split(/\s+/).map(w=>w[0]).slice(0,2).join('').toUpperCase();
   return `<span class="${cls}">${esc(init)}</span>`;
 }
-const SKILL_IDEAS=['Pottery & clay','Hand building pottery','Watercolor','Acrylic painting','Oil painting',
-  'Drawing & sketching','Stained glass','Mosaics','Jewelry making','Fiber arts & weaving','Knitting & crochet',
-  'Sewing','Quilting','Embroidery','Printmaking','Relief printmaking','Linocut','Screen printing',
-  'Bookbinding','Miniatures','Collage & mixed media','Paper crafts & origami',
-  'Woodworking','Leather crafts','Candle making','Soap making','Floral design','Resin art','Macrame',
-  'Calligraphy & hand lettering','Cake decorating','Kids crafts',
+const SKILL_IDEAS=[
+  // clay & sculpture
+  'Pottery & clay','Hand building pottery','Wheel throwing','Polymer clay','Air dry clay','Sculpture',
+  // painting & drawing
+  'Watercolor','Acrylic painting','Oil painting','Gouache','Pastels','Charcoal drawing','Ink drawing',
+  'Drawing & sketching','Figure drawing','Paint pouring','Alcohol ink','Encaustic & wax art','Mural painting','Chalk art',
+  // glass & mosaic
+  'Stained glass','Glass fusing','Suncatchers','Mosaics',
+  // jewelry & metal
+  'Jewelry making','Beading','Wire wrapping','Metalsmithing','Enameling',
+  // fiber & textile
+  'Fiber arts & weaving','Rug tufting','Knitting & crochet','Sewing','Quilting','Embroidery','Cross-stitch',
+  'Punch needle','Needle felting','Wet felting','Macrame','Tie-dye & fabric dyeing','Batik & shibori','Basket weaving',
+  // print & paper
+  'Printmaking','Relief printmaking','Linocut','Screen printing','Stamp carving','Gel plate printing','Cyanotype',
+  'Bookbinding','Paper marbling','Paper crafts & origami','Card making','Scrapbooking','Junk journaling',
+  'Collage & mixed media','Calligraphy & hand lettering',
+  // wood, wax & home
+  'Woodworking','Wood carving','Pyrography (wood burning)','Leather crafts','Candle making','Soap making',
+  'Floral design','Wreath making','Terrariums','Resin art','String art','Miniatures','Model & diorama building',
+  'Doll & puppet making','Upcycling & thrift flips','Home decor crafts',
+  // food & festive
+  'Cake decorating','Cookie decorating','Gingerbread houses',
+  // people & fun
+  'Kids crafts','Face painting','Henna',
+  // digital
   'Digital illustration','Procreate & iPad art','Graphic design','Digital photography & photo editing',
   'Animation','3D design & printing'];
 let PF_PHOTO=null, PF_SKILLS=null;
