@@ -26,11 +26,21 @@
   .menu .mwho small{display:block;font-weight:700;font-size:11px;color:var(--ink-soft)}
   .menu button{display:block;width:100%;text-align:left;border:none;background:none;font-family:inherit;font-weight:800;font-size:13.5px;color:var(--ink);padding:11px 12px;border-radius:11px;cursor:pointer}
   .menu button:hover{background:var(--paper)}
+  .bnav{position:fixed;bottom:12px;left:12px;right:12px;max-width:420px;margin:0 auto;background:var(--ink);border-radius:22px;display:flex;gap:2px;padding:7px;z-index:45;box-shadow:0 14px 30px rgba(0,0,0,.28)}
+  .bnav button{position:relative;flex:1;border:none;background:none;color:rgba(255,255,255,.55);font-family:inherit;font-weight:800;cursor:pointer;padding:7px 2px 6px;border-radius:15px;display:flex;flex-direction:column;align-items:center;gap:2px}
+  .bnav button .bi{font-size:17px;line-height:1}
+  .bnav button .bl{font-size:9px;letter-spacing:.04em;text-transform:uppercase}
+  .bnav button.on{background:rgba(255,255,255,.16);color:#fff}
+  .bnav .navbadge{position:absolute;top:2px;right:14px}
+  body.formopen .bnav, body.formopen #moresheet{display:none!important}
+  .bsheet{position:fixed;bottom:84px;left:12px;right:12px;max-width:420px;margin:0 auto;background:var(--white);border-radius:20px;padding:12px;z-index:46;box-shadow:0 18px 40px rgba(0,0,0,.25);display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .bsheet button{border:none;background:var(--paper);border-radius:14px;padding:12px 4px 10px;font-family:inherit;font-weight:800;font-size:10px;color:var(--ink);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:5px}
+  .bsheet button .bi{font-size:19px}
   .top .who{font-size:12px;color:var(--ink-soft);font-weight:700}
   .top button.out{border:none;background:rgba(0,0,0,.06);border-radius:10px;padding:7px 12px;font-weight:800;font-size:12px;cursor:pointer;color:var(--ink);white-space:nowrap}
   .top .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38vw}
   @media(max-width:560px){.edithint{display:none}}
-  .view{flex:1;padding:20px;padding-bottom:90px}
+  .view{flex:1;padding:20px;padding-bottom:120px}
   h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
   h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
   .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4}
@@ -223,7 +233,7 @@
   .dslink{border:none;background:none;font-family:inherit;font-size:10.5px;font-weight:800;
     color:var(--ink-soft);cursor:pointer;padding:2px 0;text-decoration:underline;text-underline-offset:2px}
   @media print{
-    #top,.tabs,.seasonbar,.noprint,#todobar{display:none!important}
+    #top,.tabs,.seasonbar,.noprint,#todobar,.bnav,.bsheet,.menu{display:none!important}
     body{background:#fff;padding:0}
     .card{box-shadow:none;border:1px solid #ddd;break-inside:avoid}
   }
@@ -269,7 +279,7 @@
   .slotcard .sr{font-size:10.5px;font-weight:700;opacity:.68;margin-top:5px}
   .sc-y{background:#F7D64B}.sc-p{background:#F4A9C8}.sc-b{background:#A9C7EB}.sc-g{background:#AFD0A6}.sc-v{background:#C6B4F0}
   .slotcard.sel{box-shadow:0 0 0 3px var(--ink),0 6px 14px rgba(30,22,10,.14)}
-  .selbar{position:fixed;bottom:16px;left:16px;right:16px;max-width:408px;margin:0 auto;background:var(--ink);color:#fff;border-radius:18px;padding:12px 12px 12px 18px;display:flex;align-items:center;gap:12px;z-index:30;box-shadow:0 12px 26px rgba(0,0,0,.28)}
+  .selbar{position:fixed;bottom:84px;left:16px;right:16px;max-width:408px;margin:0 auto;background:var(--ink);color:#fff;border-radius:18px;padding:12px 12px 12px 18px;display:flex;align-items:center;gap:12px;z-index:30;box-shadow:0 12px 26px rgba(0,0,0,.28)}
   .selbar .a{font-size:14px;font-weight:800}.selbar .b{font-size:11px;color:rgba(255,255,255,.62);font-weight:700;margin-top:2px}
   .selbar button{margin-left:auto;flex:none;border:none;background:var(--yellow);color:var(--ink);font-weight:800;font-size:14px;padding:11px 16px;border-radius:12px;cursor:pointer;font-family:inherit}
 </style>
@@ -288,6 +298,8 @@
     <button onclick="menuPick('profile')">✏️ Edit profile</button>
     <button onclick="menuPick('logout')">👋 Sign out</button>
   </div>
+  <div id="moresheet" class="bsheet" style="display:none"></div>
+  <div id="bnav" class="bnav" style="display:none"></div>
   <div class="view" id="view"></div>
 </div>
 
@@ -409,7 +421,7 @@ async function bootInner(){
   if(!user && await refreshSession()){ user = (await api('/api/me')).user; }
   ME=user;
   if(!user){ renderLogin(); $('#top').style.display='none'; return; }
-  if(user.must_change_pw){ $('#top').style.display='flex'; return renderChangePw(); }
+  if(user.must_change_pw){ $('#top').style.display='flex'; hideBnav(); return renderChangePw(); }
   $('#top').style.display='flex';
   if(LOGIN_CHOICE && user.role==='admin') VIEWAS = LOGIN_CHOICE;   // honor the sign-in choice (admins only)
   else if(VIEWAS===null) VIEWAS = user.role;
@@ -458,6 +470,7 @@ const SKILL_IDEAS=['Pottery & clay','Watercolor','Acrylic painting','Oil paintin
   'Animation','3D design & printing'];
 let PF_PHOTO=null, PF_SKILLS=null;
 function renderProfile(){
+  if(ME) buildBnav(actingRole(), actingRole()==='admin'?'':'profile');
   if(PF_PHOTO===null) PF_PHOTO = (ME&&ME.photo)||'';
   if(PF_SKILLS===null) PF_SKILLS = ((ME&&ME.skills)||[]).slice();
   const left = SKILL_IDEAS.filter(x=>!PF_SKILLS.includes(x));
@@ -492,7 +505,39 @@ function renderProfile(){
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
   </div>`;
 }
-function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; closeMenu(); boot(); }
+function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; closeMenu(); closeMore(); boot(); }
+const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
+  ['money','\u{1F4B0}','Money'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
+function buildBnav(role, active){
+  document.body.classList.remove('formopen'); closeMore();
+  const b=$('#bnav'); if(!b) return;
+  const item=(k,icon,label,go)=>`<button data-tab="${k}" class="${active===k?'on':''}" onclick="${go}">
+      <span class="bi">${icon}</span><span class="bl">${label}</span></button>`;
+  if(role==='admin'){
+    const inMore = MORE_ITEMS.some(m=>m[0]===active);
+    b.innerHTML = item('dashboard','\u{1F3E0}','Home',"renderAdmin('dashboard')")
+      + item('approvals','\u2705','Approvals',"renderAdmin('approvals')")
+      + item('calendar','\u{1F5D3}\uFE0F','Calendar',"renderAdmin('calendar')")
+      + item('people','\u{1F465}','People',"renderAdmin('people')")
+      + `<button class="${inMore?'on':''}" onclick="openMore()"><span class="bi">\u22EF</span><span class="bl">More</span></button>`;
+  } else {
+    const nSign=(ME&&ME.contracts_to_sign)||0;
+    b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
+      + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
+      + (nSign?`<span style="position:relative">${''}</span>`:'')
+      + item('profile','\u{1F464}','Profile',"renderProfile()");
+    if(nSign){ const btn=b.querySelector('[data-tab="mine"]');
+      if(btn) btn.insertAdjacentHTML('beforeend',`<span class="navbadge">${nSign}</span>`); }
+  }
+  b.style.display='flex';
+}
+function hideBnav(){ const b=$('#bnav'); if(b) b.style.display='none'; closeMore(); }
+function openMore(){
+  const sh=$('#moresheet');
+  sh.innerHTML = MORE_ITEMS.map(([k,i,l])=>`<button onclick="closeMore();renderAdmin('${k}')"><span class="bi">${i}</span>${l}</button>`).join('');
+  sh.style.display='grid';
+}
+function closeMore(){ const sh=$('#moresheet'); if(sh) sh.style.display='none'; }
 async function openContract(id){
   const {classes}=await api('/api/classes/mine');
   const c=(classes||[]).find(x=>x.id===id);
@@ -609,7 +654,7 @@ async function submitReset(token){
 
 /* ---------------- login ---------------- */
 function renderLogin(){
-  $('#top').style.display='none';
+  $('#top').style.display='none'; hideBnav();
   $('#view').innerHTML = `
    <div class="login-wrap">
     <div class="login-card">
@@ -648,9 +693,9 @@ function helloHTML(){
 }
 async function renderAdmin(tab){
   ADMIN_TAB = tab;
+  buildBnav('admin', tab);
   const v=$('#view');
-  const t=(k,l)=>`<button data-tab="${k}" class="${tab===k?'on':''}" onclick="renderAdmin('${k}')">${l}</button>`;
-  v.innerHTML = `${helloHTML()}<div class="tabs">${t('dashboard','Home')}${t('approvals','Approvals')}${t('slots','Slots')}${t('templates','Templates')}${t('calendar','Calendar')}${t('all','All')}${t('money','Money')}${t('people','People')}${t('audit','Audit')}${t('archive','Archive')}</div><div id="tab"></div>`;
+  v.innerHTML = `${helloHTML()}<div id="tab"></div>`;
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
@@ -663,7 +708,7 @@ async function renderAdmin(tab){
 async function loadNavBadges(){
   try{
     const c = await api('/api/admin/counts');
-    const put=(tabName,n)=>{ const b=document.querySelector(`.tabs button[data-tab="${tabName}"]`);
+    const put=(tabName,n)=>{ const b=document.querySelector(`#bnav button[data-tab="${tabName}"]`);
       if(!b) return; const old=b.querySelector('.navbadge'); if(old) old.remove();
       if(n>0) b.insertAdjacentHTML('beforeend', `<span class="navbadge">${n}</span>`); };
     put('approvals', c.needs_you);
@@ -1598,12 +1643,8 @@ function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+
   $('#f_title').value=t.title; $('#f_desc').value=t.description; descCount();
   const c=document.querySelector('#f_ages input[value="'+t.age+'"]'); if(c){c.checked=true; ageChanged();} }
 async function renderInstr(tab){
-  const nSign = (ME && ME.contracts_to_sign) || 0;
-  $('#view').innerHTML = `${helloHTML()}
-    <div class="tabs">
-      <button class="${tab==='open'?'on':''}" onclick="renderInstr('open')">Open slots</button>
-      <button class="${tab==='mine'?'on':''}" onclick="renderInstr('mine')">My classes${nSign?`<span class="navbadge">${nSign}</span>`:''}</button>
-    </div><div id="tab"></div>`;
+  buildBnav('instructor', tab);
+  $('#view').innerHTML = `${helloHTML()}<div id="tab"></div>`;
   return boundary('instructor:'+tab, '#tab', tab==='open'?instrOpen:instrMine);
 }
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
@@ -1879,6 +1920,7 @@ function timeOpts(ws, we, which){
   return out;
 }
 function openForm(slot, draftPayload){
+  document.body.classList.add('formopen');
   SUBMIT_SLOT=slot; PHOTO=null;
   $('#view').innerHTML = `
     <h2>New <em>class</em></h2>
@@ -2299,7 +2341,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
