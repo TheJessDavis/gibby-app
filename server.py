@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.6-publish-copy"
+VERSION = "8.7-website-row"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -163,6 +163,10 @@ def init_db():
                      ("publishing_in_progress","INTEGER DEFAULT 0")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
+    # The website embed is a destination too (theeverett.org embeds /embed), so it
+    # gets a row on the Connections screen. Not a job: it updates itself.
+    c.execute("""INSERT OR IGNORE INTO integrations(id,name,method,status)
+                 VALUES('website','Website','Embed on theeverett.org','connected')""")
     # Soft delete: nothing is ever removed from these three tables. A row with
     # deleted_at set is invisible to normal queries but recoverable from Archive.
     try: c.execute("ALTER TABLE registrations ADD COLUMN external_id TEXT")
@@ -392,6 +396,7 @@ def seed(c):
           ("wix","Wix","Wix REST API","disconnected"),
           ("descene","Descene","Browser automation","attention"),
           ("canva","Canva","Canva API","connected"),
+          ("website","Website","Embed on theeverett.org","connected"),
         ]
         for i in integ: c.execute("INSERT INTO integrations(id,name,method,status) VALUES(?,?,?,?)", i)
     c.commit()
@@ -1570,7 +1575,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = int(p.split("/")[3]); c = db()
-            row = c.execute("SELECT status, publishing_in_progress FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            row = c.execute("SELECT status, publishing_in_progress, external_ids FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             jobs = {}
             for r in c.execute("SELECT * FROM job_queue WHERE class_id=? ORDER BY id",(cid,)):
@@ -1579,7 +1584,22 @@ class H(http.server.BaseHTTPRequestHandler):
                     "status": r["status"], "attempts": r["attempts"],
                     "error": r["last_error"] or "", "next_run_at": r["next_run_at"]}
             c.close()
-            order = ["canva","eventbrite","facebook","wix","gcal","descene"]
+            # The website embed is not a job: the site lists the class by itself
+            # once the Eventbrite listing exists, so its row derives from that one.
+            eb = jobs.get("eventbrite")
+            if eb:
+                try: ext = json.loads(row["external_ids"] or "{}")
+                except Exception: ext = {}
+                if eb["status"] == "done" or ext.get("eventbrite_id"):
+                    wstat, werr = "done", ""
+                elif eb["status"] in ("failed", "skipped"):
+                    wstat, werr = eb["status"], "needs the Eventbrite listing first (the website card links to it)"
+                else:
+                    wstat, werr = "queued", ""
+                jobs["website"] = {"platform": "website", "label": "Website",
+                                   "status": wstat, "attempts": 0, "error": werr,
+                                   "next_run_at": None}
+            order = ["canva","eventbrite","website","facebook","wix","gcal","descene"]
             out = [jobs[k] for k in order if k in jobs] + [v for k,v in jobs.items() if k not in order]
             return self.send_json({"class_status": row["status"],
                                    "publishing": bool(row["publishing_in_progress"]),
@@ -1822,7 +1842,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             c=db(); rows=[dict(r) for r in c.execute("SELECT * FROM integrations").fetchall()]; c.close()
             cfg = integrations.load_config(); conf = integrations.configured(cfg)
-            for r in rows: r["configured"] = conf.get(r["id"], False)
+            for r in rows: r["configured"] = conf.get(r["id"], r["id"] == "website")
             return self.send_json({"integrations": rows, "live": bool(cfg["live"])})
         if p.startswith("/api/class/") and p.endswith("/registrations"):
             u = self.current_user()

@@ -834,7 +834,7 @@ async function adminDashboard(){
     ${d.low.map(lowCard).join('') || '<div class="muted">No low-enrollment classes.</div>'}
     <label style="margin-top:16px">Setup</label>
     <div class="card"><div class="row"><h3>Platform connections</h3></div>
-      <div class="meta">Eventbrite, Facebook, Wix, Descene, Canva</div>
+      <div class="meta">Eventbrite, Website, Facebook, Wix, Descene, Canva</div>
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('connections')">Manage →</button></div>`;
 }
 function lowCard(c){
@@ -1170,10 +1170,12 @@ async function adminConnections(){
   $('#tab').innerHTML=`<h2>Platform <em>connections</em></h2>
     <p class="sub">${integrations.filter(i=>i.status==='connected').length} of ${integrations.length} connected. Posting is currently <b>${d.live?'LIVE':'dry-run (safe)'}</b>.</p>
     ${integrations.map(it=>`<div class="card"><div class="row"><div><h3>${esc(it.name)}</h3><div class="meta">${esc(it.method)}</div></div>${pill(it.status)}</div>
-      <div class="meta" style="margin-top:8px">API keys: <b style="color:${it.configured?'#3F7A32':'#B45309'}">${it.id==='descene'?'no API (manual)':(it.configured?'present':'missing')}</b></div>
+      ${it.id==='website'
+        ? `<div class="meta" style="margin-top:8px">No keys needed. The Art Workshops page on theeverett.org embeds the app and shows every published class on its own.</div>`
+        : `<div class="meta" style="margin-top:8px">API keys: <b style="color:${it.configured?'#3F7A32':'#B45309'}">${it.id==='descene'?'no API (manual)':(it.configured?'present':'missing')}</b></div>
       <button class="btn ${it.status==='connected'?'warn':'dark'}" style="margin-top:12px"
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
-        ${it.status==='connected'?'Disconnect':'Connect'}</button>
+        ${it.status==='connected'?'Disconnect':'Connect'}</button>`}
       ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>`:''}</div>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
@@ -1345,7 +1347,11 @@ async function testEventbrite(){
   const r=await api('/api/test-eventbrite','POST',{});
   if(!r.ok){ alert('Eventbrite check failed:\n'+r.error+'\n\nMake sure EVENTBRITE_TOKEN is set on the server.'); return; }
   const list=(r.organizations||[]).map(o=>o.name+'  —  Org ID: '+o.id).join('\n');
-  alert('Token works! Your Eventbrite organization(s):\n\n'+(list||'(none found)')+'\n\nSet EVENTBRITE_ORG_ID to the Org ID above, then set GIBBY_LIVE=true.');
+  const match = r.configured_org_id
+    ? (r.org_id_matches ? '\n\nThe server\'s EVENTBRITE_ORG_ID ('+r.configured_org_id+') matches. Good.'
+                        : '\n\nPROBLEM FOUND: the server\'s EVENTBRITE_ORG_ID is "'+r.configured_org_id+'", which is NOT one of your organizations. Fix it on Render, then retry the failed steps.')
+    : '\n\nEVENTBRITE_ORG_ID is not set on the server yet.';
+  alert('Token works! Your Eventbrite organization(s):\n\n'+(list||'(none found)')+match);
 }
 
 /* ---------------- graphic preview ---------------- */

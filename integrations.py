@@ -170,8 +170,13 @@ def eventbrite_orgs(cfg):
     try:
         res = _req("https://www.eventbriteapi.com/v3/users/me/organizations/", method="GET",
                    token=cfg["eventbrite_token"])
-        return {"ok": True, "organizations": [{"id": o.get("id"), "name": o.get("name")}
-                                              for o in res.get("organizations", [])]}
+        orgs = [{"id": o.get("id"), "name": o.get("name")} for o in res.get("organizations", [])]
+        # Echo what the server is actually configured with, so a wrong or
+        # mistyped EVENTBRITE_ORG_ID on the host is visible from the app.
+        configured = (cfg.get("eventbrite_org_id") or "").strip()
+        return {"ok": True, "organizations": orgs,
+                "configured_org_id": cfg.get("eventbrite_org_id") or "",
+                "org_id_matches": any(o["id"] == configured for o in orgs)}
     except urllib.error.HTTPError as e:
         try: body = e.read().decode()[:200]
         except Exception: body = ""
