@@ -1102,7 +1102,9 @@ async function adminPeople(){
       <label>Name</label><input id="np_name" placeholder="First Last">
       <label>Email (required)</label><input id="np_email" type="email" placeholder="them@example.com">
       <label>Role</label><select id="np_role"><option value="instructor" selected>Instructor</option><option value="admin">Admin</option></select>
-      <button class="btn dark" style="margin-top:12px" onclick="addPerson()">Add &amp; send invite</button>
+      <label>Temporary password (optional)</label><input id="np_pw" placeholder="Leave blank to email them an invite instead">
+      <div class="hint">With a temporary password there is no invite email: you tell them the password yourself, and they must change it the first time they log in. Use this when their email address cannot receive mail.</div>
+      <button class="btn dark" style="margin-top:12px" onclick="addPerson()">Add person</button>
       <div class="hint" id="np_msg"></div></div>
     ${shown.map(row).join('')}`;
   // typing re-renders the list; keep the cursor in the search box
@@ -1115,10 +1117,16 @@ async function addPerson(){
     msg.textContent='Enter a real email address first. Accounts cannot be created without one.';
     $('#np_email').focus(); return;
   }
+  const tmpPw=($('#np_pw')?$('#np_pw').value:'').trim();
+  if(tmpPw && tmpPw.length<8){ msg.textContent='A temporary password needs at least 8 characters.'; return; }
   try{
-    const r=await api('/api/users','POST',{name:($('#np_name').value||'').trim(),email,role:$('#np_role').value});
-    msg.textContent=r.action==='created'?`Invite sent to ${email}.`:`${email} already had an account; it was updated and a fresh invite sent.`;
-    setTimeout(adminPeople, 900);
+    const body={name:($('#np_name').value||'').trim(),email,role:$('#np_role').value};
+    if(tmpPw){ body.password=tmpPw; body.must_change_pw=true; }
+    const r=await api('/api/users','POST',body);
+    msg.textContent = tmpPw
+      ? `${email} can log in with the temporary password you set (they must change it at first login).`
+      : (r.action==='created'?`Invite sent to ${email}.`:`${email} already had an account; it was updated and a fresh invite sent.`);
+    setTimeout(adminPeople, 1600);
   }catch(e){ msg.textContent=e.data&&e.data.error||'Could not add them. Try again.'; }
 }
 async function reinvite(email,name,role){
