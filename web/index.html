@@ -2150,7 +2150,10 @@ function openForm(slot, draftPayload){
     </details>
 
     <label>Room</label>
-    <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>
+    ${slot.room
+      ? `<input id="f_room" value="${esc(slot.room)}" readonly style="background:var(--paper);font-weight:800">
+         <div class="hint">This time is open in the ${esc(slot.room)} (holds ${slot.room==='Studio'?24:65}). Want the other room? Pick a time that shows it on the slot screen.</div>`
+      : `<select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>`}
 
     <label>Class length</label>
     <select id="f_len"><option value="">Select length…</option>

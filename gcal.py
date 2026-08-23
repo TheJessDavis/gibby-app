@@ -58,6 +58,11 @@ def load_gcal_config():
         # the day booking opens. Overridable per season.
         "season_start": os.environ.get("GCAL_SEASON_START", os.environ.get("SEASON_START", "2026-09-01")),
         "season_end": os.environ.get("GCAL_SEASON_END", "2027-05-31"),
+        # The building's bookable rooms. Every open time becomes one slot PER room;
+        # a calendar event only blocks the room it names (X-ROOM from the bridge
+        # script, or a room word in its location), and blocks ALL rooms when it
+        # names none, which is the safe reading of an untagged event.
+        "rooms": [r.strip() for r in os.environ.get("GCAL_ROOMS", "Large Room,Studio").split(",") if r.strip()],
         # Which months hold classes: spring (Dec-May) plus fall (Oct-Nov). Summer
         # days inside the window are skipped so June-September never become slots.
         "season_months": {int(x) for x in os.environ.get("GCAL_SEASON_MONTHS",
@@ -126,6 +131,7 @@ def sync_slots(cfg):
     except Exception as e:
         print("[gcal] read error:", e); return None
     out, step = [], datetime.timedelta(minutes=cfg["slot_minutes"])
+    rooms = cfg.get("rooms") or [""]
     for day in range((w1 - w0).days + 1):
         d = w0 + datetime.timedelta(days=day)
         if cfg.get("season_months") and d.month not in cfg["season_months"]: continue
@@ -135,7 +141,8 @@ def sync_slots(cfg):
         while t + step <= end_day:
             s, e = t, t + step
             if s > now and not any(bs < e and s < be for bs, be in busy):
-                out.append({"date": _fmt_date(s), "start": _fmt_time(s), "end": _fmt_time(e)})
+                for room in rooms:
+                    out.append({"date": _fmt_date(s), "start": _fmt_time(s), "end": _fmt_time(e), "room": room})
             t = e
     return out
 
@@ -176,6 +183,12 @@ def _ics_events(text, horizon_start, horizon_end):
         if fields.get("STATUS", ("",{}))[0].upper() == "CANCELLED": continue
         if fields.get("TRANSP", ("",{}))[0].upper() == "TRANSPARENT": continue   # marked free
         if "DTSTART" not in fields: continue
+        # Which room this event occupies. "" means it blocks every room.
+        room = (fields.get("X-ROOM", ("",{}))[0] or "").strip()
+        if not room:
+            loc = (fields.get("LOCATION", ("",{}))[0] or "").lower()
+            if "studio" in loc: room = "Studio"
+            elif "large" in loc: room = "Large Room"
         start = _ics_dt(*fields["DTSTART"])
         end = _ics_dt(*fields["DTEND"]) if "DTEND" in fields else None
         if not start: continue
@@ -201,7 +214,7 @@ def _ics_events(text, horizon_start, horizon_end):
                     occurrences.append((cur, cur + length))
         for s0, e0 in occurrences:
             if e0 >= horizon_start and s0 <= horizon_end:
-                busy.append((s0, e0))
+                busy.append((s0, e0, room))
     return busy
 
 # What the last sync actually read: 'live' (the feed URL), 'snapshot' (the
@@ -246,6 +259,7 @@ def sync_slots_ical(cfg):
     busy = _ics_events(text, start_day, horizon_end)
 
     out, step = [], datetime.timedelta(minutes=cfg["slot_minutes"])
+    rooms = cfg.get("rooms") or [""]
     for day in range((w1 - w0).days + 1):
         d = w0 + datetime.timedelta(days=day)
         if cfg.get("season_months") and d.month not in cfg["season_months"]: continue
@@ -254,10 +268,14 @@ def sync_slots_ical(cfg):
         close = datetime.datetime(d.year, d.month, d.day, cfg["close_hour"], 0)
         while t + step <= close:
             s0, e0 = t, t + step
-            if s0 > now and not any(bs < e0 and s0 < be for bs, be in busy):
-                out.append({"date": _fmt_date(s0), "start": _fmt_time(s0), "end": _fmt_time(e0)})
+            if s0 > now:
+                for room in rooms:
+                    if not any(bs < e0 and s0 < be and (not broom or broom == room)
+                               for bs, be, broom in busy):
+                        out.append({"date": _fmt_date(s0), "start": _fmt_time(s0),
+                                    "end": _fmt_time(e0), "room": room})
             t = e0
-    print(f"[gcal] iCal feed: {len(busy)} busy period(s), {len(out)} open slot(s)")
+    print(f"[gcal] iCal feed: {len(busy)} busy period(s), {len(out)} open slot(s) across {len(rooms)} room(s)")
     return out
 
 def create_event(cls, cfg):
