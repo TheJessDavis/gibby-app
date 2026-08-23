@@ -183,6 +183,9 @@
   .calday.on{background:var(--ink);color:#fff}
   .calday.on small{color:rgba(255,255,255,.75)}
   .callegend{font-size:11px;font-weight:700;color:var(--ink-soft);margin-top:8px}
+  .calmonths{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;margin:0 0 10px}
+  .calmonths button{border:1.5px solid var(--line);background:var(--paper);border-radius:999px;padding:5px 11px;font-family:inherit;font-weight:800;font-size:11px;color:var(--ink);cursor:pointer}
+  .calmonths button.on{background:var(--ink);border-color:var(--ink);color:#fff}
   .dayhead{font-weight:800;font-size:14px;margin:0 0 10px}
   .ava{width:24px;height:24px;border-radius:50%;object-fit:cover;vertical-align:-7px;margin-right:7px}
   .ava-i{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--ink);color:#fff;font-size:10px;font-weight:800;vertical-align:-7px;margin-right:7px}
@@ -637,6 +640,16 @@ async function signContractNow(id){
   }catch(e){ const x=$('#cterr'); x.textContent=e.message; x.classList.add('show'); }
 }
 let RESUB=null, RESUB_OLD_ID=null;
+async function reqTemplate(id){
+  try{ await api('/api/classes/'+id+'/request-template','POST',{});
+    alert('Sent! The Gibby will consider adding it to the template library.');
+    renderInstr('mine');
+  }catch(e){ alert(e.data&&e.data.error||'Could not send that.'); }
+}
+async function tplReqAct(id, action){
+  try{ await api('/api/classes/'+id+'/template-request/'+action,'POST',{}); adminTemplates(); }
+  catch(e){ alert(e.data&&e.data.error||'Could not do that.'); }
+}
 async function startResubmit(id){
   const {classes}=await api('/api/classes/mine');
   RESUB=(classes||[]).find(x=>x.id===id)||null;
@@ -841,9 +854,17 @@ async function cancelClass(id){ if(!confirm('Cancel this class and refund all st
 const FB_ENROL={too_few:'ran quiet',about_right:'about right',too_many:'ran full'};
 const FB_MAT={short:'ran short on materials',enough:'materials were right',too_much:'materials left over'};
 async function adminTemplates(){
-  const [{templates}, fb] = await Promise.all([api('/api/templates/all'), api('/api/feedback')]);
+  const [{templates}, fb, all] = await Promise.all([api('/api/templates/all'), api('/api/feedback'), api('/api/classes/all')]);
   const seen = fb.by_title || [];
+  const reqs = (all.classes||[]).filter(c=>c.template_requested);
   $('#tab').innerHTML = `<h2>Class <em>templates</em></h2><p class="sub">${templates.length} templates. Instructors pick from these.</p>
+    ${reqs.length?`<label style="margin-top:0">Instructor requests (${reqs.length})</label>
+      <p class="sub" style="margin-top:2px">They think these classes are worth repeating. Adding one makes it a template anyone can pick.</p>
+      ${reqs.map(c=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">\u2b50 ${esc(c.title)}</h3>
+        <div class="meta">${esc(c.instructor_name)} \u00b7 ${esc(c.age_label||c.age_range||'')}</div></div></div>
+        <div class="two" style="margin-top:10px">
+          <button class="btn ghost" onclick="tplReqAct(${c.id},'dismiss')">Dismiss</button>
+          <button class="btn dark" onclick="tplReqAct(${c.id},'accept')">Add to library</button></div></div>`).join('')}`:''}
     ${seen.length?`<label style="margin-top:0">What instructors said (${fb.responses.length} ${fb.responses.length===1?'class':'classes'})</label>
       <p class="sub" style="margin-top:2px">Their own words after teaching. Worth a look before you plan next season.</p>
       ${seen.map(t=>`<div class="card">
@@ -1601,6 +1622,12 @@ function cardCls(c){
     ${c.contract_status==='signed'?`<div class="meta" style="margin-top:8px">\u{1F58A}\uFE0F Contract signed by ${esc(c.contract_name||'')} on ${esc((c.contract_signed_at||'').slice(0,10))}</div>
       ${c.contract_signature?`<img src="${c.contract_signature}" alt="signature" style="height:36px;margin-top:4px;background:#fff;border-radius:8px;padding:2px 8px">`:''}`:''}
     ${c.contract_status==='sent' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px;color:#B45309">\u{1F4DD} Contract sent, waiting on signature</div>`:''}
+    ${(()=>{ let fq=c.faq; try{ if(typeof fq==='string') fq=JSON.parse(fq||'[]'); }catch(_){ fq=[]; }
+      return (fq&&fq.length)?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">FAQ (${fq.length})</summary>
+        ${fq.map(x=>`<div class="meta" style="margin-top:5px"><b>${esc(x.q)}</b><br>${esc(x.a)}</div>`).join('')}</details>`:''; })()}
+    ${actingRole()==='instructor' && c.status!=='cancelled' ? (c.template_requested
+      ? `<div class="meta" style="margin-top:8px">\u2b50 Requested as a template. The Gibby is considering it.</div>`
+      : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">\u2b50 Request this to be a template</button>`) : ''}
     ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
       <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
@@ -1840,6 +1867,7 @@ function calendarPickerHTML(slots){
       <div class="calmon">${MONNAME[m]} ${y}</div>
       <button class="calnav" ${idx===months.length-1?'disabled':''} onclick="setCalPage(${idx===months.length-1?m:months[idx+1]})" aria-label="later month">›</button>
     </div>
+    ${months.length>1?`<div class="calmonths">${months.map(mm=>`<button class="${mm===m?'on':''}" onclick="setCalPage(${mm})">${MONNAME[mm].slice(0,3)} ’${String(seasonYearFor(mm)).slice(2)}</button>`).join('')}</div>`:''}
     <div class="caldow"><div>SUN</div><div>MON</div><div>TUE</div><div>WED</div><div>THU</div><div>FRI</div><div>SAT</div></div>
     <div class="calgrid">${cells}</div>
     <div class="callegend">Green days have open times. Tap one to see them.</div>
@@ -2030,7 +2058,10 @@ function applyDraft(p){
   if(!p) return;
   const set=(id,v)=>{ const el=$(id); if(el && v!=null) el.value=v; };
   set('#f_title',p.title); set('#f_desc',p.description); set('#f_len',p.length);
-  set('#f_pre',p.pre_class); set('#f_links',p.links); set('#f_video',p.video); set('#f_max',p.max_p); set('#f_min',p.min_p);
+  set('#f_pre',p.pre_class); set('#f_links',p.links); set('#f_video',p.video);
+  try{ const fl=$('#faqlist'); if(fl){ fl.innerHTML='';
+    let fq=p.faq; if(typeof fq==='string') fq=JSON.parse(fq||'[]');
+    (fq||[]).forEach(x=>faqAdd(x.q,x.a)); } }catch(_){} set('#f_max',p.max_p); set('#f_min',p.min_p);
   set('#c_mat',p.material_cost); set('#f_room',p.room); set('#f_close',p.close_days);
   set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
@@ -2061,6 +2092,20 @@ function timeOpts(ws, we, which){
     out+=`<option${sel}>${fmtT(m)}</option>`;
   }
   return out;
+}
+function faqAdd(q, a){
+  const box=document.createElement('div');
+  box.className='faqrow';
+  box.style.cssText='background:var(--white);border-radius:14px;padding:10px 12px;margin:8px 0;position:relative';
+  box.innerHTML=`<button type="button" onclick="this.parentNode.remove()" style="position:absolute;top:8px;right:10px;border:none;background:none;font-weight:800;color:var(--ink-soft);cursor:pointer">\u00d7</button>
+    <input class="fq" placeholder="Question" style="margin-bottom:6px" value="${esc(q||'')}">
+    <textarea class="fa" rows="2" placeholder="Your answer">${esc(a||'')}</textarea>`;
+  $('#faqlist').appendChild(box);
+}
+function collectFaq(){
+  return [...document.querySelectorAll('#faqlist .faqrow')].map(r=>({
+    q:r.querySelector('.fq').value.trim(), a:r.querySelector('.fa').value.trim()
+  })).filter(x=>x.q && x.a);
 }
 function openForm(slot, draftPayload){
   document.body.classList.add('formopen');
@@ -2155,6 +2200,10 @@ function openForm(slot, draftPayload){
     <label>Video <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <input id="f_video" placeholder="A YouTube or Vimeo link">
     <div class="hint">It gets embedded on the Eventbrite page as a playable video. Great for showing what students will make. Upload your clip to YouTube or Vimeo first, then paste the link here.</div>
+    <label>FAQ <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+    <div class="hint">Answer common questions once: "Do I need experience?", "What should I wear?", "Can I bring my kid?" They appear on the Eventbrite page under "Good to know".</div>
+    <div id="faqlist"></div>
+    <button type="button" class="btn ghost" style="margin-top:6px" onclick="faqAdd()">+ Add a question</button>
 
     <div class="fsec"><span>4</span><b>Pricing</b></div>
     <label style="margin-top:0">Materials</label>
@@ -2310,7 +2359,7 @@ function validateForm(){
   const max=num('f_max'), min=num('f_min');
   if(!(max>0)) add('#f_max','Max students','max');
   if(!(min>0)) add('#f_min','Min students','min');
-  if(max>0 && min>0 && min>max) add('#f_min','Min students can\u2019t be more than Max','min vs max');
+  if(max>0 && min>0 && min>max) add('#f_min','Min students can’t be more than Max','min vs max');
   const mat=num('c_mat');
   if(mat===null || mat<0) add('#c_mat','Material cost per student','materials');
   const ticket=num('f_ticket'), pay=num('f_pay');
@@ -2384,7 +2433,7 @@ function collectForm(){
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     waives_pay: !!($('#f_free')&&$('#f_free').checked),
     resubmit_of: RESUB_OLD_ID||undefined,
-    links:$('#f_links').value, video:($('#f_video')?$('#f_video').value.trim():''), photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
+    links:$('#f_links').value, video:($('#f_video')?$('#f_video').value.trim():''), faq:collectFaq(), photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
     class_start:($('#f_cstart')?$('#f_cstart').value:''), class_end:($('#f_cend')?$('#f_cend').value:''),
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
@@ -2490,7 +2539,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

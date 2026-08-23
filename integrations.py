@@ -260,6 +260,17 @@ def post_eventbrite(cls, cfg, image_url=None):
     ages = cls.get("age_label") or cls.get("age_range") or ""
     if ages:
         desc = f"<p><b>{ages}</b></p>" + desc
+    # The instructor's FAQ, if any, goes under the description on the event page.
+    try:
+        faq = json.loads(cls.get("faq") or "[]")
+    except Exception:
+        faq = []
+    if faq:
+        import html as _html
+        rows = "".join(f"<p><b>{_html.escape(x.get('q',''))}</b><br>{_html.escape(x.get('a',''))}</p>"
+                       for x in faq if x.get("q") and x.get("a"))
+        if rows:
+            desc = desc + f"<h3>Good to know</h3>{rows}"
     event = {
         "name": {"html": cls["title"]},
         "description": {"html": desc},

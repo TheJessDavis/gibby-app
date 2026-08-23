@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "7.6-class-video"
+VERSION = "7.7-faq-embed-chips"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -149,7 +149,7 @@ def init_db():
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
-                     ("video","TEXT"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
+                     ("video","TEXT"),("faq","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
@@ -1249,6 +1249,7 @@ class H(http.server.BaseHTTPRequestHandler):
     # -- routing --
     def do_GET(self):
         p = urllib.parse.urlparse(self.path).path
+        if p == "/embed": return self.embed_page()
         if p.startswith("/api/"): return self.api_get(p)
         return self.static(p)
 
@@ -1292,6 +1293,69 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if is_text else ""))
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
+
+    def embed_page(self):
+            # PUBLIC page for the Squarespace site: an always-current list of
+            # published classes, each linking to its Eventbrite page. The site
+            # embeds this once in an iframe and never needs touching again.
+            # Only already-public information appears here.
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved'
+                        AND deleted_at IS NULL""").fetchall()]
+            c.close()
+            today = datetime.date.today()
+            items = []
+            for cls in rows:
+                try: ext = json.loads(cls.get("external_ids") or "{}")
+                except Exception: ext = {}
+                if not ext.get("eventbrite_id"): continue
+                d = _class_date(cls)
+                end = _class_end_date(cls) or d
+                if not d or (end and end < today): continue
+                items.append((d, cls, ext["eventbrite_id"]))
+            items.sort(key=lambda x: x[0])
+            import html as _html
+            DOT = "\u00b7"; ARROW = "\u2192"
+            def card(d, cls, ebid):
+                e = _html.escape
+                tm = cls.get("class_time") or cls.get("slot_time") or ""
+                when = day_label(d) + " " + DOT + " " + tm
+                if cls.get("is_series"):
+                    try: n = len(json.loads(cls.get("session_dates") or "[]"))
+                    except Exception: n = 0
+                    if n > 1: when += " " + DOT + " " + str(n) + "-week course"
+                pic = ""
+                if (cls.get("photo") or "").startswith("data:image/"):
+                    pic = '<img src="' + e(cls["photo"]) + '" alt="">'
+                price = cls.get("ticket_price")
+                price_txt = (" " + DOT + " $" + ("%g" % price)) if price else ""
+                ages = e(cls.get("age_label") or cls.get("age_range") or "")
+                return ('<a class="c" href="https://www.eventbrite.com/e/' + e(str(ebid))
+                        + '" target="_blank" rel="noopener">' + pic
+                        + '<div class="t">' + e(cls.get("title") or "") + "</div>"
+                        + '<div class="m">' + e(when) + "</div>"
+                        + '<div class="m">' + ages + price_txt + "</div>"
+                        + '<div class="b">Sign up on Eventbrite ' + ARROW + "</div></a>")
+            body = "".join(card(*i) for i in items) or \
+                   '<p class="none">New classes are coming soon. Check back shortly!</p>'
+            page = f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classes at The Gibby</title><style>
+  body{{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:transparent;color:#171512}}
+  .wrap{{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;padding:6px}}
+  .c{{display:block;background:#FBF7EF;border-radius:18px;padding:14px;text-decoration:none;color:#171512;box-shadow:0 6px 16px rgba(0,0,0,.07)}}
+  .c img{{width:100%;height:150px;object-fit:cover;border-radius:12px;margin-bottom:10px}}
+  .t{{font-weight:800;font-size:17px;letter-spacing:-.01em;margin-bottom:4px}}
+  .m{{font-size:12.5px;color:#5A554C;font-weight:600;margin-top:2px}}
+  .b{{margin-top:10px;display:inline-block;background:#171512;color:#fff;font-weight:800;font-size:12.5px;border-radius:999px;padding:8px 14px}}
+  .none{{font-size:15px;color:#5A554C;padding:20px;text-align:center}}
+</style></head><body><div class="wrap">{body}</div></body></html>"""
+            data = page.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers(); self.wfile.write(data); return
 
     # -- GET api --
     def api_get(self, p):
@@ -1904,6 +1968,17 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        mm = re.match(r"^/api/classes/(\d+)/request-template$", p)
+        if mm:
+            u = self.require("instructor")
+            if not u: return
+            c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(int(mm.group(1)),)).fetchone()
+            if not row or (u["role"] != "admin" and row["instructor_id"] != u["id"]):
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            c.execute("UPDATE classes SET template_requested=1 WHERE id=?",(row["id"],))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         mm = re.match(r"^/api/classes/(\d+)/sign-contract$", p)
         if mm:
             u = self.require("instructor")
@@ -2131,6 +2206,13 @@ class H(http.server.BaseHTTPRequestHandler):
             if not (mn and mn > 0): miss.append("min_p")
             if mx and mn and mn > mx: miss.append("min_p (cannot exceed max)")
             if not (_num("ticket_price") or 0) > 0: miss.append("ticket_price")
+            faq = b.get("faq")
+            if faq is not None:
+                if not isinstance(faq, list):
+                    return self.send_json({"error":"faq must be a list"},400)
+                faq = [{"q": str(x.get("q","")).strip()[:150], "a": str(x.get("a","")).strip()[:600]}
+                       for x in faq if isinstance(x, dict)
+                       and str(x.get("q","")).strip() and str(x.get("a","")).strip()][:8]
             video = (b.get("video") or "").strip()
             if video and not (video.startswith("http") and
                               any(h in video for h in ("youtube.com","youtu.be","vimeo.com"))):
@@ -2219,6 +2301,8 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("UPDATE classes SET class_time=? WHERE id=?", (f"{cs} \u2013 {ce}", new_id))
             if video:
                 c.execute("UPDATE classes SET video=? WHERE id=?", (video, new_id))
+            if faq:
+                c.execute("UPDATE classes SET faq=? WHERE id=?", (json.dumps(faq), new_id))
             pm = b.get("pay_model")
             if waives:
                 # Donated time: teaching pay is fixed at whatever remains (their own
@@ -2540,6 +2624,22 @@ class H(http.server.BaseHTTPRequestHandler):
             c=db(); c.execute("UPDATE integrations SET status=? WHERE id=?",(status,iid)); c.commit(); c.close()
             print(f"[integration] {iid} -> {status}")
             return self.send_json({"ok":True})
+        mm = re.match(r"^/api/classes/(\d+)/template-request/(accept|dismiss)$", p)
+        if mm:
+            u = self.require("admin")
+            if not u: return
+            cid, action = int(mm.group(1)), mm.group(2)
+            c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if action == "accept":
+                c.execute("INSERT INTO templates(title,category,age,description,supplies) VALUES(?,?,?,?,?)",
+                          (row["title"] or "Untitled", "From instructors",
+                           row["age_label"] or row["age_range"] or "All Ages",
+                           row["description"] or "", row["supplies"] or "[]"))
+            c.execute("UPDATE classes SET template_requested=0 WHERE id=?",(cid,))
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "added": action == "accept"})
         if p == "/api/templates":
             u = self.require("admin")
             if not u: return
