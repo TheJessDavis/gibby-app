@@ -57,7 +57,11 @@ def load_gcal_config():
         # a rolling few weeks from today, so a December-to-May season is visible
         # the day booking opens. Overridable per season.
         "season_start": os.environ.get("GCAL_SEASON_START", os.environ.get("SEASON_START", "2026-12-01")),
-        "season_end": os.environ.get("GCAL_SEASON_END", "2027-05-31"),
+        "season_end": os.environ.get("GCAL_SEASON_END", "2027-11-30"),
+        # Which months hold classes: spring (Dec-May) plus fall (Oct-Nov). Summer
+        # days inside the window are skipped so June-September never become slots.
+        "season_months": {int(x) for x in os.environ.get("GCAL_SEASON_MONTHS",
+                          "12,1,2,3,4,5,10,11").split(",") if x.strip().isdigit()},
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     if os.path.isfile(path):
@@ -124,6 +128,7 @@ def sync_slots(cfg):
     out, step = [], datetime.timedelta(minutes=cfg["slot_minutes"])
     for day in range((w1 - w0).days + 1):
         d = w0 + datetime.timedelta(days=day)
+        if cfg.get("season_months") and d.month not in cfg["season_months"]: continue
         if cfg["days"] and d.weekday() not in cfg["days"]: continue
         t = datetime.datetime(d.year, d.month, d.day, cfg["open_hour"], 0, tzinfo=TZ)
         end_day = datetime.datetime(d.year, d.month, d.day, cfg["close_hour"], 0, tzinfo=TZ)
@@ -243,6 +248,7 @@ def sync_slots_ical(cfg):
     out, step = [], datetime.timedelta(minutes=cfg["slot_minutes"])
     for day in range((w1 - w0).days + 1):
         d = w0 + datetime.timedelta(days=day)
+        if cfg.get("season_months") and d.month not in cfg["season_months"]: continue
         if cfg["days"] and d.weekday() not in cfg["days"]: continue
         t = datetime.datetime(d.year, d.month, d.day, cfg["open_hour"], 0)
         close = datetime.datetime(d.year, d.month, d.day, cfg["close_hour"], 0)

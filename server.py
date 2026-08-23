@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "7.4-posting-visibility"
+VERSION = "7.5-fall-2027"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -803,9 +803,12 @@ def _season_pivot():
     except ValueError:
         return 12, 2026
 
-def season_label():
-    """'SPRING 2027' for a season that starts 2026-12-01."""
+def season_label(month=None):
+    """The programming season a class belongs to. Dec-May is SPRING of the
+    pivot-plus-one year; Aug-Nov is the FOLLOWING fall (FALL of that same year)."""
     pm, py = _season_pivot()
+    if month is not None and 8 <= month <= 11:
+        return f"FALL {py + 1}"
     return f"SPRING {py + 1}"
 
 def build_contract_text(cls, instructor_name):
@@ -820,8 +823,11 @@ def build_contract_text(cls, instructor_name):
     if len(sessions) > 1:
         when = (f"{len(sessions)} sessions, {sessions[0].get('date','')} through "
                 f"{sessions[-1].get('date','')}, {tm} weekly")
+        d0 = parse_day(sessions[0].get("date"))
     else:
         when = f"{cls.get('slot_date','')}, {tm}"
+        d0 = parse_day(cls.get("slot_date"))
+    season = season_label(d0.month if d0 else None)
     if cls.get("waives_pay"):
         rate = "$0 (time donated by the instructor)"
     elif (cls.get("pay_model") or "flat") == "split":
@@ -831,7 +837,7 @@ def build_contract_text(cls, instructor_name):
     title = cls.get("title") or "the class"
     return f"""VISUAL ARTS INSTRUCTOR CONTRACT
 
-The Everett Inc. contracts with {instructor_name} to be a Visual Arts Instructor at the Gilbert W. Perry Jr. Center for the Arts "The Gibby" located at 51 W. Main Street, Middletown, Delaware 19709 during The Gibby's {season_label()} ARTS programming for {title} taking place {when}.
+The Everett Inc. contracts with {instructor_name} to be a Visual Arts Instructor at the Gilbert W. Perry Jr. Center for the Arts "The Gibby" located at 51 W. Main Street, Middletown, Delaware 19709 during The Gibby's {season} ARTS programming for {title} taking place {when}.
 
 All programming taught at The Gibby may not be duplicated at another organization, business, or community event within 15 miles of 51 W. Main Street, Middletown, Delaware for a period of 90 days before and after the schedule event, workshop, or class at The Gibby.
 
@@ -886,8 +892,11 @@ def _avail_months(c):
     rows = c.execute("SELECT DISTINCT date FROM slots WHERE status='available' AND deleted_at IS NULL").fetchall()
     return sorted({p.month for p in (parse_day(r[0]) for r in rows) if p}, key=_season_key)
 
+FALL_MONTHS = {8, 9, 10, 11}
+
 def month_is_visible(c, month, today=None):
-    months = _avail_months(c)
+    if month in FALL_MONTHS: return True     # fall booking is open from day one
+    months = [m for m in _avail_months(c) if m not in FALL_MONTHS]
     return month in set(months[:visible_month_count(today)])
 
 def parse_day(label, year=None):
@@ -1331,7 +1340,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if u["role"] == "instructor":
                 # Months unlock one at a time; hide the rest and say when the next opens.
                 months = sorted({p.month for p in (parse_day(r["date"]) for r in rows) if p}, key=_season_key)
-                show = set(months[:visible_month_count()])
+                spring = [m for m in months if m not in FALL_MONTHS]
+                show = set(spring[:visible_month_count()]) | (set(months) & FALL_MONTHS)
                 rows = [r for r in rows if (lambda p: p and p.month in show)(parse_day(r["date"]))]
                 hidden = [m for m in months if m not in show]
                 if hidden:
