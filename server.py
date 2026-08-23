@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.0-two-rooms"
+VERSION = "8.0.1-sync-visibility"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1144,12 +1144,21 @@ def reconcile_calendar_slots(open_slots):
     c.commit(); c.close()
     return {"added": added, "removed": removed, "restored": restored, "open": len(open_slots)}
 
+LAST_SYNC_ERROR = None
+
 def sync_calendar():
-    cfg = gcal.load_gcal_config()
-    if not gcal.configured(cfg): return None
-    slots = gcal.sync_slots(cfg)
-    if slots is None: return None
-    return reconcile_calendar_slots(slots)
+    global LAST_SYNC_ERROR
+    try:
+        cfg = gcal.load_gcal_config()
+        if not gcal.configured(cfg): return None
+        slots = gcal.sync_slots(cfg)
+        if slots is None: return None
+        r = reconcile_calendar_slots(slots)
+        LAST_SYNC_ERROR = None
+        return r
+    except Exception as e:
+        LAST_SYNC_ERROR = f"{type(e).__name__}: {e}"
+        raise
 
 def scheduler_loop():
     # Calendar slots refresh every 5 minutes so a change on the Gibby calendar
@@ -1369,6 +1378,7 @@ class H(http.server.BaseHTTPRequestHandler):
             icfg = integrations.load_config()
             return self.send_json({"version": VERSION, "open_slots": n,
                 "calendar_source": gcal.LAST_SOURCE,
+                "sync_error": LAST_SYNC_ERROR,
                 "posting_live": bool(icfg.get("live")),
                 "eventbrite_token_set": bool(icfg.get("eventbrite_token")),
                 "eventbrite_org_set": bool(icfg.get("eventbrite_org_id"))})
