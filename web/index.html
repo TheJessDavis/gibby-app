@@ -1930,7 +1930,7 @@ async function instrOpen(){
     ${notice?`<div class="hint" style="margin:-6px 0 14px">🔓 ${esc(notice)}</div>`:''}
 
     <div class="dayhead">${esc(SLOTDAY)} · ${DAYSLOTS.length} open time${DAYSLOTS.length===1?'':'s'}</div>
-    <div class="tip">🕒 <span>Tap a time, or a run of back-to-back times, in the same room. Book an extra 30 minutes before <b>and</b> after for setup and cleanup.</span></div>
+    <div class="tip">🕒 <span>Tap your <b>start</b> time, then your <b>end</b> time: everything between fills in. Book an extra 30 minutes before <b>and</b> after for setup and cleanup.</span></div>
     <div class="slotgrid">${DAYSLOTS.map((s,i)=>{const on=SEL.includes(s.id);return `<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]} ${on?'sel':''}" onclick="toggleSlot(${s.id})">
       <span class="sg">${on?'✓':SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
       <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`;}).join('')}</div>
@@ -1950,13 +1950,22 @@ function pickDay(d){ SLOTDAY=d; SEL=[]; instrOpen(); }
 function toggleSlot(id){
   const s=DAYSLOTS.find(x=>x.id===id);
   if(SEL.length===0){ SEL=[id]; }
-  else {
+  else if(SEL.includes(id)){
     const sel=SEL.map(x=>DAYSLOTS.find(y=>y.id===x)).sort((a,b)=>tmin(a.start)-tmin(b.start));
     const first=sel[0], last=sel[sel.length-1];
-    if(SEL.includes(id)) SEL = (id===first.id||id===last.id) ? SEL.filter(x=>x!==id) : [id];
-    else if(s.room===first.room && tmin(s.start)===tmin(last.end)) SEL.push(id);
-    else if(s.room===first.room && tmin(s.end)===tmin(first.start)) SEL.push(id);
-    else SEL=[id];
+    SEL = (id===first.id||id===last.id) ? SEL.filter(x=>x!==id) : [id];
+  } else {
+    // Tap a start, tap an end: everything between fills in, as long as the whole
+    // stretch is open with no busy gap. A tap across a gap starts fresh instead.
+    const sel=SEL.map(x=>DAYSLOTS.find(y=>y.id===x)).sort((a,b)=>tmin(a.start)-tmin(b.start));
+    const lo=Math.min(tmin(sel[0].start), tmin(s.start));
+    const hi=Math.max(tmin(sel[sel.length-1].end), tmin(s.end));
+    const range=DAYSLOTS.filter(x=>x.room===s.room && tmin(x.start)>=lo && tmin(x.end)<=hi)
+                        .sort((a,b)=>tmin(a.start)-tmin(b.start));
+    const contiguous = range.length>0
+      && tmin(range[0].start)===lo && tmin(range[range.length-1].end)===hi
+      && range.every((x,i)=>i===0 || tmin(range[i-1].end)===tmin(x.start));
+    SEL = contiguous ? range.map(x=>x.id) : [id];
   }
   SERIES_PREVIEW=null;
   if(CLASSKIND==='series' && SEL.length) return previewSeries();   // re-checks open weeks, then redraws
