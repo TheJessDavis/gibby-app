@@ -61,7 +61,7 @@ def load_gcal_config():
         # Which months hold classes: spring (Dec-May) plus fall (Oct-Nov). Summer
         # days inside the window are skipped so June-September never become slots.
         "season_months": {int(x) for x in os.environ.get("GCAL_SEASON_MONTHS",
-                          "12,1,2,3,4,5,10,11").split(",") if x.strip().isdigit()},
+                          "12,1,2,3,4,5,9,10,11").split(",") if x.strip().isdigit()},
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     if os.path.isfile(path):
