@@ -29,7 +29,7 @@ var SHARED_KEY = 'CHANGE-ME-to-a-long-random-phrase';
 var CALENDAR_ID = 'everetttheatre.com_ck9si1lmol1aqpmdaqn075us7o@group.calendar.google.com';
 // How far the busy feed looks: the whole season plus a little slack.
 var FEED_START = new Date('2026-11-01T00:00:00-05:00');
-var FEED_END = new Date('2027-06-30T23:59:59-04:00');
+var FEED_END = new Date('2027-12-31T23:59:59-05:00');
 
 function doGet(e) {
   if (!e || !e.parameter || e.parameter.key !== SHARED_KEY) {
