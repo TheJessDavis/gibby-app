@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.4-video-and-posters"
+VERSION = "8.5-contracts-to-drive"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -151,6 +151,7 @@ def init_db():
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
+                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
@@ -803,6 +804,54 @@ def _season_pivot():
     except ValueError:
         return 12, 2026
 
+def push_contract_to_drive(cls):
+    """File the signed contract into the Gibby Contracts folder on Google Drive,
+    through the same bridge script that handles the calendar. Returns the Drive
+    link, or None (never blocks anything)."""
+    cfg = gcal.load_gcal_config()
+    if not (cfg.get("webhook_url") and cls.get("contract_text") and cls.get("contract_name")):
+        return None
+    import html as _html
+    e = _html.escape
+    sig = cls.get("contract_signature") or ""
+    sig_html = f'<p><img src="{sig}" style="height:90px" alt="signature"></p>' if sig.startswith("data:image/") else ""
+    doc = f"""<html><body style="font-family:Georgia,serif;max-width:640px;margin:40px auto;line-height:1.5">
+<pre style="white-space:pre-wrap;font-family:inherit">{e(cls.get('contract_text',''))}</pre>
+<hr><p><b>Signed by:</b> {e(cls.get('contract_name',''))}<br>
+<b>Address:</b> {e(cls.get('contract_address',''))}<br>
+<b>Date signed:</b> {e((cls.get('contract_signed_at') or '')[:10])}<br>
+<b>Class:</b> {e(cls.get('title',''))}</p>{sig_html}</body></html>"""
+    fname = f"Contract - {cls.get('title','class')} - {cls.get('contract_name','')} - {(cls.get('contract_signed_at') or '')[:10]}.html"
+    try:
+        payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "contract",
+                              "filename": fname, "html": doc}).encode()
+        req = urllib.request.Request(cfg["webhook_url"], data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read().decode("utf-8", "replace"))
+        if res.get("ok"):
+            print(f"[contract] filed to Drive: {fname}")
+            return res.get("link")
+        print("[contract] Drive refused:", res)
+    except Exception as ex:
+        print("[contract] Drive filing failed (will retry hourly):", ex)
+    return None
+
+def sweep_contracts_to_drive():
+    """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
+    moment failing, and backfills contracts signed before this feature existed."""
+    c = db()
+    rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE contract_status='signed'
+                AND (contract_drive IS NULL OR contract_drive=0) AND deleted_at IS NULL""").fetchall()]
+    c.close()
+    for cls in rows:
+        link = push_contract_to_drive(cls)
+        if link is not None:
+            c = db()
+            c.execute("UPDATE classes SET contract_drive=1, contract_drive_link=? WHERE id=?",
+                      (link, cls["id"]))
+            c.commit(); c.close()
+
 def season_label(month=None):
     """The programming season a class belongs to. Dec-May is SPRING of the
     pivot-plus-one year; Aug-Nov is the FOLLOWING fall (FALL of that same year)."""
@@ -1205,6 +1254,8 @@ def scheduler_loop():
             last_lifecycle = time.time()
             try: run_scheduler()
             except Exception as e: print("[scheduler] error:", e)
+            try: sweep_contracts_to_drive()
+            except Exception as e: print("[contract] sweep error:", e)
             prune_sessions()          # tidy away long-dead auth rows
             try:
                 c = db()
@@ -2124,6 +2175,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET address=? WHERE id=?",(addr[:200], u["id"]))
             c.commit(); c.close()
             print(f"[contract] signed: class #{row['id']} by {name}")
+            fresh = None
+            try:
+                cq = db(); fresh = dict(cq.execute("SELECT * FROM classes WHERE id=?",(row["id"],)).fetchone()); cq.close()
+                link = push_contract_to_drive(fresh)
+                if link is not None:
+                    cq = db(); cq.execute("UPDATE classes SET contract_drive=1, contract_drive_link=? WHERE id=?",(link, row["id"])); cq.commit(); cq.close()
+            except Exception as ex:
+                print("[contract] immediate Drive filing failed:", ex)
             first = (u.get("name") or "").split(" ")[0] or "there"
             mailer.send(u["email"], f"Your signed contract for {row['title']}",
                 f"Hi {first},\n\nThank you! Your instructor contract for \"{row['title']}\" is signed "
