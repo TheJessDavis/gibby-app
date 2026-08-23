@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "7.5-fall-2027"
+VERSION = "7.6-class-video"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -149,7 +149,7 @@ def init_db():
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
-                     ("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
+                     ("video","TEXT"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
@@ -2131,6 +2131,10 @@ class H(http.server.BaseHTTPRequestHandler):
             if not (mn and mn > 0): miss.append("min_p")
             if mx and mn and mn > mx: miss.append("min_p (cannot exceed max)")
             if not (_num("ticket_price") or 0) > 0: miss.append("ticket_price")
+            video = (b.get("video") or "").strip()
+            if video and not (video.startswith("http") and
+                              any(h in video for h in ("youtube.com","youtu.be","vimeo.com"))):
+                return self.send_json({"error":"The video must be a YouTube or Vimeo link."},400)
             waives = 1 if b.get("waives_pay") else 0
             # $0 pay is allowed only as a deliberate choice (donating their time);
             # otherwise a zero is almost always the calculator left untouched.
@@ -2213,6 +2217,8 @@ class H(http.server.BaseHTTPRequestHandler):
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             c.execute("UPDATE classes SET class_time=? WHERE id=?", (f"{cs} \u2013 {ce}", new_id))
+            if video:
+                c.execute("UPDATE classes SET video=? WHERE id=?", (video, new_id))
             pm = b.get("pay_model")
             if waives:
                 # Donated time: teaching pay is fixed at whatever remains (their own

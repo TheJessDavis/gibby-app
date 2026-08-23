@@ -1540,6 +1540,7 @@ function cardCls(c){
     ${c.close_days?`<div class="meta" style="margin-top:6px">Registration closes ${c.close_days} day${c.close_days===1?'':'s'} before</div>`:''}
     ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
+    ${c.video?`<div class="meta" style="margin-top:6px">\u{1F3AC} <a href="${esc(c.video)}" target="_blank" rel="noopener noreferrer">Class video</a> (embeds on Eventbrite)</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='instructor' ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Volunteer requested</div>`:''}
@@ -2029,7 +2030,7 @@ function applyDraft(p){
   if(!p) return;
   const set=(id,v)=>{ const el=$(id); if(el && v!=null) el.value=v; };
   set('#f_title',p.title); set('#f_desc',p.description); set('#f_len',p.length);
-  set('#f_pre',p.pre_class); set('#f_links',p.links); set('#f_max',p.max_p); set('#f_min',p.min_p);
+  set('#f_pre',p.pre_class); set('#f_links',p.links); set('#f_video',p.video); set('#f_max',p.max_p); set('#f_min',p.min_p);
   set('#c_mat',p.material_cost); set('#f_room',p.room); set('#f_close',p.close_days);
   set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
@@ -2151,6 +2152,9 @@ function openForm(slot, draftPayload){
 
     <label>Links <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <textarea id="f_links" placeholder="Add any links, one per line: supply lists, inspiration, examples, your portfolio."></textarea>
+    <label>Video <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+    <input id="f_video" placeholder="A YouTube or Vimeo link">
+    <div class="hint">It gets embedded on the Eventbrite page as a playable video. Great for showing what students will make. Upload your clip to YouTube or Vimeo first, then paste the link here.</div>
 
     <div class="fsec"><span>4</span><b>Pricing</b></div>
     <label style="margin-top:0">Materials</label>
@@ -2312,6 +2316,9 @@ function validateForm(){
   const ticket=num('f_ticket'), pay=num('f_pay');
   if(!(ticket>0)) add('#f_ticket','Ticket price','ticket');
   if(!($('#f_free')&&$('#f_free').checked) && !(pay>0)) add('#f_pay','Your pay','pay');
+  const vid=($('#f_video')?$('#f_video').value.trim():'');
+  if(vid && !/^https?:\/\/(www\.)?(youtube\.com|youtu\.be|vimeo\.com)\//.test(vid))
+    add('#f_video','Video (must be a YouTube or Vimeo link)','video');
   return miss;
 }
 let SUBMIT_TRIED=false, AUTOSAVE_T=null;
@@ -2377,7 +2384,7 @@ function collectForm(){
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     waives_pay: !!($('#f_free')&&$('#f_free').checked),
     resubmit_of: RESUB_OLD_ID||undefined,
-    links:$('#f_links').value, photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
+    links:$('#f_links').value, video:($('#f_video')?$('#f_video').value.trim():''), photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
     class_start:($('#f_cstart')?$('#f_cstart').value:''), class_end:($('#f_cend')?$('#f_cend').value:''),
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,

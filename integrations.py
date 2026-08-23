@@ -287,7 +287,21 @@ def post_eventbrite(cls, cfg, image_url=None):
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
         json_body={"ticket_class": ticket})
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
-    return _ok(eid, "event published" + (" with poster attached" if logo_id else ""))
+    video_ok = False
+    if (cls.get("video") or "").strip():
+        # Embed the instructor's video on the event page. Never let it block the event.
+        try:
+            _req(f"https://www.eventbriteapi.com/v3/events/{eid}/structured_content/1/",
+                 token=cfg["eventbrite_token"], json_body={
+                     "access_type": "public", "publish": True,
+                     "modules": [{"type": "video",
+                                  "data": {"video": {"url": cls["video"].strip()}}}]})
+            video_ok = True
+        except Exception as e:
+            print("[eventbrite] video attach failed (event is live without it):", e)
+    return _ok(eid, "event published"
+               + (" with poster attached" if logo_id else "")
+               + (" and video embedded" if video_ok else ""))
 
 MAX_ATTENDEE_PAGES = 200          # ~10k attendees at 50/page; a stop against a bad loop
 
