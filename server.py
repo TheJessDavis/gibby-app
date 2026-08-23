@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "7.8-september"
+VERSION = "7.9-fall-2026"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -794,7 +794,7 @@ _DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 # Slot labels carry no year, so the season decides one: months at or after the
 # season-start month belong to the start year, earlier months to the next year
 # (Dec -> 2026, Jan..May -> 2027 for a season starting 2026-12-01).
-SEASON_START = os.environ.get("SEASON_START", "2026-12-01")
+SEASON_START = os.environ.get("SEASON_START", "2026-09-01")
 
 def _season_pivot():
     try:
@@ -808,7 +808,7 @@ def season_label(month=None):
     pivot-plus-one year; Aug-Nov is the FOLLOWING fall (FALL of that same year)."""
     pm, py = _season_pivot()
     if month is not None and 8 <= month <= 11:
-        return f"FALL {py + 1}"
+        return f"FALL {py}"
     return f"SPRING {py + 1}"
 
 def build_contract_text(cls, instructor_name):

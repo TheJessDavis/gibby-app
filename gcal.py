@@ -56,12 +56,12 @@ def load_gcal_config():
         # The booking season. Slots are generated for this whole window rather than
         # a rolling few weeks from today, so a December-to-May season is visible
         # the day booking opens. Overridable per season.
-        "season_start": os.environ.get("GCAL_SEASON_START", os.environ.get("SEASON_START", "2026-12-01")),
-        "season_end": os.environ.get("GCAL_SEASON_END", "2027-11-30"),
+        "season_start": os.environ.get("GCAL_SEASON_START", os.environ.get("SEASON_START", "2026-09-01")),
+        "season_end": os.environ.get("GCAL_SEASON_END", "2027-05-31"),
         # Which months hold classes: spring (Dec-May) plus fall (Oct-Nov). Summer
         # days inside the window are skipped so June-September never become slots.
         "season_months": {int(x) for x in os.environ.get("GCAL_SEASON_MONTHS",
-                          "12,1,2,3,4,5,9,10,11").split(",") if x.strip().isdigit()},
+                          "9,10,11,12,1,2,3,4,5").split(",") if x.strip().isdigit()},
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
     if os.path.isfile(path):
@@ -281,7 +281,7 @@ def create_event(cls, cfg):
     try:
         # slot labels carry no year; infer it from the season, as the server does
         try:
-            sd = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-12-01"))
+            sd = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-09-01"))
         except ValueError:
             sd = datetime.date(2026, 12, 1)
         events = []

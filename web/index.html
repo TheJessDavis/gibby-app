@@ -426,7 +426,7 @@ async function bootInner(){
   if(params.get('reset')){ $('#top').style.display='none'; return renderReset(params.get('reset')); }
   const me0 = await api('/api/me');
   let user = me0.user;
-  window.SEASON_START = me0.season_start || '2026-12-01';
+  window.SEASON_START = me0.season_start || '2026-09-01';
   // Access token gone but the refresh cookie may still be good (e.g. reopening the
   // app the next morning). Spend it once before falling back to the login screen.
   if(!user && await refreshSession()){ user = (await api('/api/me')).user; }
@@ -903,7 +903,7 @@ const MONIDX={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10
 const MONNAME=['January','February','March','April','May','June','July','August','September','October','November','December'];
 /* The season decides which year a month belongs to: Dec 2026 season start means
    Dec sorts (and dates) before Jan 2027, not after. */
-function seasonPivot(){ const p=(window.SEASON_START||'2026-12-01').split('-'); return {y:+p[0], m:+p[1]-1}; }
+function seasonPivot(){ const p=(window.SEASON_START||'2026-09-01').split('-'); return {y:+p[0], m:+p[1]-1}; }
 function seasonYearFor(m){ const p=seasonPivot(); return m>=p.m ? p.y : p.y+1; }
 function mOrd(m){ const p=seasonPivot(); return m>=p.m ? m-12 : m; }
 function parseDate(s){ if(!s)return null; const p=s.split(', '); const md=(p[1]||p[0]).trim().split(' ');

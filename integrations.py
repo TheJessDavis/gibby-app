@@ -120,7 +120,7 @@ def _season_year(month):
     """Slot labels carry no year; the season decides it. Dec 2026 season start
     means Dec is 2026 and Jan-May are 2027."""
     try:
-        d = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-12-01"))
+        d = datetime.date.fromisoformat(os.environ.get("SEASON_START", "2026-09-01"))
         return d.year if month >= d.month else d.year + 1
     except ValueError:
         return 2027
