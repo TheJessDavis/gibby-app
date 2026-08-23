@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "7.3-temp-password"
+VERSION = "7.4-posting-visibility"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1293,8 +1293,12 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             n = c.execute("SELECT COUNT(*) FROM slots WHERE status='available' AND deleted_at IS NULL").fetchone()[0]
             c.close()
+            icfg = integrations.load_config()
             return self.send_json({"version": VERSION, "open_slots": n,
-                "calendar_source": gcal.LAST_SOURCE})
+                "calendar_source": gcal.LAST_SOURCE,
+                "posting_live": bool(icfg.get("live")),
+                "eventbrite_token_set": bool(icfg.get("eventbrite_token")),
+                "eventbrite_org_set": bool(icfg.get("eventbrite_org_id"))})
         if p == "/api/me":
             u = self.current_user()
             if not u: return self.send_json({"user": None, "season_start": SEASON_START})
