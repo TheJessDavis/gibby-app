@@ -265,6 +265,9 @@ def post_eventbrite(cls, cfg, image_url=None):
         faq = json.loads(cls.get("faq") or "[]")
     except Exception:
         faq = []
+    vurl0 = (cls.get("video") or "").strip()
+    if vurl0 and "/media/" in vurl0:
+        desc = f'<p>\U0001F3AC <a href="{vurl0}">Watch a video preview of this class</a></p>' + desc
     if faq:
         import html as _html
         rows = "".join(f"<p><b>{_html.escape(x.get('q',''))}</b><br>{_html.escape(x.get('a',''))}</p>"
@@ -299,14 +302,14 @@ def post_eventbrite(cls, cfg, image_url=None):
         json_body={"ticket_class": ticket})
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
     video_ok = False
-    if (cls.get("video") or "").strip():
-        # Embed the instructor's video on the event page. Never let it block the event.
+    vurl = (cls.get("video") or "").strip()
+    if vurl and any(h in vurl for h in ("youtube.com", "youtu.be", "vimeo.com")):
+        # A hosted link can embed as a real player. Never let it block the event.
         try:
             _req(f"https://www.eventbriteapi.com/v3/events/{eid}/structured_content/1/",
                  token=cfg["eventbrite_token"], json_body={
                      "access_type": "public", "publish": True,
-                     "modules": [{"type": "video",
-                                  "data": {"video": {"url": cls["video"].strip()}}}]})
+                     "modules": [{"type": "video", "data": {"video": {"url": vurl}}}]})
             video_ok = True
         except Exception as e:
             print("[eventbrite] video attach failed (event is live without it):", e)

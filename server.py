@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.3-form-tidy"
+VERSION = "8.4-video-and-posters"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -149,7 +149,7 @@ def init_db():
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
-                     ("video","TEXT"),("faq","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
+                     ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
@@ -1120,6 +1120,18 @@ def run_scheduler(asof=None):
     if actions: print("[scheduler]", "; ".join(actions))
     return actions
 
+MEDIA_DIR = os.path.join(os.environ.get("DATA_DIR", "."), "media")
+os.makedirs(MEDIA_DIR, exist_ok=True)
+VIDEO_TYPES = {"video/mp4": ".mp4", "video/quicktime": ".mov", "video/x-m4v": ".m4v"}
+VIDEO_MAX_BYTES = 80 * 1024 * 1024          # one phone clip
+MEDIA_MAX_TOTAL = 700 * 1024 * 1024         # the Render disk is 1GB, shared with the DB
+
+def _media_total():
+    try:
+        return sum(os.path.getsize(os.path.join(MEDIA_DIR, f)) for f in os.listdir(MEDIA_DIR))
+    except OSError:
+        return 0
+
 def _room_legacy_claimed(c):
     """Older calendar slots were roomless; once a class claimed one, the room lived
     only on the class. Copy it back onto the slot so per-room slots know that
@@ -1276,6 +1288,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         p = urllib.parse.urlparse(self.path).path
         if p == "/embed": return self.embed_page()
+        if p.startswith("/media/"): return self.serve_media(p)
         if p.startswith("/api/"): return self.api_get(p)
         return self.static(p)
 
@@ -1320,6 +1333,48 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
 
+    def serve_media(self, p):
+        q = urllib.parse.urlparse(self.path).query
+        fn = os.path.basename(p)
+        path = os.path.join(MEDIA_DIR, fn)
+        if not os.path.isfile(path):
+            return self.send_error(404)
+        ctype = {".mp4":"video/mp4",".mov":"video/quicktime",".m4v":"video/x-m4v"}.get(
+            os.path.splitext(fn)[1].lower(), "application/octet-stream")
+        size = os.path.getsize(path)
+        start, end, status = 0, size - 1, 200
+        rng = self.headers.get("Range")
+        if rng and rng.startswith("bytes="):
+            try:
+                a, b = rng[6:].split("-", 1)
+                if a: start = int(a); end = int(b) if b else size - 1
+                else: start = max(0, size - int(b))
+                end = min(end, size - 1)
+                if start <= end: status = 206
+                else: start, end = 0, size - 1
+            except ValueError:
+                start, end = 0, size - 1
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        if "dl=1" in q:
+            self.send_header("Content-Disposition", f'attachment; filename="{fn}"')
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+        with open(path, "rb") as f:
+            f.seek(start); remaining = length
+            while remaining > 0:
+                chunk = f.read(min(1048576, remaining))
+                if not chunk: break
+                try: self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError): return
+                remaining -= len(chunk)
+        return
+
     def embed_page(self):
             # PUBLIC page for the Squarespace site: an always-current list of
             # published classes, each linking to its Eventbrite page. The site
@@ -1353,6 +1408,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 pic = ""
                 if (cls.get("photo") or "").startswith("data:image/"):
                     pic = '<img src="' + e(cls["photo"]) + '" alt="">'
+                vid_html = ""
+                v = (cls.get("video") or "").strip()
+                if "/media/" in v:
+                    vid_html = ('<video controls preload="metadata" playsinline src="' + e(v)
+                                + '" style="width:100%;border-radius:12px;margin-top:8px"></video>')
                 price = cls.get("ticket_price")
                 price_txt = (" " + DOT + " $" + ("%g" % price)) if price else ""
                 ages = e(cls.get("age_label") or cls.get("age_range") or "")
@@ -1360,7 +1420,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         + '" target="_blank" rel="noopener">' + pic
                         + '<div class="t">' + e(cls.get("title") or "") + "</div>"
                         + '<div class="m">' + e(when) + "</div>"
-                        + '<div class="m">' + ages + price_txt + "</div>"
+                        + '<div class="m">' + ages + price_txt + "</div>" + vid_html
                         + '<div class="b">Sign up on Eventbrite ' + ARROW + "</div></a>")
             body = "".join(card(*i) for i in items) or \
                    '<p class="none">New classes are coming soon. Check back shortly!</p>'
@@ -1995,6 +2055,34 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        if p == "/api/upload-video":
+            u = self.require("instructor")
+            if not u: return
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            ext = VIDEO_TYPES.get(ctype)
+            if not ext:
+                return self.send_json({"error":"That file type is not supported. Upload an MP4 or an iPhone video."},400)
+            n = int(self.headers.get("Content-Length","0") or 0)
+            if n <= 0: return self.send_json({"error":"Empty upload."},400)
+            if n > VIDEO_MAX_BYTES:
+                return self.send_json({"error":f"That video is {n//1048576}MB; the limit is {VIDEO_MAX_BYTES//1048576}MB. Trim it or export it smaller."},413)
+            if _media_total() + n > MEDIA_MAX_TOTAL:
+                return self.send_json({"error":"Video storage is full. Ask The Gibby to clear old videos."},507)
+            vid = secrets.token_hex(12) + ext
+            path = os.path.join(MEDIA_DIR, vid)
+            remaining = n
+            with open(path, "wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1048576, remaining))
+                    if not chunk: break
+                    f.write(chunk); remaining -= len(chunk)
+            if remaining > 0:
+                try: os.remove(path)
+                except OSError: pass
+                return self.send_json({"error":"The upload was cut off. Try again."},400)
+            proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+            print(f"[media] {u['name']} uploaded {vid} ({n//1048576}MB)")
+            return self.send_json({"ok":True, "url": f"{proto}://{host}/media/{vid}"})
         mm = re.match(r"^/api/classes/(\d+)/request-template$", p)
         if mm:
             u = self.require("instructor")
@@ -2242,8 +2330,8 @@ class H(http.server.BaseHTTPRequestHandler):
                        and str(x.get("q","")).strip() and str(x.get("a","")).strip()][:8]
             video = (b.get("video") or "").strip()
             if video and not (video.startswith("http") and
-                              any(h in video for h in ("youtube.com","youtu.be","vimeo.com"))):
-                return self.send_json({"error":"The video must be a YouTube or Vimeo link."},400)
+                              ("/media/" in video or any(h in video for h in ("youtube.com","youtu.be","vimeo.com")))):
+                return self.send_json({"error":"Upload the video file itself, straight from your phone."},400)
             waives = 1 if b.get("waives_pay") else 0
             # $0 pay is allowed only as a deliberate choice (donating their time);
             # otherwise a zero is almost always the calculator left untouched.
@@ -2388,11 +2476,15 @@ class H(http.server.BaseHTTPRequestHandler):
             row = c.execute("SELECT id FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             img = (b.get("image") or "").strip()
+            kind = b.get("kind") or "landscape"
+            if kind not in ("landscape", "portrait"):
+                c.close(); return self.send_json({"error":"kind must be landscape or portrait"},400)
             if img and not img.startswith("data:image/"):
                 c.close(); return self.send_json({"error":"That does not look like an image."},400)
-            if len(img) > 8_000_000:      # ~6MB of actual image
-                c.close(); return self.send_json({"error":"That image is too large. Please use one under 5MB."},400)
-            c.execute("UPDATE classes SET poster=? WHERE id=?", (img or None, cid))
+            if len(img) > 14_000_000:      # ~10MB of actual image as a data URL
+                c.close(); return self.send_json({"error":"That image is too large. Please use one under 10MB."},400)
+            col = "poster" if kind == "landscape" else "poster_portrait"
+            c.execute(f"UPDATE classes SET {col}=? WHERE id=?", (img or None, cid))
             c.commit(); c.close()
             print(f"[poster] class #{cid}: {'attached by ' + u['name'] if img else 'removed by ' + u['name']}")
             return self.send_json({"ok":True, "attached": bool(img)})
