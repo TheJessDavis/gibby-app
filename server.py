@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.0.1-sync-visibility"
+VERSION = "8.1-room-first"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1120,31 +1120,48 @@ def run_scheduler(asof=None):
     if actions: print("[scheduler]", "; ".join(actions))
     return actions
 
+def _room_legacy_claimed(c):
+    """Older calendar slots were roomless; once a class claimed one, the room lived
+    only on the class. Copy it back onto the slot so per-room slots know that
+    time+room is genuinely taken."""
+    for cls in c.execute("""SELECT room, slot_ids FROM classes
+                            WHERE deleted_at IS NULL AND slot_ids IS NOT NULL AND room != ''""").fetchall():
+        try: sids = json.loads(cls["slot_ids"] or "[]")
+        except Exception: sids = []
+        if sids:
+            ph = ",".join("?"*len(sids))
+            c.execute(f"""UPDATE slots SET room=? WHERE id IN ({ph})
+                          AND source='calendar' AND (room='' OR room IS NULL)""",
+                      [cls["room"], *sids])
+
 def reconcile_calendar_slots(open_slots):
-    """Make the slots table match the calendar's open times. Calendar slots that are
-    no longer open are SOFT deleted (recoverable, and restored automatically if the
-    time reopens). Claimed slots and manually-created ones are never touched."""
+    """Make the slots table match the calendar's open times, one slot per room.
+    Calendar slots no longer open are SOFT deleted; claimed and manual slots are
+    never touched. Removals iterate ROWS (not a dict) so duplicate rows for one
+    time cannot shadow a live row and keep it alive forever."""
     c = db()
-    existing = {(r["date"],r["start"],r["end"]): dict(r)
-                for r in c.execute("SELECT * FROM slots WHERE source='calendar'")}
-    want = {(s["date"],s["start"],s["end"]) for s in open_slots}
+    _room_legacy_claimed(c)
+    rows = [dict(r) for r in c.execute("SELECT * FROM slots WHERE source='calendar'")]
+    want = {(s["date"], s["start"], s["end"], s.get("room","") or "") for s in open_slots}
     added = removed = restored = 0
-    for k, r in existing.items():
+    for r in rows:
+        k = (r["date"], r["start"], r["end"], r["room"] or "")
         if k not in want and r["status"] == "available" and not r["deleted_at"]:
             c.execute("UPDATE slots SET deleted_at=? WHERE id=?", (now(), r["id"])); removed += 1
+    existing = {}
+    for r in sorted(rows, key=lambda x: (x["deleted_at"] is None)):
+        existing[(r["date"], r["start"], r["end"], r["room"] or "")] = r
     for s in open_slots:
-        k = (s["date"], s["start"], s["end"])
+        k = (s["date"], s["start"], s["end"], s.get("room","") or "")
         prev = existing.get(k)
         if prev is None:
-            c.execute("INSERT INTO slots(date,start,end,room,status,source) VALUES(?,?,?,'','available','calendar')",
-                      (s["date"],s["start"],s["end"])); added += 1
-        elif prev["deleted_at"]:
-            # the time reopened on the calendar: bring the original row back
+            c.execute("INSERT INTO slots(date,start,end,room,status,source) VALUES(?,?,?,?,'available','calendar')",
+                      (s["date"], s["start"], s["end"], s.get("room","") or ""))
+            added += 1
+        elif prev["deleted_at"] and prev["status"] == "available":
             c.execute("UPDATE slots SET deleted_at=NULL WHERE id=?", (prev["id"],)); restored += 1
     c.commit(); c.close()
     return {"added": added, "removed": removed, "restored": restored, "open": len(open_slots)}
-
-LAST_SYNC_ERROR = None
 
 def sync_calendar():
     global LAST_SYNC_ERROR

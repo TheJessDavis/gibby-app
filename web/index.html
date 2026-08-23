@@ -187,6 +187,14 @@
   .calmonths button{border:1.5px solid var(--line);background:var(--paper);border-radius:999px;padding:5px 11px;font-family:inherit;font-weight:800;font-size:11px;color:var(--ink);cursor:pointer}
   .calmonths button.on{background:var(--ink);border-color:var(--ink);color:#fff}
   .dayhead{font-weight:800;font-size:14px;margin:0 0 10px}
+  .roomcard{display:block;width:100%;border:none;border-radius:22px;padding:26px 22px;margin:0 0 12px;text-align:left;cursor:pointer;font-family:inherit;box-shadow:0 8px 20px rgba(0,0,0,.08)}
+  .roomcard b{display:block;font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--ink)}
+  .roomcard span{font-size:13px;font-weight:700;color:var(--ink-soft)}
+  .rc-lav{background:var(--purple)}
+  .rc-mint{background:#B9E2AE}
+  .roombar{display:inline-flex;align-items:center;gap:6px;background:var(--white);border-radius:999px;padding:8px 14px;font-size:12.5px;font-weight:700;color:var(--ink-soft);margin:0 0 12px;box-shadow:0 3px 9px rgba(0,0,0,.05)}
+  .roombar b{color:var(--ink)}
+  .roombar a{color:var(--ink);font-weight:800}
   .ava{width:24px;height:24px;border-radius:50%;object-fit:cover;vertical-align:-7px;margin-right:7px}
   .ava-i{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--ink);color:#fff;font-size:10px;font-weight:800;vertical-align:-7px;margin-right:7px}
   .ava-big{width:96px;height:96px;border-radius:50%;object-fit:cover;display:block}
@@ -537,7 +545,7 @@ function renderProfile(){
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
   </div>`;
 }
-function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; closeMenu(); closeMore(); boot(); }
+function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; ROOM_PICK=null; closeMenu(); closeMore(); boot(); }
 const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
@@ -1820,6 +1828,8 @@ async function renderInstr(tab){
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
 let DAYSLOTS=[], SEL=[];
 function tmin(t){ const m=(t||'').trim().match(/(\d+):(\d+)\s*(AM|PM)/i); if(!m)return 0; let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12; return h*60 + +m[2]; }
+let ROOM_PICK=null;          // chosen before anything else: which room to browse
+function setRoomPick(r){ ROOM_PICK=r; SEL=[]; SLOTDAY=null; CAL_PAGE=null; SERIES_PREVIEW=null; instrOpen(); }
 let CLASSKIND='single';      // 'single' = one-day class, 'series' = multi-week course
 let SERIES_WEEKS=6, CAL_PAGE=null, SERIES_PREVIEW=null;
 function setKind(k){ CLASSKIND=k; SERIES_PREVIEW=null; instrOpen(); }
@@ -1875,11 +1885,24 @@ function calendarPickerHTML(slots){
 }
 
 async function instrOpen(){
-  const {slots, notice} = await api('/api/slots');
+  let {slots, notice} = await api('/api/slots');
   // The view can change while that request is in flight (tap a slot, then hit
   // Continue before the list redraws). If our target is gone, drop the render.
   if(!$('#tab')) return;
   if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
+  if(!ROOM_PICK){
+    $('#tab').innerHTML = `<h2>Pick a <em>room</em></h2>
+      ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick the room, then a new time.</span></div>`:''}
+      <p class="sub">Where will your class live? You can change your mind any time.</p>
+      <button class="roomcard rc-lav" onclick="setRoomPick('Large Room')"><b>Large Room</b><span>Up to 65 people</span></button>
+      <button class="roomcard rc-mint" onclick="setRoomPick('Studio')"><b>Studio</b><span>Up to 24 people</span></button>
+      ${notice?`<div class="hint" style="margin-top:12px">\u{1F513} ${esc(notice)}</div>`:''}`;
+    return;
+  }
+  slots = slots.filter(s=>!s.room || s.room===ROOM_PICK);
+  if(!slots.length){ $('#tab').innerHTML=`<h2>Grab an <em>open slot</em></h2>
+    <div class="roombar">\u{1F4CD} <b>${esc(ROOM_PICK)}</b> <a href="#" onclick="setRoomPick(null);return false">change room</a></div>
+    <div class="muted">No open times in the ${esc(ROOM_PICK)} right now.</div>`; return; }
   const days=[...new Set(slots.map(s=>s.date))];
   if(!days.includes(SLOTDAY)){ SLOTDAY=days[0]; SEL=[]; }
   DAYSLOTS = slots.filter(s=>s.date===SLOTDAY).sort((a,b)=>tmin(a.start)-tmin(b.start));
@@ -1888,6 +1911,7 @@ async function instrOpen(){
   const series = CLASSKIND==='series';
   const p = SERIES_PREVIEW;
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
+    <div class="roombar">\u{1F4CD} <b>${esc(ROOM_PICK)}</b> \u00b7 up to ${ROOM_PICK==='Studio'?24:65} people \u00b7 <a href="#" onclick="setRoomPick(null);return false">change room</a></div>
     ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick a time (your old one was released), fix what was flagged, and submit again.</span></div>`:''}
 
     <div class="kindcards" id="kind">
@@ -1938,6 +1962,7 @@ function toggleSlot(id){
   if(CLASSKIND==='series' && SEL.length) return previewSeries();   // re-checks open weeks, then redraws
   instrOpen();
 }
+function confirmSelRoom(r){ return r || ROOM_PICK || 'Large Room'; }
 function confirmSel(){
   const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).sort((a,b)=>tmin(a.start)-tmin(b.start));
   const series = CLASSKIND==='series';
@@ -1955,7 +1980,7 @@ function confirmSel(){
   }
   const carry = PENDING_DRAFT ? PENDING_DRAFT.payload : null;
   PENDING_DRAFT = null;
-  openForm({ date:sel[0].date, room:sel[0].room, start:sel[0].start, end:sel[sel.length-1].end,
+  openForm({ date:sel[0].date, room:confirmSelRoom(sel[0].room), start:sel[0].start, end:sel[sel.length-1].end,
     time:sel[0].start+' – '+sel[sel.length-1].end, ids:SEL.slice(),
     series, sessions: series?SERIES_PREVIEW.sessions:null, weeks: series?SERIES_PREVIEW.sessions.length:1 }, carry);
 }
@@ -2542,7 +2567,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
