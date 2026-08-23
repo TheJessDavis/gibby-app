@@ -822,7 +822,7 @@ async function adminDashboard(){
         <button class="btn ghost" style="margin-top:8px" onclick="retryJob(${f.id})">Try ${esc(f.platform_label)} again</button>
       </div>`).join('')}</div>`:''}
     ${(d.graphic||[]).length?`<div class="card"><div class="row"><div><h3>Posters waiting on you</h3>
-      <div class="meta">${d.graphic.map(c=>esc(c.title)).join(', ')} · approved but not yet on Eventbrite</div></div></div>
+      <div class="meta">${d.graphic.map(c=>esc(c.title)).join(', ')} · approved but not yet published</div></div></div>
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review posters →</button></div>`:''}
     <div class="card"><div class="row"><div><h3>Automations</h3><div class="meta">Reminders, low-enroll alerts, auto-cancel &amp; follow-ups run daily on their own.</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="runScheduler()">Run scheduler now</button></div>
@@ -1419,7 +1419,7 @@ async function adminApprovals(){
     <p class="sub">${pend.classes.length} waiting. Approve to build the poster, or send back with a note.</p>
     ${pend.classes.map(cardCls).join('') || '<div class="muted">Nothing pending. Nice.</div>'}
     <label style="margin-top:20px">Poster review (${gfx.classes.length})</label>
-    <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes to Eventbrite.</p>
+    <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes public.</p>
     ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}
     <label style="margin-top:20px">Follow-up notes (${fu.classes.length})</label>
     <p class="sub" style="margin-top:2px">Written by the instructor after the class. Nothing is sent until you approve it.</p>
@@ -1589,7 +1589,7 @@ function cardCls(c){
         <button class="btn green" onclick="instrApprove(${c.id})">Approve &amp; publish</button></div>`:''}
     ${c.status==='instructor_review' && actingRole()==='admin' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Waiting on ${esc(c.instructor_name)} to approve your edits</div>`:''}
     ${c.status==='graphic_review' && actingRole()==='admin' ? (()=>{const x=c.external_ids||{}; return `
-      <div class="ok-note" style="margin-top:12px;background:#DCE8F5;color:#2c5b8a">Approved. Review the poster below, then publish. <b>Nothing is on Eventbrite yet.</b></div>
+      <div class="ok-note" style="margin-top:12px;background:#DCE8F5;color:#2c5b8a">Approved. Review the posters below, then publish. <b>Nothing is public yet.</b></div>
       <label style="margin-top:12px">Eventbrite poster · landscape</label>
       ${(c.poster || x.canva_image_url)
         ? `<img src="${esc(c.poster || x.canva_image_url)}" alt="Eventbrite poster" style="margin-top:6px;max-width:100%;border-radius:14px;display:block">
@@ -1624,7 +1624,7 @@ function cardCls(c){
       <input id="gs${c.id}" value="${esc(c.subtitle||'')}" placeholder="e.g. Mini Terrarium">
       <div class="two" style="margin-top:10px">
         <button class="btn ghost" onclick="saveGraphic(${c.id})">Save &amp; rebuild</button>
-        <button class="btn green" onclick="publishClass(${c.id}, event)">Publish to Eventbrite</button></div>
+        <button class="btn green" onclick="publishClass(${c.id}, event)">Publish</button></div>
       <div class="pubstat" id="pubstat${c.id}"></div>
       <button class="btn warn" style="margin-top:8px" onclick="markIncomplete(${c.id})">Send back to instructor</button>`;})():''}
     ${c.status==='graphic_review' && actingRole()==='instructor' ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">Approved · the Gibby is finalizing your poster</div>`:''}
@@ -1744,7 +1744,7 @@ async function approve(id, ev){
   }catch(e){ if(undo) undo(); throw e; }
 }
 async function publishClass(id, ev){
-  if(!confirm('Publish this class to Eventbrite and the calendar? This makes it public.')) return;
+  if(!confirm('Publish this class? It goes public on Eventbrite, the website, and the calendar.')) return;
   const undo = lockButton(btnFrom(ev), 'Publishing to all platforms…');
   const host = $('#pubstat'+id);
   if(host) host.innerHTML = '<div class="meta" style="font-weight:800">Publishing…</div>';
