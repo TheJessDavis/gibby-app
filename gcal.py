@@ -217,11 +217,15 @@ def _ics_events(text, horizon_start, horizon_end):
         if fields.get("TRANSP", ("",{}))[0].upper() == "TRANSPARENT": continue   # marked free
         if "DTSTART" not in fields: continue
         # Which room this event occupies. "" means it blocks every room.
+        # Sniff the location first, then the title and description, so a
+        # hand-made event called "Band practice - Large Room" with no location
+        # still frees the Studio.
         room = (fields.get("X-ROOM", ("",{}))[0] or "").strip()
         if not room:
-            loc = (fields.get("LOCATION", ("",{}))[0] or "").lower()
-            if "studio" in loc: room = "Studio"
-            elif "large" in loc: room = "Large Room"
+            for key in ("LOCATION", "SUMMARY", "DESCRIPTION"):
+                txt = (fields.get(key, ("",{}))[0] or "").lower()
+                if "studio" in txt: room = "Studio"; break
+                if "large" in txt: room = "Large Room"; break
         start = _ics_dt(*fields["DTSTART"])
         end = _ics_dt(*fields["DTEND"]) if "DTEND" in fields else None
         if not start: continue
