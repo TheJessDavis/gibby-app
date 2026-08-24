@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.11.0-promote-newinstr"
+VERSION = "10.11.1-resubmit-keeps-slot"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2584,6 +2584,25 @@ class H(http.server.BaseHTTPRequestHandler):
             print(f"[slots] {u['name']} generated {added} slot(s), {first} to {last}, rooms {rooms}")
             return self.send_json({"ok":True, "added":added, "skipped":skipped,
                                    "first":day_label(first), "last":day_label(last)})
+        if p == "/api/slots/check":
+            # Resubmit helper: are ALL of these slot ids still bookable? Checked
+            # server-side so the instructor month-gating on /api/slots cannot
+            # give a false "taken".
+            u = self.require()
+            if not u: return
+            b = self.read_json()
+            try:
+                ids = [int(x) for x in (b.get("ids") or [])]
+            except (TypeError, ValueError):
+                ids = []
+            if not ids:
+                return self.send_json({"available": False})
+            ph = ",".join("?" * len(ids))
+            c = db()
+            n = c.execute(f"SELECT COUNT(*) FROM slots WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL",
+                          ids).fetchone()[0]
+            c.close()
+            return self.send_json({"available": n == len(ids)})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return

@@ -690,6 +690,27 @@ async function startResubmit(id){
   const {classes}=await api('/api/classes/mine');
   RESUB=(classes||[]).find(x=>x.id===id)||null;
   if(!RESUB) return alert('Could not load that class.');
+  // If their original date and time are still free, keep them: straight to the
+  // form with everything prefilled, no re-picking.
+  try{
+    let ids=RESUB.slot_ids; if(typeof ids==='string') ids=JSON.parse(ids||'[]');
+    if(ids && ids.length){
+      const chk=await api('/api/slots/check','POST',{ids});
+      const series=!!RESUB.is_series;
+      let sessions=null;
+      if(series){ try{ sessions=typeof RESUB.session_dates==='string'?JSON.parse(RESUB.session_dates||'[]'):(RESUB.session_dates||[]); }catch(_){ sessions=[]; } }
+      if(chk.available && (!series || (sessions&&sessions.length))){
+        const tp=(RESUB.slot_time||'').split(/\s+[–—-]\s+/);
+        openForm({ date:RESUB.slot_date, room:RESUB.room||'Large Room',
+          start:tp[0]||'', end:tp[1]||tp[0]||'', time:RESUB.slot_time||'',
+          ids:ids.slice(), series, sessions: series?sessions:null,
+          weeks: series?sessions.length:1 });
+        return;
+      }
+      if(!chk.available)
+      alert('Heads up: the original date and time for this class has since been booked by someone else, so please pick a new one.\n\nEverything else you entered is saved and will be filled in.');
+    }
+  }catch(_){}
   renderInstr('open');
 }
 function pfAddSkill(k){ if(!PF_SKILLS.includes(k)) PF_SKILLS.push(k); renderProfile(); }
