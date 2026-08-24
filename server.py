@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.10.0-links-roster-onbehalf"
+VERSION = "10.11.0-promote-newinstr"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2757,6 +2757,18 @@ class H(http.server.BaseHTTPRequestHandler):
                     cand = None
                 if cand and cand["id"] != u["id"]:
                     teacher_id, on_behalf = cand["id"], cand["name"]
+            elif u.get("role") == "admin" and b.get("instructor_email"):
+                # A brand-new instructor: their email is required because it IS
+                # their account (sign-in and where the contract goes). Creates the
+                # account and sends the standard welcome email with a
+                # set-your-password link.
+                email = (b["instructor_email"] or "").strip().lower()
+                if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                    c.close()
+                    return self.send_json({"error":"The new instructor needs a real email address. It is how they sign in to sign their contract."},400)
+                proto = self.headers.get("X-Forwarded-Proto","http")
+                host = self.headers.get("Host","localhost:8000")
+                teacher_id, on_behalf = invite_instructor(c, b.get("instructor_name"), email, proto, host)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
                 length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
@@ -3231,9 +3243,16 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             cid = p.split("/")[3]; c=db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"class not found"},404)
+            cls = dict(row)
+            cls["_enrolled"] = enrollment(c, cls["id"])
             c.execute("UPDATE classes SET promoted=1 WHERE id=?",(cid,)); c.commit(); c.close()
-            print(f"[promote] class #{cid} -> would re-share on Eventbrite/Facebook/Wix + send reminder")
-            return self.send_json({"ok":True})
+            res = integrations.promote_facebook(cls, integrations.load_config())
+            if res.get("ok") and res.get("id") and not str(res["id"]).startswith("fb-dryrun"):
+                merge_external(int(cid), {"facebook_promo_id": res["id"]})
+            print(f"[promote] class #{cid}: {res.get('status') or res.get('error')}")
+            return self.send_json({"ok": True, "facebook": res})
         if p.startswith("/api/classes/") and p.endswith("/cancel"):
             u = self.require("admin")
             if not u: return
@@ -3443,11 +3462,43 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"  1. Log in: {proto2}://{host2}\n"
                 f"  2. Open My classes\n"
                 f"  3. Tap Read and sign\n\n"
+                f"Your username is this email address ({instr2['email']}). If you have never signed in "
+                f"before, use the set-your-password link from your welcome email, or tap "
+                f"\"Forgot password?\" on the sign-in page and a fresh link will be sent here.\n\n"
                 f"It takes about a minute. Once you sign, we will email you a copy for your records.\n\nThe Gibby")
         elif after_commit and after_commit[0] == "email":
             (subj, body), to = after_commit[1], after_commit[2]
             mailer.send(to, subj, body)
         return self.send_json({"ok": True})
+
+def invite_instructor(c, name, email, proto, host):
+    """Find or create an instructor account by email, for admin submit-on-behalf.
+    A new account gets the standard welcome email with a set-your-password link
+    (same wording as the People page invite). Returns (user_id, display_name)."""
+    name = (name or "").strip() or email
+    row = c.execute("SELECT id,name FROM users WHERE email=?", (email,)).fetchone()
+    if row:
+        c.execute("UPDATE users SET deleted_at=NULL WHERE email=?", (email,))
+        return row["id"], (row["name"] or name)
+    pw = secrets.token_urlsafe(16)          # unusable until they set their own
+    h, s = hash_pw(pw)
+    c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt,must_change_pw) VALUES(?,?,?,?,?,1)",
+              (name, email, "instructor", h, s))
+    uid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    tok = secrets.token_urlsafe(24)
+    exp = (datetime.datetime.now() + datetime.timedelta(days=7)).isoformat()
+    c.execute("INSERT INTO password_resets(token,user_id,expires) VALUES(?,?,?)", (tok, uid, exp))
+    first = name.split()[0] if name != email else "there"
+    mailer.send(email, "Welcome to the Gibby Class Manager",
+        f"Hi {first},\n\n"
+        f"You've been set up on the Gibby Class Manager, the app where The Gibby's instructors "
+        f"claim time slots, submit class proposals, sign contracts, and track sign-ups for "
+        f"their classes.\n\n"
+        f"Your username is this email address. Choose your password here (link good for 7 days):\n\n"
+        f"{proto}://{host}/?reset={tok}\n\n"
+        f"After that, sign in any time at: {mailer.APP_URL}\n\n"
+        f"See you at The Gibby!")
+    return uid, name
 
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 

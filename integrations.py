@@ -696,6 +696,71 @@ def post_facebook(cls, cfg, link=None):
             detail = f"Facebook returned HTTP {e.code}"
         raise RuntimeError(detail)
 
+def promote_facebook(cls, cfg):
+    """The dashboard's Promote button: a short 'spots still open' booster post
+    on the Page, distinct from the original announcement. Uses the same poster
+    photo; falls back to a plain link post without one."""
+    if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
+        return _no("skipped: no Facebook config")
+    if not cfg["live"]:
+        return _ok("fb-dryrun", "dry-run (would post the booster)")
+    try:
+        ext = json.loads(cls.get("external_ids") or "{}")
+    except Exception:
+        ext = {}
+    link = (f"https://www.eventbrite.com/e/{ext['eventbrite_id']}"
+            if ext.get("eventbrite_id") else "https://theeverett.org/artworkshops")
+    try:
+        dp = (cls.get("slot_date") or "").split(", ")[-1].strip().split()
+        mon, day = _MON[dp[0]], int(dp[1])
+        year = _season_year(mon)
+        wd = datetime.date(year, mon, day).strftime("%A")
+        months = ["January","February","March","April","May","June","July",
+                  "August","September","October","November","December"]
+        span = (cls.get("class_time") or cls.get("slot_time") or "").strip()
+        header = f"{wd}, {months[mon-1]} {day}, {year}" + (f" · {span}" if span else "")
+    except Exception:
+        header = f"{cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time') or ''}".strip()
+    spots = ""
+    try:
+        left = int(cls.get("max_p") or 0) - int(cls.get("_enrolled") or 0)
+        if 0 < left <= 6:
+            spots = f"Only {left} spot{'' if left==1 else 's'} left. "
+    except Exception:
+        pass
+    if cls.get("donation_based"):
+        price = "Donation-based"
+    elif cls.get("ticket_price"):
+        price = "$%g per person" % cls["ticket_price"]
+    else:
+        price = "Free"
+    ages = ages_open_line(cls)
+    msg = (f"\U0001F3A8 Spots still open: {cls.get('title','')}!\n\n"
+           f"{header}\nGibby Center for the Arts, 51 W Main St, Middletown\n{price}"
+           + (f"\n{ages}" if ages else "") + "\n\n"
+           f"{spots}Grab a seat: {link}")
+    try:
+        page_tok = _fb_page_token(cfg)
+        m = re.match(r"^data:image/([a-z]+);base64,(.*)$", cls.get("poster") or "", re.S)
+        if m:
+            import base64 as _b64
+            data = _b64.b64decode(m.group(2))
+            body = _multipart_post(
+                f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/photos",
+                {"caption": msg, "published": "true", "access_token": page_tok},
+                "source", "poster." + ("jpg" if m.group(1) == "jpeg" else m.group(1)), data)
+            res = json.loads(body.decode() or "{}")
+            return _ok(res.get("post_id") or res.get("id"), "booster posted to the Facebook Page")
+        res = _req(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/feed",
+            form={"message": msg, "link": link, "access_token": page_tok})
+        return _ok(res.get("id"), "booster posted to the Facebook Page")
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode()).get("error") or {}
+            return _no(f"Facebook said: {err.get('message')} (code {err.get('code')})")
+        except Exception:
+            return _no(f"Facebook returned HTTP {e.code}")
+
 def post_wix(cls, cfg):
     if not (cfg["wix_api_key"] and cfg["wix_site_id"]):
         return _no("skipped: no Wix config")

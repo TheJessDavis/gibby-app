@@ -878,7 +878,14 @@ async function runScheduler(){
   alert('Scheduler ran'+(asof?' as of '+asof:'')+'.\n\n'+(r.actions.length?r.actions.join('\n'):'Nothing was due.'));
   adminDashboard();
 }
-async function promote(id){ await api('/api/classes/'+id+'/promote','POST'); adminDashboard(); }
+async function promote(id){
+  const r=await api('/api/classes/'+id+'/promote','POST');
+  const fb=r.facebook||{};
+  alert(fb.ok
+    ? 'A "Spots still open" post just went up on The Gibby\'s Facebook Page.'
+    : 'Marked as promoted, but the Facebook post did not go out:\n'+(fb.error||fb.status||'unknown reason'));
+  adminDashboard();
+}
 async function cancelClass(id){ if(!confirm('Cancel this class and refund all students? This cannot be undone.'))return;
   await api('/api/classes/'+id+'/cancel','POST'); adminDashboard(); }
 const FB_ENROL={too_few:'ran quiet',about_right:'about right',too_many:'ran full'};
@@ -1936,11 +1943,16 @@ async function loadInstrOptions(){
     const {users}=await api('/api/users');
     sel.innerHTML = `<option value="">Me (${esc(ME.name)})</option>` +
       users.filter(x=>x.id!==ME.id)
-           .map(x=>`<option value="${x.id}">${esc(x.name)}${x.role==='admin'?' (admin)':''}</option>`).join('');
+           .map(x=>`<option value="${x.id}">${esc(x.name)}${x.role==='admin'?' (admin)':''}</option>`).join('') +
+      `<option value="new">Someone new (enter their email)</option>`;
     // On a resubmit, preselect whoever the class already belonged to.
     if(RESUB_INSTR && RESUB_INSTR!==ME.id &&
        users.some(x=>x.id===RESUB_INSTR)) sel.value=String(RESUB_INSTR);
   }catch(_){}
+}
+function instrPickChanged(){
+  const sel=$('#f_instr'), box=$('#f_newinstr');
+  if(box) box.style.display = (sel && sel.value==='new') ? '' : 'none';
 }
 function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+i];
   $('#f_title').value=t.title; $('#f_desc').value=t.description; descCount();
@@ -2343,7 +2355,11 @@ function openForm(slot, draftPayload){
     <div class="hint">Copying brings over everything except the date and times, so a repeat class is a
       thirty-second job. Adjust whatever changed.</div>
     ${ME&&ME.role==='admin'?`<label>Who is teaching this class?</label>
-    <select id="f_instr"><option value="">Me (${esc(ME.name)})</option></select>
+    <select id="f_instr" onchange="instrPickChanged()"><option value="">Me (${esc(ME.name)})</option></select>
+    <div id="f_newinstr" style="display:none">
+      <div class="two" style="margin-top:8px"><input id="f_ni_name" placeholder="Their full name"><input id="f_ni_email" placeholder="their@email.com"></div>
+      <div class="hint">Their email is required: it becomes their sign-in and where their contract goes. They get a welcome email with a link to set their password.</div>
+    </div>
     <div class="hint">Submitting for someone else? Pick them here and the class, contract and emails all go to them.</div>`:''}
     <label>Class title</label><input id="f_title">
     <label>Description <span style="color:var(--ink-soft);font-weight:600">(at least 50 words)</span></label>
@@ -2657,7 +2673,9 @@ function collectForm(){
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
     room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,
-    instructor_id: ($('#f_instr')&&$('#f_instr').value) ? +$('#f_instr').value : undefined,
+    instructor_id: ($('#f_instr')&&$('#f_instr').value&&$('#f_instr').value!=='new') ? +$('#f_instr').value : undefined,
+    instructor_email: ($('#f_instr')&&$('#f_instr').value==='new') ? ($('#f_ni_email').value||'').trim() : undefined,
+    instructor_name: ($('#f_instr')&&$('#f_instr').value==='new') ? ($('#f_ni_name').value||'').trim() : undefined,
     supplies:[]
   };
 }
@@ -2698,6 +2716,13 @@ async function saveDraft(silent){
   if(!silent) return r;
 }
 async function submitClass(){
+  const fi=$('#f_instr');
+  if(fi && fi.value==='new'){
+    const em=($('#f_ni_email').value||'').trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)){
+      const x=$('#ferr'); x.textContent="Enter the new instructor's email address. It becomes their sign-in and is where their contract goes.";
+      x.classList.add('show'); fi.scrollIntoView({behavior:'smooth',block:'center'}); return; }
+  }
   const miss=validateForm();
   if(miss.length){
     SUBMIT_TRIED=true; markMissing(miss); updateTodo();
@@ -2758,7 +2783,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
