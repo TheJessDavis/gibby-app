@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.8-no-wix"
+VERSION = "8.9-reschedule"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1482,6 +1482,13 @@ class H(http.server.BaseHTTPRequestHandler):
                         + '<div class="b">Sign up on Eventbrite ' + ARROW + "</div></a>")
             body = "".join(card(*i) for i in items) or \
                    '<p class="none">New classes are coming soon. Check back shortly!</p>'
+            # A season heading in the site's style, worked out from the classes on
+            # show ("FALL 2026 / SPRING 2027"), so the section names itself.
+            seasons = []
+            for d, cls, _eb in items:
+                s = season_label(d.month)
+                if s and s not in seasons: seasons.append(s)
+            heading = ('<h2 class="season">' + " / ".join(seasons) + "</h2>") if seasons else ""
             page = f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Classes at The Gibby</title><style>
@@ -1493,7 +1500,8 @@ class H(http.server.BaseHTTPRequestHandler):
   .m{{font-size:12.5px;color:#5A554C;font-weight:600;margin-top:2px}}
   .b{{margin-top:10px;display:inline-block;background:#171512;color:#fff;font-weight:800;font-size:12.5px;border-radius:999px;padding:8px 14px}}
   .none{{font-size:15px;color:#5A554C;padding:20px;text-align:center}}
-</style></head><body><div class="wrap">{body}</div></body></html>"""
+  .season{{font-size:34px;font-weight:800;letter-spacing:-.01em;margin:10px 6px 16px;color:#1d3557}}
+</style></head><body>{heading}<div class="wrap">{body}</div></body></html>"""
             data = page.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2520,12 +2528,98 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
                 c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",
                           (now(), b["draft_id"], u["id"]))
-            admins = emails_for(c, "WHERE role='admin'")
+            # Every OTHER admin hears about it; the submitter already knows.
+            admins = [a for a in emails_for(c, "WHERE role='admin'")
+                      if a.lower() != (u.get("email") or "").lower()]
             c.commit(); c.close()
             when = (f"{weeks} sessions starting {slot_date}" if is_series else f"{slot_date} {slot_time}")
             mailer.send(admins, "New class submission",
                 f"{u['name']} submitted \"{b.get('title')}\" for {when}. Review it in the app.")
             return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/reschedule"):
+            # Move a published one-day class to a new time. Everything it was sent
+            # to updates IN PLACE: the Eventbrite event moves (same listing, same
+            # URL), the calendar booking moves, the old room slots reopen, and the
+            # website embed re-reads the database on its own. Nothing duplicates.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); b = self.read_json()
+            ids = [int(x) for x in (b.get("slot_ids") or [])]
+            cstart = (b.get("class_start") or "").strip()
+            cend   = (b.get("class_end") or "").strip()
+            if not ids: return self.send_json({"error":"Pick the new time first."},400)
+            c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(row)
+            if cls.get("is_series"):
+                c.close(); return self.send_json({"error":"Series courses cannot be rescheduled here yet."},400)
+            if cls.get("status") not in ("approved","graphic_review"):
+                c.close(); return self.send_json({"error":"Only approved classes can be rescheduled."},400)
+            ph = ",".join("?"*len(ids))
+            slots = [dict(r) for r in c.execute(
+                f"SELECT * FROM slots WHERE id IN ({ph}) AND deleted_at IS NULL", ids).fetchall()]
+            if len(slots) != len(ids):
+                c.close(); return self.send_json({"error":"One of those times no longer exists. Refresh and try again."},409)
+            slots.sort(key=lambda s: tmin(s["start"]))
+            if len({s["date"] for s in slots}) != 1 or len({s.get("room") or "" for s in slots}) != 1:
+                c.close(); return self.send_json({"error":"Pick one continuous window in one room."},400)
+            for a, bnext in zip(slots, slots[1:]):
+                if a["end"] != bnext["start"]:
+                    c.close(); return self.send_json({"error":"Those times are not back to back."},400)
+            new_window = (slots[0]["start"], slots[-1]["end"])
+            if not (cstart and cend) or not (tmin(new_window[0]) <= tmin(cstart) < tmin(cend) <= tmin(new_window[1])):
+                c.close(); return self.send_json({"error":"Class times must sit inside the new booked window."},400)
+            begin_immediate(c)
+            claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
+            if claimed != len(ids):
+                c.execute("ROLLBACK"); c.close()
+                return self.send_json({"error":"Someone just took part of that window. Pick another time."},409)
+            try: old_ids = [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
+            except Exception: old_ids = []
+            if old_ids:
+                oph = ",".join("?"*len(old_ids))
+                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({oph}) AND status='claimed'", old_ids)
+            old_when = f"{cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time','')}"
+            c.execute("""UPDATE classes SET slot_date=?, slot_time=?, room=?, slot_ids=?, class_time=? WHERE id=?""",
+                      (slots[0]["date"], f"{new_window[0]} – {new_window[1]}",
+                       slots[0].get("room") or cls.get("room"), json.dumps(ids),
+                       f"{cstart} – {cend}", cid))
+            c.commit()
+            fresh = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
+            audit(c, cid, cls.get("status"), "rescheduled", u["id"])
+            students = [dict(r) for r in c.execute(
+                """SELECT name,email FROM registrations WHERE class_id=? AND refunded=0
+                   AND email IS NOT NULL AND email<>''""",(cid,)).fetchall()]
+            c.commit(); c.close()
+            cfg = integrations.load_config()
+            eb_result = "skipped"
+            try: eb_result = integrations.update_eventbrite_times(fresh, cfg)
+            except Exception as e: eb_result = f"failed: {e}"
+            gcfg = gcal.load_gcal_config()
+            gcal_result = "skipped"
+            try:
+                ext = json.loads(fresh.get("external_ids") or "{}")
+                removed = gcal.delete_events(ext.get("gcal_event_id") or "", gcfg)
+                new_gid = gcal.create_event({**fresh, "instructor_name": u.get("name","")}, gcfg)
+                if new_gid: merge_external(cid, {"gcal_event_id": new_gid})
+                gcal_result = f"moved ({removed or 0} old removed)" if new_gid else "could not write the new booking"
+            except Exception as e:
+                gcal_result = f"failed: {e}"
+            emailed = 0
+            new_when = f"{fresh['slot_date']} {fresh.get('class_time') or fresh['slot_time']}"
+            for s in students:
+                first = (s.get("name") or "").split(" ")[0] or "there"
+                if mailer.send(s["email"], f"New date for {fresh['title']}",
+                    f"Hi {first},\n\n\"{fresh['title']}\" at The Gibby has moved.\n\n"
+                    f"Old time: {old_when}\nNew time: {new_when}\n\n"
+                    f"Your ticket carries over automatically; there is nothing you need to do. "
+                    f"If the new time does not work for you, reply to this email and we will sort out a refund.\n\nThe Gibby"):
+                    emailed += 1
+            print(f"[reschedule] class #{cid}: {old_when} -> {new_when}; eventbrite {eb_result}; gcal {gcal_result}; emailed {emailed}")
+            return self.send_json({"ok": True, "old": old_when, "new": new_when,
+                                   "eventbrite": eb_result, "calendar": gcal_result,
+                                   "students_emailed": emailed})
         if p.startswith("/api/classes/") and p.endswith("/approve"):
             return self.decide(p, approve=True)
         if p.startswith("/api/classes/") and p.endswith("/incomplete"):

@@ -86,6 +86,39 @@ def can_write(cfg):
     feed (and the bundled snapshot) are read-only."""
     return bool(cfg.get("webhook_url")) or bool(cfg["calendar_id"] and cfg["service_account_json"])
 
+def delete_events(ids, cfg):
+    """Remove calendar events by id (comma-joined string or list). Used when a
+    class is rescheduled so the old booking stops blocking the room. Best-effort:
+    returns how many were removed, or None when writing isn't possible."""
+    if isinstance(ids, str):
+        ids = [i for i in ids.split(",") if i.strip()]
+    ids = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not ids or not can_write(cfg) or not cfg["gcal_live"]:
+        return None
+    try:
+        if cfg.get("webhook_url"):
+            payload = json.dumps({"key": cfg.get("webhook_key", ""), "action": "delete",
+                                  "ids": ids}).encode()
+            req = urllib.request.Request(cfg["webhook_url"], data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                res = json.loads(r.read().decode("utf-8", "replace"))
+            if res.get("ok"):
+                print(f"[gcal] removed {res.get('removed', 0)} old event(s) via webhook")
+                return res.get("removed", 0)
+            print("[gcal] webhook refused the delete:", res.get("error", res)); return None
+        svc = _service(cfg)
+        n = 0
+        for eid in ids:
+            try:
+                svc.events().delete(calendarId=cfg["calendar_id"], eventId=eid).execute(); n += 1
+            except Exception as e:
+                print(f"[gcal] could not delete event {eid}:", e)
+        return n
+    except Exception as e:
+        print("[gcal] delete failed:", e)
+        return None
+
 def _service(cfg):
     from google.oauth2 import service_account
     from googleapiclient.discovery import build

@@ -545,7 +545,7 @@ function renderProfile(){
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
   </div>`;
 }
-function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; ROOM_PICK=null; closeMenu(); closeMore(); boot(); }
+function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMenu(); closeMore(); boot(); }
 const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
@@ -647,7 +647,31 @@ async function signContractNow(id){
     renderInstr('mine');
   }catch(e){ const x=$('#cterr'); x.textContent=e.message; x.classList.add('show'); }
 }
-let RESUB=null, RESUB_OLD_ID=null;
+let RESUB=null, RESUB_OLD_ID=null, RESCHED=null;
+
+/* Move a published class: admin picks a new window in the same slot picker,
+   confirms the class times, and the server updates Eventbrite, the calendar,
+   the room slots and the website in place - nothing gets duplicated. */
+function startReschedule(id){
+  const c=(window.__classes||[]).find(x=>x.id===id);
+  if(!c) return alert('Could not load that class.');
+  if(c.is_series) return alert('Series courses cannot be rescheduled here yet.');
+  RESCHED=c; RESUB=null; PENDING_DRAFT=null; CLASSKIND='one'; ROOM_PICK=null; SEL=[];
+  VIEWAS='instructor'; renderInstr('open');
+}
+function closeResched(){ const m=$('#rsmodal'); if(m) m.remove(); }
+async function submitReschedule(){
+  const st=$('#r_cstart').value, en=$('#r_cend').value;
+  if(tmin(en)<=tmin(st)) return alert('The class has to end after it starts.');
+  try{
+    const r=await api('/api/classes/'+RESCHED.id+'/reschedule','POST',
+      {slot_ids:window.__RS_IDS, class_start:st, class_end:en});
+    closeResched();
+    alert(`Moved!\n\nOld: ${r.old}\nNew: ${r.new}\n\nEventbrite: ${r.eventbrite}\nCalendar: ${r.calendar}`
+      + (r.students_emailed?`\nStudents emailed: ${r.students_emailed}`:''));
+    RESCHED=null; VIEWAS='admin'; renderAdmin('approvals');
+  }catch(e){ alert((e.data&&e.data.error)||'Could not move the class. Try again.'); }
+}
 async function reqTemplate(id){
   try{ await api('/api/classes/'+id+'/request-template','POST',{});
     alert('Sent! The Gibby will consider adding it to the template library.');
@@ -1663,7 +1687,8 @@ function cardCls(c){
       <div id="roster${c.id}"></div>`:''}
     ${actingRole()==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
-      <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>`:''}
+      <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>
+      ${!c.is_series?`<button class="btn ghost" style="margin-top:8px" onclick="startReschedule(${c.id})">Change date or time</button>`:''}`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
     ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="archiveRecord('classes',${c.id},'class')">Archive class</button>`:''}
     <div id="gfx${c.id}"></div>
@@ -1911,6 +1936,7 @@ async function instrOpen(){
   if(!ROOM_PICK){
     $('#tab').innerHTML = `<h2>Pick a <em>room</em></h2>
       ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick the room, then a new time.</span></div>`:''}
+      ${RESCHED?`<div class="tip">\u{1F4C6} <span>Moving <b>${esc(RESCHED.title)}</b> (now ${esc(RESCHED.slot_date)}). Pick the room, then the new window.</span></div>`:''}
       <p class="sub">Where will your class live? You can change your mind any time.</p>
       <button class="roomcard rc-lav" onclick="setRoomPick('Large Room')"><b>Large Room</b><span>Up to 65 people</span></button>
       <button class="roomcard rc-mint" onclick="setRoomPick('Studio')"><b>Studio</b><span>Up to 24 people</span></button>
@@ -1931,6 +1957,7 @@ async function instrOpen(){
   $('#tab').innerHTML = `<h2>Grab an <em>open slot</em></h2>
     <div class="roombar">\u{1F4CD} <b>${esc(ROOM_PICK)}</b> \u00b7 up to ${ROOM_PICK==='Studio'?24:65} people \u00b7 <a href="#" onclick="setRoomPick(null);return false">change room</a></div>
     ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick a time (your old one was released), fix what was flagged, and submit again.</span></div>`:''}
+    ${RESCHED?`<div class="tip">\u{1F4C6} <span>Moving <b>${esc(RESCHED.title)}</b> (now ${esc(RESCHED.slot_date)}). Pick the new window, then Continue. The old time reopens automatically.</span></div>`:''}
 
     <div class="kindcards" id="kind">
       <button class="kindcard ${!series?'on':''}" onclick="setKind('single')"><b>One-day class</b><span>A single session on one date</span></button>
@@ -2004,6 +2031,24 @@ function confirmSel(){
       + `(ending ${SERIES_PREVIEW.sessions[SERIES_PREVIEW.sessions.length-1].date}).\n\n`
       + `Book it as a ${SERIES_PREVIEW.found}-week course?\n\nCancel to pick a different start date or fewer weeks.`);
     if(!ok) return;
+  }
+  if(RESCHED){
+    const ws=sel[0].start, we=sel[sel.length-1].end;
+    window.__RS_IDS = SEL.slice();
+    closeResched();
+    const m=document.createElement('div'); m.id='rsmodal';
+    m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px';
+    m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:420px;width:100%;padding:20px 22px">
+      <h2 style="margin:0 0 2px">New time for <em>${esc(RESCHED.title)}</em></h2>
+      <p class="sub" style="margin:0 0 10px">${esc(sel[0].date)} · booked ${esc(ws)} – ${esc(we)} · ${esc(confirmSelRoom(sel[0].room))}</p>
+      <label>Class starts</label><select id="r_cstart">${timeOpts(ws,we,'start')}</select>
+      <label>Class ends</label><select id="r_cend">${timeOpts(ws,we,'end')}</select>
+      <div class="hint" style="margin-top:8px">The time either side is setup and cleanup. Eventbrite, the calendar and the website all update in place; ticket holders are emailed the new time.</div>
+      <div class="two" style="margin-top:12px">
+        <button class="btn ghost" onclick="closeResched()">Cancel</button>
+        <button class="btn green" onclick="submitReschedule()">Move the class</button></div></div>`;
+    document.body.appendChild(m);
+    return;
   }
   const carry = PENDING_DRAFT ? PENDING_DRAFT.payload : null;
   PENDING_DRAFT = null;
@@ -2615,7 +2660,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','startReschedule','submitReschedule','closeResched','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

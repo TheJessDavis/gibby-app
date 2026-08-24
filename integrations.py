@@ -322,6 +322,41 @@ def post_eventbrite(cls, cfg, image_url=None):
                + (" with poster attached" if logo_id else "")
                + (" and video embedded" if video_ok else ""))
 
+def update_eventbrite_times(cls, cfg):
+    """Move an already-published Eventbrite event to the class's current date and
+    times, in place: same listing, same URL, no duplicate. Also shifts the ticket
+    sales cutoff to match. Returns a plain-English result string."""
+    if not (cfg["eventbrite_token"] and cfg["eventbrite_org_id"]):
+        return "skipped: no Eventbrite config"
+    try:
+        ext = json.loads(cls.get("external_ids") or "{}")
+    except Exception:
+        ext = {}
+    eid = ext.get("eventbrite_id")
+    if not eid:
+        return "skipped: never published to Eventbrite"
+    start, end = _iso_times(cls, cfg)
+    if not (start and end):
+        return "failed: could not work out the new start/end times"
+    if not cfg["live"]:
+        return f"dry-run (would move event {eid} to {start})"
+    _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", token=cfg["eventbrite_token"],
+         json_body={"event": {"start": {"timezone": cfg["timezone"], "utc": start},
+                              "end":   {"timezone": cfg["timezone"], "utc": end}}})
+    close_days = int(cls.get("close_days") or 0)
+    if close_days > 0:
+        try:
+            cutoff = (datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+                      - datetime.timedelta(days=close_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            tcs = _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/",
+                       method="GET", token=cfg["eventbrite_token"])
+            for tc in (tcs.get("ticket_classes") or [])[:1]:
+                _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/{tc['id']}/",
+                     token=cfg["eventbrite_token"], json_body={"ticket_class": {"sales_end": cutoff}})
+        except Exception as e:
+            print("[eventbrite] could not move the sales cutoff (event itself moved):", e)
+    return "updated"
+
 MAX_ATTENDEE_PAGES = 200          # ~10k attendees at 50/page; a stop against a bad loop
 
 def fetch_attendees(event_id, cfg, _req_fn=None):

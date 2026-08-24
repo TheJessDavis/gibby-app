@@ -36,12 +36,17 @@ def load_email_config():
             print("[email:config] could not read config.json:", e)
     return cfg
 
+APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
+
 def send(to, subject, body, cfg=None):
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
     recips = [r for r in recips if r and "@" in r]
     if not recips:
         print(f"[email] no valid recipient for {subject!r}"); return False
+    # Every email links back to the app, so nobody has to hunt for the address.
+    if APP_URL not in body:
+        body = body.rstrip() + f"\n\nOpen the Gibby Class Manager: {APP_URL}"
     if not (cfg["email_live"] and cfg["smtp_host"]):
         print(f"[email] DRY-RUN from={cfg['mail_from']} to={recips} subject={subject!r}")
         return True
