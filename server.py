@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.2-donation-based"
+VERSION = "10.3-series-reschedule"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2798,8 +2798,6 @@ class H(http.server.BaseHTTPRequestHandler):
             row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             cls = dict(row)
-            if cls.get("is_series"):
-                c.close(); return self.send_json({"error":"Series courses cannot be rescheduled here yet."},400)
             if cls.get("status") not in ("approved","graphic_review"):
                 c.close(); return self.send_json({"error":"Only approved classes can be rescheduled."},400)
             ph = ",".join("?"*len(ids))
@@ -2824,6 +2822,18 @@ class H(http.server.BaseHTTPRequestHandler):
             if old_ids:
                 oph = ",".join("?"*len(old_ids))
                 c.execute(f"UPDATE slots SET status='available' WHERE id IN ({oph}) AND status='claimed'", old_ids)
+            sessions = None
+            if cls.get("is_series"):
+                # The picked window is the NEW first session; the run repeats the
+                # same weekday/time/room forward, exactly like booking one.
+                try: weeks = len(json.loads(cls.get("session_dates") or "[]")) or int(cls.get("session_count") or 2)
+                except Exception: weeks = int(cls.get("session_count") or 2)
+                sessions, _skipped = find_series_sessions(c, ids, max(2, weeks))
+                if not sessions or len(sessions) < 2:
+                    c.execute("ROLLBACK"); c.close()
+                    return self.send_json({"error":"Could not find enough open weeks from that start date."},400)
+                ids = [i for s in sessions for i in s["slot_ids"]]
+                ph = ",".join("?"*len(ids))
             claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
             if claimed != len(ids):
                 c.execute("ROLLBACK"); c.close()
@@ -2833,6 +2843,9 @@ class H(http.server.BaseHTTPRequestHandler):
                       (slots[0]["date"], f"{new_window[0]} – {new_window[1]}",
                        slots[0].get("room") or cls.get("room"), json.dumps(ids),
                        f"{cstart} – {cend}", cid))
+            if sessions is not None:
+                c.execute("UPDATE classes SET session_dates=?, session_count=? WHERE id=?",
+                          (json.dumps(sessions), len(sessions), cid))
             c.commit()
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
             audit(c, cid, cls.get("status"), "rescheduled", u["id"])
@@ -2842,7 +2855,11 @@ class H(http.server.BaseHTTPRequestHandler):
             c.commit(); c.close()
             cfg = integrations.load_config()
             eb_result = "skipped"
-            try: eb_result = integrations.update_eventbrite_times(fresh, cfg)
+            try:
+                eb_result = integrations.update_eventbrite_times(fresh, cfg)
+                if fresh.get("is_series"):
+                    # the description and page body list every session date
+                    integrations.update_eventbrite_details(fresh, cfg)
             except Exception as e: eb_result = f"failed: {e}"
             gcfg = gcal.load_gcal_config()
             gcal_result = "skipped"
@@ -2856,6 +2873,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 gcal_result = f"failed: {e}"
             emailed = 0
             new_when = f"{fresh['slot_date']} {fresh.get('class_time') or fresh['slot_time']}"
+            if sessions is not None:
+                new_when = (f"{len(sessions)} weekly sessions starting {fresh['slot_date']} "
+                            f"{fresh.get('class_time') or fresh['slot_time']}")
             # Policy: students are only emailed when the admin ticked the box.
             if not b.get("notify_students"): students = []
             for s in students:

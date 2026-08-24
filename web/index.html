@@ -655,8 +655,9 @@ let RESUB=null, RESUB_OLD_ID=null, RESCHED=null;
 function startReschedule(id){
   const c=(window.__classes||[]).find(x=>x.id===id);
   if(!c) return alert('Could not load that class.');
-  if(c.is_series) return alert('Series courses cannot be rescheduled here yet.');
-  RESCHED=c; RESUB=null; PENDING_DRAFT=null; CLASSKIND='one'; ROOM_PICK=null; SEL=[];
+  RESCHED=c; RESUB=null; PENDING_DRAFT=null; ROOM_PICK=null; SEL=[]; SERIES_PREVIEW=null;
+  CLASSKIND = c.is_series ? 'series' : 'one';
+  if(c.is_series) SERIES_WEEKS = Math.max(2, Math.min(+(c.session_count||6), 26));
   VIEWAS='instructor'; renderInstr('open');
 }
 function closeResched(){ const m=$('#rsmodal'); if(m) m.remove(); }
@@ -1691,7 +1692,7 @@ function cardCls(c){
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>
       <div class="two" style="margin-top:8px">
         <button class="btn ghost" onclick="openLiveEdit(${c.id})">Edit details</button>
-        ${!c.is_series?`<button class="btn ghost" onclick="startReschedule(${c.id})">Change date or time</button>`:'<span></span>'}</div>`:''}
+        <button class="btn ghost" onclick="startReschedule(${c.id})">Change date or time</button></div>`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
     ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="archiveRecord('classes',${c.id},'class')">Archive class</button>`:''}
     <div id="gfx${c.id}"></div>
@@ -2083,7 +2084,7 @@ function confirmSel(){
     m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px';
     m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:420px;width:100%;padding:20px 22px">
       <h2 style="margin:0 0 2px">New time for <em>${esc(RESCHED.title)}</em></h2>
-      <p class="sub" style="margin:0 0 10px">${esc(sel[0].date)} · booked ${esc(ws)} – ${esc(we)} · ${esc(confirmSelRoom(sel[0].room))}</p>
+      <p class="sub" style="margin:0 0 10px">${RESCHED.is_series?`${SERIES_PREVIEW&&SERIES_PREVIEW.sessions?SERIES_PREVIEW.sessions.length:RESCHED.session_count} weekly sessions starting `:''}${esc(sel[0].date)} · booked ${esc(ws)} – ${esc(we)} · ${esc(confirmSelRoom(sel[0].room))}</p>
       <label>Class starts</label><select id="r_cstart">${timeOpts(ws,we,'start')}</select>
       <label>Class ends</label><select id="r_cend">${timeOpts(ws,we,'end')}</select>
       <label class="chk" style="display:flex;gap:8px;align-items:center;margin-top:10px">
