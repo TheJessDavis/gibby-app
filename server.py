@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.7-website-row"
+VERSION = "8.8-no-wix"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -167,6 +167,8 @@ def init_db():
     # gets a row on the Connections screen. Not a job: it updates itself.
     c.execute("""INSERT OR IGNORE INTO integrations(id,name,method,status)
                  VALUES('website','Website','Embed on theeverett.org','connected')""")
+    # The site is Squarespace, not Wix; the Website embed replaced it.
+    c.execute("DELETE FROM integrations WHERE id='wix'")
     # Soft delete: nothing is ever removed from these three tables. A row with
     # deleted_at set is invisible to normal queries but recoverable from Archive.
     try: c.execute("ALTER TABLE registrations ADD COLUMN external_id TEXT")
@@ -393,7 +395,6 @@ def seed(c):
         integ = [
           ("eventbrite","Eventbrite","REST API","connected"),
           ("facebook","Facebook","Graph API","disconnected"),
-          ("wix","Wix","Wix REST API","disconnected"),
           ("descene","Descene","Browser automation","attention"),
           ("canva","Canva","Canva API","connected"),
           ("website","Website","Embed on theeverett.org","connected"),
@@ -645,7 +646,8 @@ def enqueue(c, class_id, platform, payload=None, delay=0):
 def queue_publish(class_id, image_url=None, instructor_name=""):
     """Queue every outbound post for a newly published class."""
     c = db()
-    for platform in ("eventbrite", "facebook", "wix", "descene", "gcal"):
+    # No Wix: the site is Squarespace, reached through the /embed iframe instead.
+    for platform in ("eventbrite", "facebook", "descene", "gcal"):
         payload = {}
         if platform == "eventbrite": payload["image_url"] = image_url
         if platform == "gcal":       payload["instructor_name"] = instructor_name
@@ -1599,7 +1601,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 jobs["website"] = {"platform": "website", "label": "Website",
                                    "status": wstat, "attempts": 0, "error": werr,
                                    "next_run_at": None}
-            order = ["canva","eventbrite","website","facebook","wix","gcal","descene"]
+            jobs.pop("wix", None)   # legacy rows from before Wix was dropped
+            order = ["canva","eventbrite","website","facebook","gcal","descene"]
             out = [jobs[k] for k in order if k in jobs] + [v for k,v in jobs.items() if k not in order]
             return self.send_json({"class_status": row["status"],
                                    "publishing": bool(row["publishing_in_progress"]),
