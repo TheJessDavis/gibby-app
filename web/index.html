@@ -22,8 +22,8 @@
   .top .brand{font-weight:800;font-size:17px;letter-spacing:-.02em}
   .homebtn{border:none;background:var(--ink);color:#fff;border-radius:12px;width:40px;height:38px;font-size:17px;line-height:1;cursor:pointer;font-family:inherit;flex:none}
   .menu{position:fixed;top:62px;right:16px;background:var(--white);border-radius:16px;box-shadow:0 14px 34px rgba(0,0,0,.18);z-index:60;min-width:230px;padding:8px;border:1px solid var(--line)}
-  .menu .mwho{display:flex;align-items:center;gap:4px;padding:10px 12px;border-bottom:1px solid var(--line);margin-bottom:6px;font-weight:800;font-size:13.5px}
-  .menu .mwho small{display:block;font-weight:700;font-size:11px;color:var(--ink-soft)}
+  .mwho{display:flex;align-items:center;gap:4px;padding:10px 12px;border-bottom:1px solid var(--line);margin-bottom:6px;font-weight:800;font-size:13.5px}
+  .mwho small{display:block;font-weight:700;font-size:11px;color:var(--ink-soft)}
   .menu button{display:block;width:100%;text-align:left;border:none;background:none;font-family:inherit;font-weight:800;font-size:13.5px;color:var(--ink);padding:11px 12px;border-radius:11px;cursor:pointer}
   .menu button:hover{background:var(--paper)}
   .bnav{position:fixed;bottom:12px;left:12px;right:12px;max-width:420px;margin:0 auto;background:var(--ink);border-radius:22px;display:flex;gap:2px;padding:7px;z-index:45;box-shadow:0 14px 30px rgba(0,0,0,.28)}
@@ -309,13 +309,7 @@
     <button class="homebtn" onclick="goHome()" title="Home" aria-label="Home">🏠</button>
     <div style="display:flex;gap:8px;align-items:center">
       <button class="out" id="switchbtn" style="display:none;background:var(--purple);color:#fff" onclick="switchMode()"></button>
-      <button class="out" id="menubtn" onclick="toggleMenu(event)" title="Menu" style="font-size:16px;line-height:1">☰</button>
     </div>
-  </div>
-  <div id="menu" class="menu" style="display:none">
-    <div class="mwho" id="m_who"></div>
-    <button onclick="menuPick('profile')">✏️ Edit profile</button>
-    <button onclick="menuPick('logout')">👋 Sign out</button>
   </div>
   <div id="moresheet" class="bsheet" style="display:none"></div>
   <div id="bnav" class="bnav" style="display:none"></div>
@@ -450,7 +444,6 @@ async function bootInner(){
   // role text, so nothing in the header says the same thing twice.
   if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = (VIEWAS==='admin'?'Admin':'Instructor')+' \u21c4'; sb.title='Switch to '+(VIEWAS==='admin'?'instructor':'admin')+' view'; }
   else sb.style.display='none';
-  $('#m_who').innerHTML = avaHTML(user) + `<span>${esc(user.name)}<small>${esc(user.email||'')}</small></span>`;
   if(actingRole()==='admin') renderAdmin('dashboard'); else renderInstr('open');
 }
 function renderChangePw(){
@@ -543,9 +536,11 @@ function renderProfile(){
     <button class="btn dark" onclick="saveProfile()">Save</button>
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
+    <div style="height:8px"></div>
+    <button class="btn ghost" onclick="logout()">👋 Sign out</button>
   </div>`;
 }
-function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMenu(); closeMore(); boot(); }
+function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
 const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
@@ -574,7 +569,11 @@ function buildBnav(role, active){
 function hideBnav(){ const b=$('#bnav'); if(b) b.style.display='none'; closeMore(); }
 function openMore(){
   const sh=$('#moresheet');
-  sh.innerHTML = MORE_ITEMS.map(([k,i,l])=>`<button onclick="closeMore();renderAdmin('${k}')"><span class="bi">${i}</span>${l}</button>`).join('');
+  const who = ME ? `<div class="mwho" style="grid-column:1/-1">${avaHTML(ME)}<span>${esc(ME.name)}<small>${esc(ME.email||'')}</small></span></div>` : '';
+  sh.innerHTML = who
+    + MORE_ITEMS.map(([k,i,l])=>`<button onclick="closeMore();renderAdmin('${k}')"><span class="bi">${i}</span>${l}</button>`).join('')
+    + `<button onclick="closeMore();renderProfile()"><span class="bi">✏️</span>Profile</button>`
+    + `<button onclick="closeMore();logout()"><span class="bi">\u{1F44B}</span>Sign out</button>`;
   sh.style.display='grid';
 }
 function closeMore(){ const sh=$('#moresheet'); if(sh) sh.style.display='none'; }
@@ -690,12 +689,6 @@ async function startResubmit(id){
   if(!RESUB) return alert('Could not load that class.');
   renderInstr('open');
 }
-function toggleMenu(ev){ if(ev) ev.stopPropagation();
-  const m=$('#menu'); m.style.display = m.style.display==='none' ? '' : 'none'; }
-function closeMenu(){ const m=$('#menu'); if(m) m.style.display='none'; }
-function menuPick(what){ closeMenu(); if(what==='profile') renderProfile(); else logout(); }
-document.addEventListener('click', e=>{ const m=$('#menu');
-  if(m && m.style.display!=='none' && !m.contains(e.target)) closeMenu(); });
 function pfAddSkill(k){ if(!PF_SKILLS.includes(k)) PF_SKILLS.push(k); renderProfile(); }
 function pfRemoveSkill(k){ PF_SKILLS=PF_SKILLS.filter(x=>x!==k); renderProfile(); }
 function pfCustomSkill(){
@@ -2732,7 +2725,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
