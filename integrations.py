@@ -91,9 +91,10 @@ def _multipart_post(url, fields, file_field, filename, filedata, timeout=120):
     nl = b"\r\n"
     body = bytearray()
     for k, v in (fields or {}).items():
-        body += b"--" + boundary.encode() + nl
-        body += f'Content-Disposition: form-data; name="{k}"'.encode() + nl + nl
-        body += str(v).encode() + nl
+        for one in (v if isinstance(v, list) else [v]):
+            body += b"--" + boundary.encode() + nl
+            body += f'Content-Disposition: form-data; name="{k}"'.encode() + nl + nl
+            body += str(one).encode() + nl
     body += b"--" + boundary.encode() + nl
     body += f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"'.encode() + nl
     body += b"Content-Type: application/octet-stream" + nl + nl
@@ -651,14 +652,32 @@ def post_descene(cls, cfg):
         price = "range"
         lo = hi = "%g" % cls["ticket_price"]
     eb = ext.get("eventbrite_id")
+    # One performance row per session, the way their form's JS would add them.
+    perfs = []
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]") if cls.get("is_series") else []
+    except Exception:
+        sessions = []
+    hhmm = f"{t.hour:02d}:{t.minute:02d}:00"
+    if sessions:
+        for s in sessions:
+            sp = (s.get("date") or "").split(", ")[-1].split()
+            try:
+                sm, sd = _MON[sp[0]], int(sp[1])
+                perfs.append(f"{_season_year(sm):04d}-{sm:02d}-{sd:02d} {hhmm}")
+            except Exception:
+                pass
+    if not perfs:
+        perfs = [f"{iso_day} {hhmm}"]
     fields = {
         "fullname": "Jessica Beckett-Davis",
         "organization": "Gibby Center for the Arts",
-        "email": "gibby@theeverett.org",
+        "email": "gibby@everetttheatre.com",
         "phone": "302-378-2932",
         "title": cls.get("title") or "",
-        "venueName": "Gibby Center for the Arts",
-        "venueID": "",
+        # Venue must pre-exist in their database; this is the Gibby's record.
+        "venueName": "Gilbert W. Perry Center for the Arts (The Gibby)",
+        "venueID": "233",
         "presenterName": cls.get("instructor_name") or "",
         "presenterID": "",
         "infoURL": "https://theeverett.org/artworkshops",
@@ -668,6 +687,7 @@ def post_descene(cls, cfg):
         "description": desc,
         "descriptioneditor": desc,
         "ongoing": "0",
+        "perf[]": perfs,
         "start_date": iso_day, "end_date": iso_day,
         "pmonth": f"{mon:02d}", "pday": f"{day:02d}", "pyear": str(year),
         "phour": f"{((t.hour - 1) % 12) + 1:02d}", "pminute": f"{t.minute:02d}",
@@ -691,12 +711,25 @@ def post_descene(cls, cfg):
             filedata = b""
     body = _multipart_post("https://delawarescene.com/orgs/addevent.php",
                            fields, "file", filename, filedata, timeout=120)
-    page = body.decode("utf-8", "replace").lower()
-    if "thank" in page or "review" in page or "received" in page:
+    page = body.decode("utf-8", "replace")
+    low = page.lower()
+    # The confirmed success page says exactly this (and still contains stray form
+    # markup, so check success FIRST).
+    if "thank you for submitting" in low:
         return _ok("descene-pending", "submitted to DelawareScene (their team reviews within 5-7 business days)")
-    if 'name="title"' in page:
-        return _no("DelawareScene redisplayed the form; a field was likely rejected")
-    return _ok("descene-pending", "submitted to DelawareScene (response did not confirm explicitly)")
+    # A rejected submission redisplays the form under "Please check the following"
+    # with explicit per-field messages; surface those verbatim.
+    if "please check the following" in low:
+        import re as _re
+        text = _re.sub(r"<[^>]+>", " ", page)
+        text = _re.sub(r"\s+", " ", text)
+        i = low.replace("<", " ").find("please check the following")
+        j = text.lower().find("please check the following")
+        detail = text[j:j+300] if j >= 0 else "field errors"
+        return _no(f"DelawareScene rejected it: {detail}")
+    if 'name="title"' in low:
+        return _no("DelawareScene redisplayed the form without naming an error")
+    return _no("DelawareScene returned an unrecognized page")
 
 # ------------------------------------------------------------------- publish ----
 def _safe(fn, *a):
