@@ -54,7 +54,7 @@ def configured(cfg):
         "facebook":   bool(cfg["fb_page_id"] and cfg["fb_page_token"]),
         "wix":        bool(cfg["wix_api_key"] and cfg["wix_site_id"]),
         "canva":      bool(cfg["canva_token"] and cfg["canva_template_id"]),
-        "descene":    False,  # no public API
+        "descene":    True,   # guest form submission, no keys needed
     }
 
 # ------------------------------------------------------------------ helpers ----
@@ -605,9 +605,85 @@ def post_wix(cls, cfg):
     return _ok((res.get("event") or {}).get("id"), "event created")
 
 def post_descene(cls, cfg):
-    # No public API. Real posting requires headless-browser automation (Playwright),
-    # which is not available in the standard library. Flagged as manual for now.
-    return _no("manual: Descene has no API (needs browser automation, not in stdlib)")
+    """Submit the class to DelawareScene (delawarescene.com), the Delaware
+    Division of the Arts events calendar. There is no API, but the public
+    guest-submission form is a plain multipart POST with no session or token, so
+    the server files it directly. Submissions land in their moderation queue
+    (posted within 5-7 business days). Mappings per the Gibby: contact email is
+    always gibby@theeverett.org, the presenter is the instructor, categories are
+    Visual Arts then Classes, and the image is the landscape Eventbrite poster."""
+    if not cfg["live"]:
+        return _ok("descene-dryrun", "dry-run (would submit to DelawareScene)")
+    try:
+        ext = json.loads(cls.get("external_ids") or "{}")
+    except Exception:
+        ext = {}
+    # date + start time of the (first) session
+    try:
+        date_part = (cls.get("slot_date") or "").split(", ")[-1].strip().split()
+        mon, day = _MON[date_part[0]], int(date_part[1])
+        year = _season_year(mon)
+        span = cls.get("class_time") or cls.get("slot_time") or ""
+        start_txt = re.split(r"\s*[\u2013\u2014-]\s*", span.strip())[0].strip()
+        t = datetime.datetime.strptime(start_txt, "%I:%M %p")
+    except Exception as e:
+        return _no(f"needs a valid date/time: {e}")
+    iso_day = f"{year:04d}-{mon:02d}-{day:02d}"
+    desc = _event_description(cls)
+    if cls.get("donation_based"):
+        price, lo, hi = "pwyw", "", ""
+    elif not (cls.get("ticket_price") or 0):
+        price, lo, hi = "0", "", ""
+    else:
+        price = "range"
+        lo = hi = "%g" % cls["ticket_price"]
+    eb = ext.get("eventbrite_id")
+    fields = {
+        "fullname": "Jessica Beckett-Davis",
+        "organization": "Gibby Center for the Arts",
+        "email": "gibby@theeverett.org",
+        "phone": "302-378-2932",
+        "title": cls.get("title") or "",
+        "venueName": "Gibby Center for the Arts",
+        "venueID": "",
+        "presenterName": cls.get("instructor_name") or "",
+        "presenterID": "",
+        "infoURL": "https://theeverett.org/artworkshops",
+        "ticketURL": (f"https://www.eventbrite.com/e/{eb}" if eb else ""),
+        "price": price, "lo": lo, "hi": hi,
+        "boxoffice": "302-378-2932",
+        "description": desc,
+        "descriptioneditor": desc,
+        "ongoing": "0",
+        "start_date": iso_day, "end_date": iso_day,
+        "pmonth": f"{mon:02d}", "pday": f"{day:02d}", "pyear": str(year),
+        "phour": f"{((t.hour - 1) % 12) + 1:02d}", "pminute": f"{t.minute:02d}",
+        "pampm": "pm" if t.hour >= 12 else "am",
+        "category1": "11",   # Visual Arts
+        "category2": "42",   # Classes
+        "category3": "0",
+        "alt": cls.get("title") or "", "text": "",
+        "imgdata": "", "liveID": "", "pendingID": "",
+        "action": "save", "submit": "submit event",
+    }
+    img = cls.get("poster") or ""    # the landscape poster, same as Eventbrite
+    m = re.match(r"^data:image/([a-z]+);base64,(.*)$", img, re.S)
+    filedata, filename = b"", "poster.jpg"
+    if m:
+        import base64 as _b64
+        try:
+            filedata = _b64.b64decode(m.group(2))
+            filename = "poster." + ("jpg" if m.group(1) == "jpeg" else m.group(1))
+        except Exception:
+            filedata = b""
+    body = _multipart_post("https://delawarescene.com/orgs/addevent.php",
+                           fields, "file", filename, filedata, timeout=120)
+    page = body.decode("utf-8", "replace").lower()
+    if "thank" in page or "review" in page or "received" in page:
+        return _ok("descene-pending", "submitted to DelawareScene (their team reviews within 5-7 business days)")
+    if 'name="title"' in page:
+        return _no("DelawareScene redisplayed the form; a field was likely rejected")
+    return _ok("descene-pending", "submitted to DelawareScene (response did not confirm explicitly)")
 
 # ------------------------------------------------------------------- publish ----
 def _safe(fn, *a):

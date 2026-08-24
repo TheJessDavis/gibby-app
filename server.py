@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.6-native-site-cards"
+VERSION = "10.7-delawarescene"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -170,6 +170,10 @@ def init_db():
                  VALUES('website','Website','Embed on theeverett.org','connected')""")
     # The site is Squarespace, not Wix; the Website embed replaced it.
     c.execute("DELETE FROM integrations WHERE id='wix'")
+    # DelawareScene became a real destination: the app files the guest form itself.
+    c.execute("""UPDATE integrations SET name='DelawareScene',
+                 method='Guest form submission (moderated, 5-7 business days)',
+                 status='connected' WHERE id='descene'""")
     # Soft delete: nothing is ever removed from these three tables. A row with
     # deleted_at set is invisible to normal queries but recoverable from Archive.
     try: c.execute("ALTER TABLE registrations ADD COLUMN external_id TEXT")
@@ -627,7 +631,7 @@ BACKOFF = [60, 300, 900, 3600]        # 1 min, 5 min, 15 min, 1 hour
 MAX_ATTEMPTS = len(BACKOFF) + 1       # first try + 4 retries
 QUEUE_TICK = 20                       # seconds between sweeps
 PLATFORM_LABEL = {"canva":"Canva", "eventbrite":"Eventbrite", "facebook":"Facebook",
-                  "wix":"Wix", "descene":"Descene", "gcal":"Google Calendar"}
+                  "wix":"Wix", "descene":"DelawareScene", "gcal":"Google Calendar"}
 
 def refresh_publishing_flag(c, class_id):
     """publishing_in_progress simply means "this class still has outbound jobs in
@@ -651,7 +655,7 @@ def queue_publish(class_id, image_url=None, instructor_name=""):
     for platform in ("eventbrite", "facebook", "descene", "gcal"):
         payload = {}
         if platform == "eventbrite": payload["image_url"] = image_url
-        if platform == "gcal":       payload["instructor_name"] = instructor_name
+        if platform in ("gcal", "descene"): payload["instructor_name"] = instructor_name
         enqueue(c, class_id, platform, payload)
     refresh_publishing_flag(c, class_id)
     c.commit(); c.close()
@@ -677,7 +681,7 @@ def _run_platform(platform, cls, payload):
         elif platform == "wix":
             res = integrations.post_wix(cls, cfg)
         elif platform == "descene":
-            res = integrations.post_descene(cls, cfg)
+            res = integrations.post_descene({**cls, "instructor_name": payload.get("instructor_name","")}, cfg)
         elif platform == "gcal":
             gcfg = gcal.load_gcal_config()
             if not gcal.configured(gcfg): return None, "Google Calendar is not connected"
