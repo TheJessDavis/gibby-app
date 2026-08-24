@@ -629,7 +629,20 @@ def post_descene(cls, cfg):
     except Exception as e:
         return _no(f"needs a valid date/time: {e}")
     iso_day = f"{year:04d}-{mon:02d}-{day:02d}"
-    desc = _event_description(cls)
+    # DelawareScene house rule: the description always LEADS with the date and
+    # time as a header line, even though the form also captures them as fields.
+    wd = datetime.date(year, mon, day).strftime("%A")
+    months = ["January","February","March","April","May","June","July",
+              "August","September","October","November","December"]
+    span = (cls.get("class_time") or cls.get("slot_time") or "").strip()
+    when_header = f"{wd}, {months[mon-1]} {day}, {year}" + (f" · {span}" if span else "")
+    try:
+        n_sessions = len(json.loads(cls.get("session_dates") or "[]")) if cls.get("is_series") else 1
+    except Exception:
+        n_sessions = 1
+    if n_sessions > 1:
+        when_header = f"{n_sessions} weekly sessions starting {when_header}"
+    desc = when_header + "\n\n" + _event_description(cls)
     if cls.get("donation_based"):
         price, lo, hi = "pwyw", "", ""
     elif not (cls.get("ticket_price") or 0):
