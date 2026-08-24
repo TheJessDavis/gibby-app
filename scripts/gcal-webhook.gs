@@ -100,6 +100,19 @@ function doPost(e) {
 
   if (!body.key || body.key !== SHARED_KEY) return reply({ error: 'wrong key' });
 
+  if (body.action === 'sheet') {
+    // Rewrite the master worksheet wholesale: one row per class, idempotent.
+    var ss;
+    var fs = DriveApp.getFilesByName('Gibby Classes Master Sheet');
+    ss = fs.hasNext() ? SpreadsheetApp.open(fs.next())
+                      : SpreadsheetApp.create('Gibby Classes Master Sheet');
+    var sh = ss.getSheets()[0];
+    sh.clearContents();
+    var data = [body.headers].concat(body.rows || []);
+    sh.getRange(1, 1, data.length, body.headers.length).setValues(data);
+    return reply({ ok: true, link: ss.getUrl(), rows: (body.rows || []).length });
+  }
+
   if (body.action === 'contract') {
     var folder;
     var it = DriveApp.getFoldersByName('Gibby Contracts');
@@ -148,4 +161,10 @@ function authDrive2() {
   var f = DriveApp.createFolder('AUTH TEST safe to delete');
   Logger.log(f.getId());
   f.setTrashed(true);
+}
+// Forces the consent prompt for the Sheets WRITE scope the sheet action needs.
+function authSheets() {
+  var t = SpreadsheetApp.create('AUTH TEST sheet');
+  Logger.log(t.getId());
+  DriveApp.getFileById(t.getId()).setTrashed(true);
 }

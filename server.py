@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "9.0-human-approved-email"
+VERSION = "9.1-welcome-and-worksheet"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -844,6 +844,58 @@ def push_contract_to_drive(cls):
         print("[contract] Drive filing failed (will retry hourly):", ex)
     return None
 
+def sweep_master_sheet():
+    """Keep 'Gibby Classes Master Sheet' on Google Drive current: one row per
+    class ever submitted, rewritten wholesale every hour through the bridge
+    script (idempotent, so a missed run heals itself)."""
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"): return
+    c = db()
+    rows_db = [dict(r) for r in c.execute("""
+        SELECT cl.*, u.name AS instr_name, u.email AS instr_email
+        FROM classes cl LEFT JOIN users u ON u.id=cl.instructor_id
+        WHERE cl.deleted_at IS NULL ORDER BY cl.id""").fetchall()]
+    counts = {r["class_id"]: r["n"] for r in c.execute(
+        "SELECT class_id, COUNT(*) AS n FROM registrations WHERE refunded=0 GROUP BY class_id")}
+    c.close()
+    headers = ["ID","Title","Instructor","Instructor email","Status","Date","Booked window",
+               "Class time","Room","Series","Ages","Ticket $","Pay model","Instructor pay $",
+               "Materials $/student","Min","Max","Enrolled","Cutoff (days)","Video",
+               "Eventbrite link","Contract","Submitted"]
+    out = []
+    for cl in rows_db:
+        try: ext = json.loads(cl.get("external_ids") or "{}")
+        except Exception: ext = {}
+        eb = ext.get("eventbrite_id")
+        n_sessions = 1
+        if cl.get("is_series"):
+            try: n_sessions = len(json.loads(cl.get("session_dates") or "[]")) or cl.get("session_count") or 1
+            except Exception: n_sessions = cl.get("session_count") or 1
+        out.append([cl["id"], cl.get("title") or "", cl.get("instr_name") or "",
+            cl.get("instr_email") or "", cl.get("status") or "", cl.get("slot_date") or "",
+            cl.get("slot_time") or "", cl.get("class_time") or "", cl.get("room") or "",
+            (f"{n_sessions} weeks" if cl.get("is_series") else "no"),
+            cl.get("age_label") or cl.get("age_range") or "",
+            cl.get("ticket_price") or 0, cl.get("pay_model") or "flat",
+            cl.get("instructor_pay") or 0, cl.get("material_cost") or 0,
+            cl.get("min_p") or 0, cl.get("max_p") or 0, counts.get(cl["id"], 0),
+            cl.get("close_days") or 0, ("yes" if (cl.get("video") or "").strip() else "no"),
+            (f"https://www.eventbrite.com/e/{eb}" if eb else ""),
+            cl.get("contract_status") or "", (cl.get("created") or "")[:10]])
+    try:
+        payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "sheet",
+                              "headers": headers, "rows": out}).encode()
+        req = urllib.request.Request(cfg["webhook_url"], data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read().decode("utf-8", "replace"))
+        if res.get("ok"):
+            print(f"[sheet] master sheet updated: {res.get('rows')} classes -> {res.get('link','')}")
+        else:
+            print("[sheet] bridge refused:", res)
+    except Exception as ex:
+        print("[sheet] update failed (will retry hourly):", ex)
+
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
     moment failing, and backfills contracts signed before this feature existed."""
@@ -1274,6 +1326,8 @@ def scheduler_loop():
             except Exception as e: print("[scheduler] error:", e)
             try: sweep_contracts_to_drive()
             except Exception as e: print("[contract] sweep error:", e)
+            try: sweep_master_sheet()
+            except Exception as e: print("[sheet] sweep error:", e)
             prune_sessions()          # tidy away long-dead auth rows
             try:
                 c = db()
@@ -2092,18 +2146,36 @@ class H(http.server.BaseHTTPRequestHandler):
             else:
                 c.execute("INSERT INTO users(name,email,role,pw_hash,pw_salt,must_change_pw) VALUES(?,?,?,?,?,?)",(name,email,role,h,s,mc))
                 action = "created"
+            # The welcome email (wording approved by the Gibby): what the app is,
+            # their username, and either their temporary password or a
+            # set-your-password link.
+            first = name.split()[0] if name != email else "there"
+            intro = ("the app where The Gibby's instructors claim time slots, submit class "
+                     "proposals, sign contracts, and track sign-ups for their classes."
+                     + (" Your account is an admin account, so you can also review and approve classes." if role == "admin" else ""))
             if invited:
                 row = c.execute("SELECT id FROM users WHERE email=?",(email,)).fetchone()
                 tok = secrets.token_urlsafe(24)
                 exp = (datetime.datetime.now()+datetime.timedelta(days=7)).isoformat()
                 c.execute("INSERT INTO password_resets(token,user_id,expires) VALUES(?,?,?)",(tok,row["id"],exp))
                 proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
-                mailer.send(email, "You're set up on the Gibby Class Manager",
-                    f"Hi {name.split()[0] if name != email else 'there'},\n\n"
-                    f"An account has been created for you on the Gibby Class Manager, where you claim "
-                    f"time slots and submit your classes.\n\n"
-                    f"Set your password here (link valid for 7 days):\n\n{proto}://{host}/?reset={tok}\n\n"
-                    f"After that, sign in any time with this email address.\n\nThe Gibby")
+                mailer.send(email, "Welcome to the Gibby Class Manager",
+                    f"Hi {first},\n\n"
+                    f"You've been set up on the Gibby Class Manager, {intro}\n\n"
+                    f"Your username is this email address. Choose your password here (link good for 7 days):\n\n"
+                    f"{proto}://{host}/?reset={tok}\n\n"
+                    f"After that, sign in any time at: {mailer.APP_URL}\n\n"
+                    f"See you at The Gibby!")
+            else:
+                mailer.send(email, "Welcome to the Gibby Class Manager",
+                    f"Hi {first},\n\n"
+                    f"You've been set up on the Gibby Class Manager, {intro}\n\n"
+                    f"Here's how to sign in the first time:\n\n"
+                    f"Your username: {email}\n"
+                    f"Your temporary password: {pw}\n\n"
+                    + ("The app will ask you to choose your own password as soon as you sign in.\n\n" if mc else "")
+                    + f"Sign in here: {mailer.APP_URL}\n\n"
+                    f"See you at The Gibby!")
             c.commit(); c.close()
             return self.send_json({"ok":True,"action":action,"email":email,"role":role,"invited":invited})
         if p == "/api/change-password":
