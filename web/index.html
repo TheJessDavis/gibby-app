@@ -362,6 +362,7 @@ const esc = s => (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'
 const money = n => '$'+(Math.round((+n||0)*100)/100).toLocaleString();
 
 let ME=null, VIEWAS=null, LOGIN_CHOICE=null, SLOTDAY=null;
+let REVIEW_FOCUS=null;   // class id from a #review-N email link; jump straight to its approval card
 
 /* ---------------- error boundaries ----------------
    This app renders with template strings + innerHTML, so there are no React
@@ -444,7 +445,9 @@ async function bootInner(){
   // role text, so nothing in the header says the same thing twice.
   if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = (VIEWAS==='admin'?'Admin':'Instructor')+' \u21c4'; sb.title='Switch to '+(VIEWAS==='admin'?'instructor':'admin')+' view'; }
   else sb.style.display='none';
-  if(actingRole()==='admin') renderAdmin('dashboard'); else renderInstr('open');
+  const mrev=/^#review-(\d+)$/.exec(location.hash||'');
+  if(mrev){ REVIEW_FOCUS=+mrev[1]; history.replaceState(null,'',location.pathname+location.search); }
+  if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('open');
 }
 function renderChangePw(){
   $('#view').innerHTML=`<div class="login-wrap">
@@ -646,7 +649,7 @@ async function signContractNow(id){
     renderInstr('mine');
   }catch(e){ const x=$('#cterr'); x.textContent=e.message; x.classList.add('show'); }
 }
-let RESUB=null, RESUB_OLD_ID=null, RESCHED=null;
+let RESUB=null, RESUB_OLD_ID=null, RESUB_INSTR=null, RESCHED=null;
 
 /* Move a published class: admin picks a new window in the same slot picker,
    confirms the class times, and the server updates Eventbrite, the calendar,
@@ -1339,11 +1342,15 @@ async function renderClientErrors(){
   </div>`).join('') || '<div class="muted">No interface errors recorded.</div>';
 }
 const ETYPE={reminder:'48h reminder',followup:'day-after follow-up',cancel:'cancellation notice',
-  cancel_instructor:'cancellation (instructor)',low_alert:'low-enrollment alert'};
+  cancel_instructor:'cancellation (instructor)',low_alert:'low-enrollment alert',
+  roster:'day-before roster to instructor',headcount:'confirmed headcount',
+  reminder_nudge:'reminder nudge to staff',cancel_decision:'under-minimum decision nudge',
+  followup_request:'follow-up writing request',
+  fb_token_warn_14:'Facebook key expiry warning (14-day)',fb_token_warn_2:'Facebook key expiry warning (2-day)'};
 async function renderEmailLog(){
   const {entries}=await api('/api/email-log');
   $('#emailrows').innerHTML = entries.map(e=>`<div class="card">
-    <div class="row"><div><h3 style="font-size:1rem">${esc(e.class_title||('Class #'+e.class_id))}</h3>
+    <div class="row"><div><h3 style="font-size:1rem">${esc(e.class_title||(e.class_id?('Class #'+e.class_id):'System'))}</h3>
       <div class="meta">${esc(ETYPE[e.email_type]||e.email_type)} · ${esc(e.sent_at)} · ${e.recipients} recipient${e.recipients===1?'':'s'}</div></div>
       <span class="pill ${e.delivered?'appr':'inc'}">${e.delivered?'sent':'failed'}</span></div>
   </div>`).join('') || '<div class="muted">No automated emails have been sent yet.</div>';
@@ -1473,6 +1480,14 @@ async function adminApprovals(){
   // If a publish is already running (e.g. after a reload, or another admin started
   // it), pick the live status back up instead of showing a stale idle card.
   window.__classes.filter(c=>c.publishing_in_progress).forEach(c=>startPublishPolling(c.id));
+  if(REVIEW_FOCUS){
+    const target=document.getElementById('cls'+REVIEW_FOCUS); REVIEW_FOCUS=null;
+    if(target){
+      target.scrollIntoView({behavior:'smooth', block:'center'});
+      target.style.boxShadow='0 0 0 4px var(--yellow,#FCD34D)';
+      setTimeout(()=>{ target.style.boxShadow=''; }, 3000);
+    }
+  }
 }
 async function sendFeedback(id){
   const pick = k => { const el=$('#'+k+id); const on=el&&el.querySelector('.on'); return on?on.dataset.v:''; };
@@ -1585,7 +1600,7 @@ function cardCls(c){
   const tone={pending:'cls-pending',graphic_review:'cls-review',instructor_review:'cls-review',
               approved:'cls-approved',incomplete:'cls-back',cancelled:'cls-off'}[c.status]||'cls-pending';
   const when=c.is_series&&c.sessions&&c.sessions.length?c.sessions[0].date:(c.slot_date||'');
-  return `<div class="card clscard ${tone}">
+  return `<div class="card clscard ${tone}" id="cls${c.id}">
     <div class="clstop">
       ${c.photo?`<img class="clspic" src="${c.photo}" alt="" onerror="this.style.visibility='hidden'">`:`<span class="clspic clspic-i">\u{1F3A8}</span>`}
       <span class="clswhen">${esc(when)}</span>
@@ -1913,6 +1928,19 @@ let SUBMIT_SLOT=null, PHOTO=null, TPLS=[];
 async function loadTplOptions(){
   const {templates}=await api('/api/templates'); TPLS=templates;
   const sel=$('#f_tpl'); if(sel) sel.innerHTML='<option value="">None, start blank</option>'+templates.map((t,i)=>`<option value="${i}">${esc(t.title)}</option>`).join('');
+}
+async function loadInstrOptions(){
+  // Admin-only picker: submit a class on another instructor's behalf.
+  const sel=$('#f_instr'); if(!sel || !ME || ME.role!=='admin') return;
+  try{
+    const {users}=await api('/api/users');
+    sel.innerHTML = `<option value="">Me (${esc(ME.name)})</option>` +
+      users.filter(x=>x.id!==ME.id)
+           .map(x=>`<option value="${x.id}">${esc(x.name)}${x.role==='admin'?' (admin)':''}</option>`).join('');
+    // On a resubmit, preselect whoever the class already belonged to.
+    if(RESUB_INSTR && RESUB_INSTR!==ME.id &&
+       users.some(x=>x.id===RESUB_INSTR)) sel.value=String(RESUB_INSTR);
+  }catch(_){}
 }
 function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+i];
   $('#f_title').value=t.title; $('#f_desc').value=t.description; descCount();
@@ -2314,6 +2342,9 @@ function openForm(slot, draftPayload){
     </div>
     <div class="hint">Copying brings over everything except the date and times, so a repeat class is a
       thirty-second job. Adjust whatever changed.</div>
+    ${ME&&ME.role==='admin'?`<label>Who is teaching this class?</label>
+    <select id="f_instr"><option value="">Me (${esc(ME.name)})</option></select>
+    <div class="hint">Submitting for someone else? Pick them here and the class, contract and emails all go to them.</div>`:''}
     <label>Class title</label><input id="f_title">
     <label>Description <span style="color:var(--ink-soft);font-weight:600">(at least 50 words)</span></label>
     <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 / 50 words</div>
@@ -2423,7 +2454,8 @@ function openForm(slot, draftPayload){
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="leaveForm()">Cancel</button>
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
-  calc(); descCount(); loadTplOptions(); loadPrevOptions();
+  RESUB_INSTR = RESUB ? (RESUB.instructor_id||null) : null;
+  calc(); descCount(); loadTplOptions(); loadPrevOptions(); loadInstrOptions();
   if(draftPayload) applyDraft(draftPayload);
   else if(RESUB){ applyDraft(RESUB); RESUB_OLD_ID=RESUB.id; RESUB=null;
     const n=$('#draftnote'); if(n) n.textContent='Resubmitting: fix what was flagged, then submit.'; }
@@ -2625,6 +2657,7 @@ function collectForm(){
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
     room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
     is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,
+    instructor_id: ($('#f_instr')&&$('#f_instr').value) ? +$('#f_instr').value : undefined,
     supplies:[]
   };
 }

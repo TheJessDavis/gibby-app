@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.9.0-single-menu"
+VERSION = "10.10.0-links-roster-onbehalf"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1099,6 +1099,8 @@ EMAIL_RULES = {
     # without a person (instructor or admin) pressing the button.
     "reminder_nudge":    {"statuses": ("approved",),  "future_only": True,  "label": "48h reminder nudge to staff"},
     "cancel_decision":   {"statuses": ("approved",),  "future_only": True,  "label": "under-minimum decision nudge to admins"},
+    # Instructor-facing, not student-facing, so it can send without approval.
+    "roster":            {"statuses": ("approved",),  "future_only": True,  "label": "day-before roster to instructor"},
 }
 
 def email_sent_at(c, class_id, email_type):
@@ -1224,6 +1226,28 @@ def run_scheduler(asof=None):
                     f"their logistics. It only goes out when you press it.",
                     today, cfg)
                 if sent: actions.append(f"48h reminder nudge to staff: {cls['title']}")
+            if days == 1:
+                # The instructor gets tomorrow's roster: who is coming, with contact
+                # details. Instructor-facing, so the approval rule does not apply.
+                instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
+                if instr_row and instr_row["email"]:
+                    first = (instr_row["name"] or "").split(" ")[0] or "there"
+                    regs = c.execute("""SELECT name,email,phone FROM registrations
+                                        WHERE class_id=? AND refunded=0 ORDER BY name""",(cls["id"],)).fetchall()
+                    lines = "\n".join(
+                        f"  {i+1}. {rr['name'] or '(no name)'}"
+                        + (f"  |  {rr['email']}" if rr["email"] else "")
+                        + (f"  |  {rr['phone']}" if rr["phone"] else "")
+                        for i, rr in enumerate(regs)) or "  (nobody registered)"
+                    span = cls.get("class_time") or cls.get("slot_time") or ""
+                    sent, why = send_class_email(c, cls, "roster", [instr_row["email"]],
+                        f"Tomorrow's roster for {cls['title']}: {enrolled} registered",
+                        f"Hi {first},\n\n\"{cls['title']}\" runs tomorrow, {cls.get('slot_date','')}"
+                        f"{' ' + span if span else ''} in the {cls.get('room','') or 'studio'}.\n\n"
+                        f"Your roster ({enrolled}):\n{lines}\n\n"
+                        f"This list is just for you; students are not copied on it.\n\n"
+                        f"Have a great class,\nThe Gibby", today, cfg)
+                    if sent: actions.append(f"day-before roster to {instr_row['name']}: {cls['title']}")
         if end_days == -1:      # the day after the LAST session, not the first
             # The follow-up is written by the instructor, approved by an admin and
             # only then sent. The scheduler just opens the task and nudges them.
@@ -1244,6 +1268,39 @@ def run_scheduler(asof=None):
                     f"plan next season.\n\nThank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} to write the follow-up: {cls['title']}"
                                if sent else f"follow-up request suppressed for {cls['title']}: {why}")
+    # Facebook's posting key has a hard expiry date; warn the admins at 14 days
+    # and again at 2, instead of letting posts start failing silently. Uses
+    # email_log's (class_id,type) uniqueness with class_id=0 for once-only.
+    try:
+        icfg = integrations.load_config()
+        if icfg.get("fb_page_id") and icfg.get("fb_page_token"):
+            exp = datetime.date.fromisoformat(
+                os.environ.get("FB_TOKEN_EXPIRES", "2026-10-23").strip())
+            left = (exp - today).days
+            for mark in (14, 2):
+                if left > mark: continue
+                try:
+                    c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(0,?,?,0)",
+                              (f"fb_token_warn_{mark}", now()))
+                except sqlite3.IntegrityError:
+                    continue
+                mailer.send(emails_for(c, "WHERE role='admin'"),
+                    f"Facebook posting stops in {max(left,0)} day{'' if left==1 else 's'}: renew the key",
+                    "The key that lets the app post classes to The Gibby's Facebook Page expires on "
+                    f"{exp.strftime('%B %d, %Y')}. After that, the Facebook step of publishing will fail "
+                    "until it is renewed. Renewing takes about 3 minutes:\n\n"
+                    "  1. Go to developers.facebook.com/tools/explorer/?app_id=4598261177127412 signed in "
+                    "as an admin of The Gibby's Page.\n"
+                    "  2. Click Generate Access Token and approve for The Gibby.\n"
+                    "  3. Click the small blue i beside the token, then Open in Access Token Tool, then "
+                    "Extend Access Token at the bottom.\n"
+                    "  4. Copy the long token that appears and paste it into Render as FB_PAGE_TOKEN.\n"
+                    "  5. Also update FB_TOKEN_EXPIRES on Render to the new expiry date the tool shows, "
+                    "so this warning knows when to fire next time.\n", mailer.load_email_config())
+                actions.append(f"facebook key expiry warning ({mark}-day)")
+                break
+    except Exception as e:
+        print(f"[scheduler] fb token warning check failed: {e}")
     c.commit(); c.close()
     if actions: print("[scheduler]", "; ".join(actions))
     return actions
@@ -2688,12 +2745,24 @@ class H(http.server.BaseHTTPRequestHandler):
                 room = b.get("room") or rows[0]["room"]  # calendar slots are roomless; take room from the form
                 slot_time = rows[0]["start"] + " – " + rows[-1]["end"]
                 weeks = len(sessions)
+            # Admins may submit on another instructor's behalf; everyone else is
+            # always themselves, whatever the payload claims.
+            teacher_id = u["id"]
+            on_behalf = None
+            if u.get("role") == "admin" and b.get("instructor_id"):
+                try:
+                    cand = c.execute("SELECT id,name FROM users WHERE id=? AND deleted_at IS NULL",
+                                     (int(b["instructor_id"]),)).fetchone()
+                except (TypeError, ValueError):
+                    cand = None
+                if cand and cand["id"] != u["id"]:
+                    teacher_id, on_behalf = cand["id"], cand["name"]
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
                 length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
                 is_series,session_count,session_dates,age_label,close_days,status,created)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
-                (b.get("title"),u["id"],slot_date,slot_time,room,
+                (b.get("title"),teacher_id,slot_date,slot_time,room,
                  b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
@@ -2725,7 +2794,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 # instructor's list does not show both.
                 try: old = int(b["resubmit_of"])
                 except (TypeError, ValueError): old = 0
-                if old:
+                if old and u.get("role") == "admin":
+                    # Admins can retire anyone's sent-back copy (they may be
+                    # resubmitting it under a different instructor's name).
+                    c.execute("""UPDATE classes SET deleted_at=? WHERE id=?
+                                 AND status='incomplete' AND deleted_at IS NULL""",(now(), old))
+                elif old:
                     c.execute("""UPDATE classes SET deleted_at=? WHERE id=? AND instructor_id=?
                                  AND status='incomplete' AND deleted_at IS NULL""",(now(), old, u["id"]))
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
@@ -2736,8 +2810,11 @@ class H(http.server.BaseHTTPRequestHandler):
                       if a.lower() != (u.get("email") or "").lower()]
             c.commit(); c.close()
             when = (f"{weeks} sessions starting {slot_date}" if is_series else f"{slot_date} {slot_time}")
+            who = f"{u['name']} submitted \"{b.get('title')}\""
+            if on_behalf: who += f" on behalf of {on_behalf}"
             mailer.send(admins, "New class submission",
-                f"{u['name']} submitted \"{b.get('title')}\" for {when}. Review it in the app.")
+                f"{who} for {when}.\n\n"
+                f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
         if p == "/api/admin/reassign-instructor":
             u = self.require("admin")
