@@ -302,6 +302,60 @@ def eventbrite_event_status(eid, cfg):
     except Exception:
         return None
 
+def _structured_html(cls):
+    """Real HTML for the Eventbrite page body via structured content (the legacy
+    description field escapes tags AND collapses newlines). Ages as a heading,
+    then the description with its paragraphs intact, then the FAQ."""
+    import html as _h
+    parts = []
+    ages = ages_open_line(cls)
+    if ages:
+        parts.append(f"<h2>{_h.escape(ages)}</h2>")
+    v = (cls.get("video") or "").strip()
+    if v and "/media/" in v:
+        parts.append(f'<p><a href="{_h.escape(v)}">\U0001F3AC Watch a video preview of this class</a></p>')
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception:
+        sessions = []
+    if cls.get("is_series") and sessions:
+        lis = "".join(f"<li>{_h.escape(s['date'])} · {_h.escape(s['start'])} – {_h.escape(s['end'])}</li>"
+                      for s in sessions)
+        parts.append(f"<p><strong>A {len(sessions)}-week course.</strong> One ticket covers all "
+                     f"{len(sessions)} sessions:</p><ul>{lis}</ul>")
+    for para in (cls.get("description") or "").split("\n\n"):
+        para = para.strip()
+        if para:
+            parts.append("<p>" + _h.escape(para).replace("\n", "<br>") + "</p>")
+    try:
+        faq = json.loads(cls.get("faq") or "[]")
+    except Exception:
+        faq = []
+    rows = "".join(f"<p><strong>{_h.escape(x.get('q','').strip())}</strong><br>{_h.escape(x.get('a','').strip())}</p>"
+                   for x in faq if x.get("q") and x.get("a"))
+    if rows:
+        parts.append(f"<h3>Good to know</h3>{rows}")
+    return "".join(parts)
+
+def _push_structured_content(eid, cls, cfg):
+    """Publish the event page body (and a video player for YouTube/Vimeo links)
+    as a new structured-content version. Never lets a failure block anything."""
+    try:
+        cur = _req(f"https://www.eventbriteapi.com/v3/events/{eid}/structured_content/?purpose=listing",
+                   method="GET", token=cfg["eventbrite_token"])
+        ver = int(cur.get("page_version_number") or 0) + 1
+        modules = [{"type": "text", "data": {"body": {"alignment": "left", "text": _structured_html(cls)}}}]
+        vurl = (cls.get("video") or "").strip()
+        if vurl and any(h in vurl for h in ("youtube.com", "youtu.be", "vimeo.com")):
+            modules.append({"type": "video", "data": {"video": {"url": vurl}}})
+        _req(f"https://www.eventbriteapi.com/v3/events/{eid}/structured_content/{ver}/",
+             token=cfg["eventbrite_token"],
+             json_body={"access_type": "public", "publish": True, "modules": modules})
+        return True
+    except Exception as e:
+        print("[eventbrite] structured content failed (plain description still shows):", e)
+        return False
+
 def update_eventbrite_details(cls, cfg):
     """Push a published class's CURRENT details onto its existing Eventbrite event:
     title, description, capacity, ticket price and sales cutoff. Same listing,
@@ -339,6 +393,7 @@ def update_eventbrite_details(cls, cfg):
                  token=cfg["eventbrite_token"], json_body={"ticket_class": tc_body})
     except Exception as e:
         print("[eventbrite] ticket update failed (event details updated):", e)
+    _push_structured_content(eid, cls, cfg)
     return "updated"
 
 def post_eventbrite(cls, cfg, image_url=None):
@@ -384,21 +439,10 @@ def post_eventbrite(cls, cfg, image_url=None):
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
         json_body={"ticket_class": ticket})
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
-    video_ok = False
-    vurl = (cls.get("video") or "").strip()
-    if vurl and any(h in vurl for h in ("youtube.com", "youtu.be", "vimeo.com")):
-        # A hosted link can embed as a real player. Never let it block the event.
-        try:
-            _req(f"https://www.eventbriteapi.com/v3/events/{eid}/structured_content/1/",
-                 token=cfg["eventbrite_token"], json_body={
-                     "access_type": "public", "publish": True,
-                     "modules": [{"type": "video", "data": {"video": {"url": vurl}}}]})
-            video_ok = True
-        except Exception as e:
-            print("[eventbrite] video attach failed (event is live without it):", e)
+    sc_ok = _push_structured_content(eid, cls, cfg)
     return _ok(eid, "event published"
                + (" with poster attached" if logo_id else "")
-               + (" and video embedded" if video_ok else ""))
+               + (" with formatted page" if sc_ok else ""))
 
 def update_eventbrite_times(cls, cfg):
     """Move an already-published Eventbrite event to the class's current date and
