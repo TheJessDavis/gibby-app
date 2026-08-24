@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "9.6-gibby-venue"
+VERSION = "9.7-overlap-reschedule"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2771,16 +2771,18 @@ class H(http.server.BaseHTTPRequestHandler):
             new_window = (slots[0]["start"], slots[-1]["end"])
             if not (cstart and cend) or not (tmin(new_window[0]) <= tmin(cstart) < tmin(cend) <= tmin(new_window[1])):
                 c.close(); return self.send_json({"error":"Class times must sit inside the new booked window."},400)
+            try: old_ids = [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
+            except Exception: old_ids = []
             begin_immediate(c)
+            # Release the class's own slots FIRST (inside the transaction), so a
+            # move into an overlapping window works; a failed claim rolls this back.
+            if old_ids:
+                oph = ",".join("?"*len(old_ids))
+                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({oph}) AND status='claimed'", old_ids)
             claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
             if claimed != len(ids):
                 c.execute("ROLLBACK"); c.close()
                 return self.send_json({"error":"Someone just took part of that window. Pick another time."},409)
-            try: old_ids = [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
-            except Exception: old_ids = []
-            if old_ids:
-                oph = ",".join("?"*len(old_ids))
-                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({oph}) AND status='claimed'", old_ids)
             old_when = f"{cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time','')}"
             c.execute("""UPDATE classes SET slot_date=?, slot_time=?, room=?, slot_ids=?, class_time=? WHERE id=?""",
                       (slots[0]["date"], f"{new_window[0]} – {new_window[1]}",
