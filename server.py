@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.12.1-marketing-fix"
+VERSION = "10.12.2-mk-remove"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2673,6 +2673,19 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"past_students": regs, "signups": signups, "optouts": optouts,
                                    "audience": len(audience), "recent": past,
                                    "notify_url": f"{mailer.APP_URL}/notify"})
+        if p == "/api/marketing/remove":
+            # Admin takes an address off the announcement audience (e.g. someone
+            # replied asking off, or a test address needs cleaning up).
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            email = (b.get("email") or "").strip().lower()
+            if not email: return self.send_json({"error":"which email?"},400)
+            c = db()
+            c.execute("DELETE FROM marketing_list WHERE email=?", (email,))
+            c.execute("INSERT OR IGNORE INTO marketing_optout(email,created) VALUES(?,?)", (email, now()))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/marketing/send":
             u = self.require("admin")
             if not u: return
