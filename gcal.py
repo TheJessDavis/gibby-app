@@ -351,7 +351,13 @@ def create_event(cls, cfg):
                 return datetime.datetime(year, mon, day, dt.hour, dt.minute)
             start = t(parts[0])
             end = t(parts[1]) if len(parts) > 1 and parts[1] else start + datetime.timedelta(minutes=30)
-            title = f"{cls['title']} ({i} of {n})" if n > 1 else cls["title"]
+            # The room rides in the TITLE so anyone glancing at the calendar sees
+            # which space is taken (and the room-aware sync can never miss it).
+            room = (cls.get("room") or "").strip()
+            if n > 1:
+                title = f"{cls['title']} ({i} of {n}, {room})" if room else f"{cls['title']} ({i} of {n})"
+            else:
+                title = f"{cls['title']} ({room})" if room else cls["title"]
             desc = (f"Instructor: {cls.get('instructor_name','')}\nRoom: {cls.get('room','')}\n"
                     f"{__import__('integrations').ages_open_line(cls) or cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}"
                     + (f"\nSession {i} of {n}" if n > 1 else "") + f"\n\n{cls.get('description','')}")
