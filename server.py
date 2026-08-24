@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "8.9-reschedule"
+VERSION = "9.0-human-approved-email"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1034,6 +1034,10 @@ EMAIL_RULES = {
     "low_alert":         {"statuses": ("approved",),  "future_only": True,  "label": "low-enrollment alert"},
     "followup_request":  {"statuses": ("approved",),  "future_only": False, "label": "follow-up writing request"},
     "headcount":         {"statuses": ("approved",),  "future_only": True,  "label": "confirmed headcount"},
+    # Nudges go to STAFF, never students. Policy: nothing reaches ticket holders
+    # without a person (instructor or admin) pressing the button.
+    "reminder_nudge":    {"statuses": ("approved",),  "future_only": True,  "label": "48h reminder nudge to staff"},
+    "cancel_decision":   {"statuses": ("approved",),  "future_only": True,  "label": "under-minimum decision nudge to admins"},
 }
 
 def email_sent_at(c, class_id, email_type):
@@ -1113,15 +1117,16 @@ def run_scheduler(asof=None):
                     c.execute("UPDATE classes SET low_alerted=1 WHERE id=?",(cls["id"],))
                     actions.append(f"low-enroll alert: {cls['title']}")
             if days == 7 and enrolled < (cls["min_p"] or 0):
-                c.execute("UPDATE classes SET status='cancelled' WHERE id=?",(cls["id"],))
-                audit(c, cls["id"], cls.get("status"), "cancelled", None)   # automated: no actor
-                c.execute("UPDATE registrations SET refunded=1 WHERE class_id=?",(cls["id"],))
-                cancelled = {**cls, "status": "cancelled"}   # guards must see the NEW status
-                subj, body = mailer.tmpl_cancel(cls)
-                send_class_email(c, cancelled, "cancel", students, subj, body, today, cfg)
-                send_class_email(c, cancelled, "cancel_instructor", [instr[0]] if instr else [],
-                                 "Your class was auto-cancelled", body, today, cfg)
-                actions.append(f"AUTO-CANCELLED (refunded {len(students)}): {cls['title']}"); continue
+                # Nothing is cancelled and no student is emailed without a person
+                # deciding. A week out and under minimum, the admins get one urgent
+                # nudge; the dashboard's Keep open / Cancel buttons are the decision.
+                sent, why = send_class_email(c, cls, "cancel_decision", emails_for(c,"WHERE role='admin'"),
+                    f"Decision needed: {cls['title']} is under minimum a week out",
+                    f"\"{cls['title']}\" on {cls['slot_date']} has {enrolled}/{cls['min_p']} registered "
+                    f"with a week to go.\n\nNothing happens on its own: open the app and choose "
+                    f"Keep open or Cancel and refund. Students are only emailed if you cancel.",
+                    today, cfg)
+                if sent: actions.append(f"under-minimum decision nudge: {cls['title']}")
             close_days = int(cls.get("close_days") or 0)
             if close_days and days == close_days:
                 # Registration has just closed. This number will not move now, which
@@ -1146,12 +1151,18 @@ def run_scheduler(asof=None):
                         c.execute("UPDATE classes SET headcount_sent=1 WHERE id=?",(cls["id"],))
                         actions.append(f"final headcount to {instr_row['name']} ({enrolled}): {cls['title']}")
             if days == 2:
-                subj, body = mailer.tmpl_reminder(cls, cfg)
-                sent, why = send_class_email(c, cls, "reminder", students, subj, body, today, cfg)
-                if sent:
-                    c.execute("UPDATE classes SET reminded=1 WHERE id=?",(cls["id"],))
-                    actions.append(f"48h reminder ({len(students)}): {cls['title']}")
-                else: actions.append(f"reminder suppressed for {cls['title']}: {why}")
+                # The student reminder is sent by a PERSON: this nudges the
+                # instructor and admins, and the app's Send reminder button (with
+                # its own once-only guard) is the approval.
+                staff = [instr[0]] if instr else []
+                staff += emails_for(c, "WHERE role='admin'")
+                sent, why = send_class_email(c, cls, "reminder_nudge", staff,
+                    f"48 hours out: send the reminder for {cls['title']}",
+                    f"\"{cls['title']}\" runs on {cls['slot_date']} with {enrolled} registered.\n\n"
+                    f"Look it over in the app and press Send reminder to email the students "
+                    f"their logistics. It only goes out when you press it.",
+                    today, cfg)
+                if sent: actions.append(f"48h reminder nudge to staff: {cls['title']}")
         if end_days == -1:      # the day after the LAST session, not the first
             # The follow-up is written by the instructor, approved by an admin and
             # only then sent. The scheduler just opens the task and nudges them.
@@ -2608,6 +2619,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 gcal_result = f"failed: {e}"
             emailed = 0
             new_when = f"{fresh['slot_date']} {fresh.get('class_time') or fresh['slot_time']}"
+            # Policy: students are only emailed when the admin ticked the box.
+            if not b.get("notify_students"): students = []
             for s in students:
                 first = (s.get("name") or "").split(" ")[0] or "there"
                 if mailer.send(s["email"], f"New date for {fresh['title']}",

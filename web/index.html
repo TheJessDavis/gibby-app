@@ -665,7 +665,8 @@ async function submitReschedule(){
   if(tmin(en)<=tmin(st)) return alert('The class has to end after it starts.');
   try{
     const r=await api('/api/classes/'+RESCHED.id+'/reschedule','POST',
-      {slot_ids:window.__RS_IDS, class_start:st, class_end:en});
+      {slot_ids:window.__RS_IDS, class_start:st, class_end:en,
+       notify_students: !!($('#r_notify')&&$('#r_notify').checked)});
     closeResched();
     alert(`Moved!\n\nOld: ${r.old}\nNew: ${r.new}\n\nEventbrite: ${r.eventbrite}\nCalendar: ${r.calendar}`
       + (r.students_emailed?`\nStudents emailed: ${r.students_emailed}`:''));
@@ -2043,7 +2044,10 @@ function confirmSel(){
       <p class="sub" style="margin:0 0 10px">${esc(sel[0].date)} · booked ${esc(ws)} – ${esc(we)} · ${esc(confirmSelRoom(sel[0].room))}</p>
       <label>Class starts</label><select id="r_cstart">${timeOpts(ws,we,'start')}</select>
       <label>Class ends</label><select id="r_cend">${timeOpts(ws,we,'end')}</select>
-      <div class="hint" style="margin-top:8px">The time either side is setup and cleanup. Eventbrite, the calendar and the website all update in place; ticket holders are emailed the new time.</div>
+      <label class="chk" style="display:flex;gap:8px;align-items:center;margin-top:10px">
+        <input type="checkbox" id="r_notify" checked>
+        <span>Email the ${RESCHED.enrolled||0} ticket holder${(RESCHED.enrolled||0)===1?'':'s'} the new time</span></label>
+      <div class="hint" style="margin-top:8px">The time either side is setup and cleanup. Eventbrite, the calendar and the website all update in place. Nothing is emailed to students unless the box is ticked.</div>
       <div class="two" style="margin-top:12px">
         <button class="btn ghost" onclick="closeResched()">Cancel</button>
         <button class="btn green" onclick="submitReschedule()">Move the class</button></div></div>`;
