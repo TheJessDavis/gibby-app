@@ -583,14 +583,27 @@ def sync_attendees(cls, cfg=None, _req_fn=None):
     if not cfg.get("live") and not _req_fn: return None
     return [normalize_attendee(a) for a in fetch_attendees(event_id, cfg, _req_fn)]
 
+def _fb_page_token(cfg):
+    """FB_PAGE_TOKEN may hold either the Page's own token or a long-lived USER
+    token from Facebook's Access Token Debugger (the easy one to set up).
+    Posting must use the Page token, and Facebook hands it to any admin's user
+    token via ?fields=access_token, so resolve it here. Falls back to the
+    configured token unchanged when it already is the Page token."""
+    try:
+        res = _req(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}?fields=access_token",
+                   method="GET", token=cfg["fb_page_token"])
+        return res.get("access_token") or cfg["fb_page_token"]
+    except Exception:
+        return cfg["fb_page_token"]
+
 def facebook_check(cfg):
-    """Verify the Facebook keys: the token must belong to the configured Page
-    and carry permission to post. Returns the Page's name so the admin can see
-    the right Page is hooked up."""
+    """Verify the Facebook keys: the token must reach the configured Page and
+    carry permission to post. Returns the Page's name so the admin can see the
+    right Page is hooked up."""
     if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
         return {"ok": False, "error": "FB_PAGE_ID and FB_PAGE_TOKEN are not both set on Render yet."}
     try:
-        res = _req(f"https://graph.facebook.com/v23.0/me?fields=id,name",
+        res = _req(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}?fields=id,name,access_token",
                    method="GET", token=cfg["fb_page_token"])
     except urllib.error.HTTPError as e:
         try:
@@ -600,10 +613,11 @@ def facebook_check(cfg):
         return {"ok": False, "error": f"Facebook rejected the token: {msg}"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
-    matches = str(res.get("id")) == str(cfg["fb_page_id"])
-    return {"ok": matches, "page_id": res.get("id"), "page_name": res.get("name"),
-            "configured_page_id": cfg["fb_page_id"], "page_id_matches": matches,
-            **({} if matches else {"error": "The token belongs to a different Page than FB_PAGE_ID."})}
+    can_post = bool(res.get("access_token"))
+    return {"ok": can_post, "page_id": res.get("id"), "page_name": res.get("name"),
+            "configured_page_id": cfg["fb_page_id"], "page_id_matches": True,
+            **({} if can_post else
+               {"error": "The token can see the Page but cannot post to it. Regenerate it with the pages_manage_posts permission."})}
 
 def post_facebook(cls, cfg, link=None):
     """Post the class to the Gibby's Facebook Page. Meta removed Event creation
@@ -655,20 +669,21 @@ def post_facebook(cls, cfg, link=None):
     if link:
         msg += f"\n\nRegister: {link}"
     try:
+        page_tok = _fb_page_token(cfg)
         m = re.match(r"^data:image/([a-z]+);base64,(.*)$", cls.get("poster") or "", re.S)
         if m:
             import base64 as _b64
             data = _b64.b64decode(m.group(2))
             body = _multipart_post(
                 f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/photos",
-                {"caption": msg, "published": "true", "access_token": cfg["fb_page_token"]},
+                {"caption": msg, "published": "true", "access_token": page_tok},
                 "source", "poster." + ("jpg" if m.group(1) == "jpeg" else m.group(1)), data)
             res = json.loads(body.decode() or "{}")
             return _ok(res.get("post_id") or res.get("id"),
                        "posted to the Facebook Page with the poster")
         res = _req(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/feed",
             form={"message": msg, **({"link": link} if link else {}),
-                  "access_token": cfg["fb_page_token"]})
+                  "access_token": page_tok})
         return _ok(res.get("id"), "posted to the Facebook Page")
     except urllib.error.HTTPError as e:
         # Surface Facebook's own error message instead of a bare HTTP 400.
