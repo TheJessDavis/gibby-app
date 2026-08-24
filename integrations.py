@@ -311,6 +311,8 @@ def _structured_html(cls):
     ages = ages_open_line(cls)
     if ages:
         parts.append(f"<h2>{_h.escape(ages)}</h2>")
+    if cls.get("donation_based"):
+        parts.append("<p><strong>Donation-based entry: pay what you want.</strong></p>")
     v = (cls.get("video") or "").strip()
     if v and "/media/" in v:
         parts.append(f'<p><a href="{_h.escape(v)}">\U0001F3AC Watch a video preview of this class</a></p>')
@@ -379,8 +381,11 @@ def update_eventbrite_details(cls, cfg):
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", token=cfg["eventbrite_token"],
          json_body={"event": ev_body})
     try:
-        tc_body = {"cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}",
-                   "quantity_total": cls.get("max_p")}
+        if cls.get("donation_based"):
+            tc_body = {"quantity_total": cls.get("max_p")}
+        else:
+            tc_body = {"cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}",
+                       "quantity_total": cls.get("max_p")}
         close_days = int(cls.get("close_days") or 0)
         start, _end = _iso_times(cls, cfg)
         if close_days > 0 and start:
@@ -424,8 +429,13 @@ def post_eventbrite(cls, cfg, image_url=None):
     ev = _req(f"https://www.eventbriteapi.com/v3/organizations/{cfg['eventbrite_org_id']}/events/",
         token=cfg["eventbrite_token"], json_body={"event": event})
     eid = ev.get("id")
-    ticket = {"name": "Admission", "quantity_total": cls.get("max_p"),
-              "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}
+    if cls.get("donation_based"):
+        # Pay-what-you-want: Eventbrite's native donation ticket asks the buyer
+        # to name their amount.
+        ticket = {"name": "Donation", "donation": True, "quantity_total": cls.get("max_p")}
+    else:
+        ticket = {"name": "Admission", "quantity_total": cls.get("max_p"),
+                  "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}
     # Registration cutoff. sales_end is a writable field on the ticket class, so
     # Eventbrite itself stops selling - the instructor gets a headcount that cannot
     # then change under them.

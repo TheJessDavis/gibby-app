@@ -1841,6 +1841,7 @@ function openLiveEdit(id){
     <div class="two"><div><label>Max</label><input id="e_max" type="number" value="${c.max_p}"></div><div><label>Min</label><input id="e_min" type="number" value="${c.min_p}"></div></div>
     <div class="two"><div><label>Ticket ($)</label><input id="e_ticket" type="number" value="${c.ticket_price}"></div><div><label>Instructor pay ($)</label><input id="e_pay" type="number" value="${c.instructor_pay}"></div></div>
     <label>Pay model</label><select id="e_paym"><option value="flat" ${c.pay_model!=='split'?'selected':''}>Flat fee</option><option value="split" ${c.pay_model==='split'?'selected':''}>60% of ticket sales</option></select>
+    <label class="chk" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="e_donate" ${c.donation_based?'checked':''}> Donation-based (students pay what they want)</label>
     <label>Registration closes</label><select id="e_close">${[0,1,2,3,5,7,14].map(d=>`<option value="${d}" ${d===(c.close_days||0)?'selected':''}>${d===0?'Never (sell until start)':d+' day'+(d===1?'':'s')+' before'}</option>`).join('')}</select>
     <label>Graphic headline</label><input id="e_head" value="${esc(c.headline||'')}">
     <label>Script subtitle</label><input id="e_sub" value="${esc(c.subtitle||'')}">
@@ -1855,7 +1856,8 @@ async function submitLiveEdit(id){
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
     alcohol:alc, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
-    close_days:+$('#e_close').value, headline:$('#e_head').value, subtitle:$('#e_sub').value};
+    close_days:+$('#e_close').value, headline:$('#e_head').value, subtitle:$('#e_sub').value,
+    donation_based: !!($('#e_donate')&&$('#e_donate').checked)};
   try{
     const r=await api('/api/classes/'+id+'/update-live','POST',body);
     alert(`Saved.\n\nEventbrite: ${r.eventbrite}\nCalendar: ${r.calendar}\nWebsite: updates itself.`);
@@ -2210,6 +2212,7 @@ function applyDraft(p){
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
   if($('#f_own')) $('#f_own').checked = !!p.own_materials;
   if($('#f_free')) $('#f_free').checked = !!p.waives_pay;
+  if($('#f_donate')){ $('#f_donate').checked = !!p.donation_based; donateToggle(); }
   const pick=(seg,val)=>{ const s=$(seg); if(!s) return;
     s.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===val)); };
   pick('#f_alc', p.alcohol?'yes':'no');
@@ -2384,6 +2387,7 @@ function openForm(slot, draftPayload){
       <button data-v="split" onclick="segPick(this)">60% of ticket sales</button></div>
     <div class="hint">Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
       ticket sales after materials, so it rises and falls with enrollment.</div>
+    <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_donate" onchange="donateToggle()"> This event is donation-based (students pay what they want)</label>
     <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_free" onchange="calc()"> I'm donating my teaching time for this class</label>
     <div class="hint" id="freenote" style="display:none"></div>
     <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
@@ -2530,10 +2534,15 @@ function validateForm(){
   const mat=num('c_mat');
   if(mat===null || mat<0) add('#c_mat','Material cost per student','materials');
   const ticket=num('f_ticket'), pay=num('f_pay');
-  if(!(ticket>0)) add('#f_ticket','Ticket price','ticket');
+  const donation=$('#f_donate')&&$('#f_donate').checked;
+  if(!donation && !(ticket>0)) add('#f_ticket','Ticket price','ticket');
   if(!($('#f_free')&&$('#f_free').checked) && !(pay>0)) add('#f_pay','Your pay','pay');
-
   return miss;
+}
+function donateToggle(){
+  const on=$('#f_donate')&&$('#f_donate').checked, t=$('#f_ticket');
+  if(t){ t.disabled=!!on; if(on) t.value=''; }
+  calc();
 }
 let SUBMIT_TRIED=false, AUTOSAVE_T=null;
 function markMissing(miss){
@@ -2597,6 +2606,7 @@ function collectForm(){
     alcohol: seg('#f_alc')==='yes', max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     waives_pay: !!($('#f_free')&&$('#f_free').checked),
+    donation_based: !!($('#f_donate')&&$('#f_donate').checked),
     resubmit_of: RESUB_OLD_ID||undefined,
     links:$('#f_links').value, video:VIDEO_URL, faq:collectFaq(), photo:PHOTO, close_days:+($('#f_close')?$('#f_close').value:0),
     pay_model:(()=>{const g=$('#f_paym');const on=g&&g.querySelector('.on');return on?on.dataset.v:'flat';})(),
@@ -2704,7 +2714,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

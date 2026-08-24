@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.1-embed-matches-site"
+VERSION = "10.2-donation-based"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -152,6 +152,7 @@ def init_db():
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),
+                     ("donation_based","INTEGER DEFAULT 0"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
                      ("session_dates","TEXT"),("age_label","TEXT"),
@@ -1567,7 +1568,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                 + '" style="width:100%;border-radius:12px;margin-top:8px"></video>')
                 price = cls.get("ticket_price")
                 ages = (cls.get("age_label") or cls.get("age_range") or "").replace("Ages ", "Ages: ")
-                meta = e(ages) + ((" &nbsp;I&nbsp; $" + ("%g" % price)) if price else "")
+                meta = e(ages) + (" &nbsp;I&nbsp; Donation-based" if cls.get("donation_based")
+                                   else ((" &nbsp;I&nbsp; $" + ("%g" % price)) if price else ""))
                 desc = "".join("<p>" + e(par.strip()) + "</p>"
                                for par in (cls.get("description") or "").split("\n\n") if par.strip())
                 return ('<div class="c">' + pic
@@ -1587,7 +1589,7 @@ class H(http.server.BaseHTTPRequestHandler):
             for d, cls, _eb in items:
                 s = (f"FALL {d.year}" if d.month >= 8 else f"SPRING {d.year}")
                 if s not in seasons: seasons.append(s)
-            heading = ('<h2 class="season">' + " / ".join(seasons) + "</h2>") if seasons else ""
+            heading = ""   # the site's own season headings label the group
             page = f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Classes at The Gibby</title>
@@ -2548,7 +2550,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if not (mx and mx > 0): miss.append("max_p")
             if not (mn and mn > 0): miss.append("min_p")
             if mx and mn and mn > mx: miss.append("min_p (cannot exceed max)")
-            if not (_num("ticket_price") or 0) > 0: miss.append("ticket_price")
+            donation = 1 if b.get("donation_based") else 0
+            if not donation and not (_num("ticket_price") or 0) > 0: miss.append("ticket_price")
             faq = b.get("faq")
             if faq is not None:
                 if not isinstance(faq, list):
@@ -2652,6 +2655,10 @@ class H(http.server.BaseHTTPRequestHandler):
                 # materials reimbursement, or zero), never the split formula.
                 c.execute("""UPDATE classes SET waives_pay=1, pay_model='flat',
                              instructor_pay=COALESCE(instructor_pay,0) WHERE id=?""", (new_id,))
+            if donation:
+                # Pay-what-you-want entry: Eventbrite gets a donation ticket, the
+                # website says donation-based, and no ticket price is required.
+                c.execute("UPDATE classes SET donation_based=1, ticket_price=COALESCE(ticket_price,0) WHERE id=?", (new_id,))
             elif pm in ("flat", "split"):
                 c.execute("UPDATE classes SET pay_model=? WHERE id=?", (pm, new_id))
             audit(c, c.execute("SELECT last_insert_rowid()").fetchone()[0], None, "pending", u["id"])
@@ -2674,6 +2681,17 @@ class H(http.server.BaseHTTPRequestHandler):
             mailer.send(admins, "New class submission",
                 f"{u['name']} submitted \"{b.get('title')}\" for {when}. Review it in the app.")
             return self.send_json({"ok":True})
+        if p == "/api/admin/reassign-instructor":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            email = (b.get("email","") or "").strip().lower()
+            c = db()
+            usr = c.execute("SELECT id,name FROM users WHERE email=? AND deleted_at IS NULL",(email,)).fetchone()
+            if not usr: c.close(); return self.send_json({"error":"no active account with that email"},404)
+            n = c.execute("UPDATE classes SET instructor_id=? WHERE id=?",(usr["id"], int(b.get("class_id",0)))).rowcount
+            c.commit(); c.close()
+            return self.send_json({"ok":True,"reassigned":n,"to":usr["name"]})
         if p == "/api/admin/purge-demo-registrations":
             # One-shot cleanup: demo-seeded students carry no external_id (real
             # Eventbrite attendees always do). Removing them fixes enrollment
@@ -2741,6 +2759,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("pay_model") in ("flat","split"):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
             if not sets: c.close(); return self.send_json({"error":"Nothing to change."},400)
             vals.append(cid)
             c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
