@@ -113,7 +113,8 @@ def tmpl_followup(cls, cfg, attended=True, note="", instructor_name=""):
                    f"and made something you love.")
         ask = (f"If you enjoyed it, a quick Google review means the world to us: "
                f"{cfg['google_review_url']}\n\nAnd if you took any photos, we would love for you "
-               f"to share them.")
+               f"to share them.\n\nP.S. If the class made your week, reply with a sentence we can "
+               f"share; a few words from a real student help more than any ad.")
     else:
         # Deliberately ambiguous: this list mixes people who came with people who
         # only held a ticket, and we cannot tell them apart.

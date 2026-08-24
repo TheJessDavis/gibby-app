@@ -572,6 +572,9 @@ def normalize_attendee(a):
         # rather than "nobody came".
         "checked_in": bool(a.get("checked_in")) or any(
             (b or {}).get("status") == "used" for b in (a.get("barcodes") or [])),
+        # Which channel sold the ticket: our aff= codes (fb/site/descene/flyer)
+        # come back on the attendee as 'affiliate'.
+        "source": (a.get("affiliate") or "").strip(),
     }
 
 def sync_attendees(cls, cfg=None, _req_fn=None):
@@ -637,7 +640,7 @@ def post_facebook(cls, cfg, link=None):
         except Exception:
             ext = {}
         if ext.get("eventbrite_id"):
-            link = f"https://www.eventbrite.com/e/{ext['eventbrite_id']}"
+            link = f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=fb"
     if not link and cfg.get("eventbrite_token"):
         # Eventbrite is configured but its job has not landed yet. Raising makes
         # the queue retry with backoff, so the post goes out WITH the link.
@@ -708,7 +711,7 @@ def promote_facebook(cls, cfg):
         ext = json.loads(cls.get("external_ids") or "{}")
     except Exception:
         ext = {}
-    link = (f"https://www.eventbrite.com/e/{ext['eventbrite_id']}"
+    link = (f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=fb"
             if ext.get("eventbrite_id") else "https://theeverett.org/artworkshops")
     try:
         dp = (cls.get("slot_date") or "").split(", ")[-1].strip().split()
@@ -760,6 +763,63 @@ def promote_facebook(cls, cfg):
             return _no(f"Facebook said: {err.get('message')} (code {err.get('code')})")
         except Exception:
             return _no(f"Facebook returned HTTP {e.code}")
+
+def post_instagram(cls, cfg, image_url):
+    """Cross-post the class to the Instagram business account linked to the
+    Facebook Page. Needs (a) an IG business account linked to the Page and
+    (b) a token carrying the instagram permissions; otherwise it skips with a
+    clear message. Instagram requires a PUBLIC image URL, so the app serves the
+    landscape poster at /class-poster/{id}."""
+    if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
+        return _no("skipped: no Facebook config")
+    if not cfg["live"]:
+        return _ok("ig-dryrun", "dry-run (would cross-post to Instagram)")
+    page_tok = _fb_page_token(cfg)
+    try:
+        r = _req(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}?fields=instagram_business_account",
+                 method="GET", token=page_tok)
+    except Exception:
+        return _no("skipped: could not read the Page's Instagram link (token may lack Instagram permissions)")
+    ig = (r.get("instagram_business_account") or {}).get("id")
+    if not ig:
+        return _no("skipped: no Instagram business account is linked to the Facebook Page "
+                   "(or the token lacks Instagram permissions)")
+    if not image_url:
+        return _no("skipped: no poster image to post")
+    try:
+        dp = (cls.get("slot_date") or "").split(", ")[-1].strip().split()
+        mon, day = _MON[dp[0]], int(dp[1])
+        year = _season_year(mon)
+        wd = datetime.date(year, mon, day).strftime("%A")
+        months = ["January","February","March","April","May","June","July",
+                  "August","September","October","November","December"]
+        span = (cls.get("class_time") or cls.get("slot_time") or "").strip()
+        header = f"{wd}, {months[mon-1]} {day}, {year}" + (f" · {span}" if span else "")
+    except Exception:
+        header = f"{cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time') or ''}".strip()
+    ages = ages_open_line(cls)
+    if cls.get("donation_based"): price = "Donation-based"
+    elif cls.get("ticket_price"): price = "$%g per person" % cls["ticket_price"]
+    else: price = "Free"
+    caption = (f"{cls.get('title','')}\n\n{header}\n"
+               f"Gibby Center for the Arts, 51 W Main St, Middletown\n{price}"
+               + (f"\n{ages}" if ages else "")
+               + "\n\nRegister through the link in our bio or at theeverett.org/artworkshops"
+               + "\n\n#GibbyCenterForTheArts #MiddletownDE #ArtClass #DelawareArts")
+    try:
+        media = _req(f"https://graph.facebook.com/v23.0/{ig}/media",
+                     form={"image_url": image_url, "caption": caption, "access_token": page_tok})
+        pub = _req(f"https://graph.facebook.com/v23.0/{ig}/media_publish",
+                   form={"creation_id": media.get("id"), "access_token": page_tok})
+        return _ok(pub.get("id"), "posted to Instagram")
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode()).get("error") or {}
+            raise RuntimeError(f"Instagram said: {err.get('message')} (code {err.get('code')})")
+        except RuntimeError:
+            raise
+        except Exception:
+            raise RuntimeError(f"Instagram returned HTTP {e.code}")
 
 def post_wix(cls, cfg):
     if not (cfg["wix_api_key"] and cfg["wix_site_id"]):
@@ -847,7 +907,7 @@ def post_descene(cls, cfg):
         "presenterName": cls.get("instructor_name") or "",
         "presenterID": "",
         "infoURL": "https://theeverett.org/artworkshops",
-        "ticketURL": (f"https://www.eventbrite.com/e/{eb}" if eb else ""),
+        "ticketURL": (f"https://www.eventbrite.com/e/{eb}?aff=descene" if eb else ""),
         "price": price, "lo": lo, "hi": hi,
         "boxoffice": "302-378-2932",
         "description": desc,

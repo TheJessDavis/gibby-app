@@ -545,7 +545,7 @@ function renderProfile(){
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
 const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
-  ['money','\u{1F4B0}','Money'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
+  ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
   document.body.classList.remove('formopen'); closeMore();
   const b=$('#bnav'); if(!b) return;
@@ -835,7 +835,7 @@ async function renderAdmin(tab){
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
     templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
-    all:adminAll, money:adminMoney, people:adminPeople, audit:adminAudit, archive:adminArchive};
+    all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
   return boundary('admin:'+tab, '#tab', fn);
@@ -1286,6 +1286,46 @@ async function archiveRecord(table, id, what){
 const pct = n => (n*100).toFixed(0)+'%';
 // whole pounds, and a minus sign that sits outside the currency symbol
 const money0 = n => (n<0?'-':'')+'$'+Math.abs(Math.round(+n||0)).toLocaleString();
+async function adminMarketing(){
+  const d = await api('/api/marketing');
+  // Prefill with the upcoming approved classes so the announcement writes itself.
+  let upcoming = [];
+  try{
+    const all = await api('/api/classes/all');
+    upcoming = (all.classes||[]).filter(c=>c.status==='approved');
+  }catch(_){}
+  const lines = upcoming.map(c=>{
+    let url=''; try{ const ex=typeof c.external_ids==='string'?JSON.parse(c.external_ids||'{}'):(c.external_ids||{});
+      if(ex.eventbrite_id) url='https://www.eventbrite.com/e/'+ex.eventbrite_id+'?aff=email'; }catch(_){}
+    return `${c.title}\n${c.slot_date}${c.class_time?' · '+c.class_time:''}${c.donation_based?' · Donation-based':(c.ticket_price?' · $'+c.ticket_price:'')}\n${url}`;
+  }).join('\n\n');
+  const draft = `Hi from the Gibby Center for the Arts!\n\nNew art workshops are open for registration:\n\n${lines}\n\nSee everything coming up: https://theeverett.org/artworkshops\n\nSee you at The Gibby!`;
+  $('#tab').innerHTML = `<h2>Class <em>announcements</em></h2>
+    <p class="sub">One email to everyone who has ever taken a class, plus the notify-me list. You press the button; nothing sends on its own.</p>
+    <div class="card">
+      <div class="row"><h3 style="font-size:1rem">Your audience</h3><span class="pill appr">${d.audience} people</span></div>
+      <div class="meta" style="margin-top:6px">${d.past_students} past student${d.past_students===1?'':'s'} · ${d.signups} notify-me signup${d.signups===1?'':'s'} · ${d.optouts} unsubscribed</div>
+      <div class="meta" style="margin-top:6px">Grow it: share the signup page <b>${esc(d.notify_url)}</b> on Facebook and flyers.</div>
+    </div>
+    <div class="card">
+      <label style="margin-top:0">Subject</label><input id="mk_subj" value="New classes at The Gibby">
+      <label>Message</label><textarea id="mk_body" style="min-height:220px">${esc(draft)}</textarea>
+      <div class="hint">Each person gets their own copy with an unsubscribe link. Edit freely; the draft above is just the upcoming classes.</div>
+      <div class="err" id="mkerr"></div>
+      <button class="btn dark" style="margin-top:10px" onclick="sendAnnouncement()">Send to ${d.audience} people</button>
+    </div>
+    ${d.recent.length?`<label style="margin-top:16px">Past announcements</label>`+d.recent.map(r=>`
+      <div class="card"><div class="row"><div class="meta">${esc(r.sent_at)}</div><span class="pill appr">${r.recipients} sent</span></div></div>`).join(''):''}`;
+}
+async function sendAnnouncement(){
+  const subj=$('#mk_subj').value.trim(), body=$('#mk_body').value.trim();
+  if(!confirm('Send this announcement to everyone on the list right now?')) return;
+  try{
+    const r=await api('/api/marketing/send','POST',{subject:subj,body});
+    alert('Sending to '+r.queued+' people in the background. Each email carries its own unsubscribe link.');
+    renderAdmin('marketing');
+  }catch(e){ const x=$('#mkerr'); x.textContent=(e.data&&e.data.error)||e.message; x.classList.add('show'); }
+}
 async function adminMoney(){
   const d = await api('/api/report/money');
   const t = d.totals;
@@ -1295,8 +1335,15 @@ async function adminMoney(){
         <div class="sub2">${r.runs} ${r.runs===1?unit:unit+'s'} &middot; ${pct(r.fill)} full &middot; ${pct(r.margin)} margin</div></div>
       <div class="amt"><b class="${r.net_per_run>=0?'pos':'neg'}">${money0(r.net_per_run)}</b><span>avg per class</span></div>
     </div>`).join('') : '<div class="muted">Nothing has run yet.</div>';
+  const CHN={fb:'Facebook posts',site:'Website',descene:'DelawareScene',flyer:'Flyer QR codes',email:'Announcement emails',direct:'Direct / other'};
+  const chanRow = (d.channels&&d.channels.length&&d.channels.some(x=>x.channel!=='direct'))
+    ? `<div class="card"><h3 style="font-size:1rem">Where tickets come from</h3>
+       <div class="meta" style="margin-top:6px">${d.channels.map(x=>`${esc(CHN[x.channel]||x.channel)}: <b>${x.tickets}</b>`).join(' · ')}</div>
+       <div class="meta" style="margin-top:4px">Counted from the tracking tag on each Register link, reported back by Eventbrite.</div></div>`
+    : '';
   $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
     <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.</p>
+    ${chanRow}
     <div class="stotals">
       <div><b>${t.classes}</b><span>classes run</span></div>
       <div><b>${money0(t.revenue)}</b><span>revenue</span></div>
@@ -1414,6 +1461,32 @@ async function testFacebook(){
   const r=await api('/api/test-facebook','POST',{});
   if(!r.ok){ alert('Facebook check failed:\n'+(r.error||'unknown error')); return; }
   alert('Token works! It posts as the Page:\n\n'+r.page_name+'  (Page ID '+r.page_id+')\n\nThat matches FB_PAGE_ID on the server. Publishing will now post to this Page.');
+}
+
+function printFlyer(id){
+  const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
+  let url='https://theeverett.org/artworkshops';
+  try{ const ex=typeof c.external_ids==='string'?JSON.parse(c.external_ids||'{}'):(c.external_ids||{});
+    if(ex.eventbrite_id) url='https://www.eventbrite.com/e/'+ex.eventbrite_id+'?aff=flyer'; }catch(_){}
+  const img = c.poster_portrait || c.poster || c.photo || '';
+  const price = c.donation_based ? 'Donation-based' : (c.ticket_price ? ('$'+c.ticket_price+' per person') : 'Free');
+  const qr = 'https://api.qrserver.com/v1/create-qr-code/?size=340x340&data='+encodeURIComponent(url);
+  const w = window.open('','_blank');
+  w.document.write(`<!doctype html><html><head><title>${esc(c.title)} flyer</title><style>
+    @page{size:letter;margin:0.5in} body{font-family:Georgia,serif;color:#1E160A;text-align:center;margin:0}
+    img.p{max-width:100%;max-height:5.4in;object-fit:contain} h1{font-size:34px;margin:14px 0 4px}
+    .when{font-size:22px;font-weight:700;margin:4px 0}.meta{font-size:17px;margin:3px 0}
+    .qr{margin-top:14px}.qr img{width:2.1in;height:2.1in}.scan{font-size:15px;font-weight:700;margin-top:6px}
+    .venue{font-size:15px;margin-top:10px;color:#4A4032}</style></head><body>
+    ${img?`<img class="p" src="${img}">`:''}
+    <h1>${esc(c.title)}</h1>
+    <div class="when">${esc(c.slot_date||'')}${c.class_time?' · '+esc(c.class_time):''}</div>
+    <div class="meta">${esc(c.age_label||c.age_range||'')}${(c.age_label||c.age_range)?' · ':''}${esc(price)}</div>
+    <div class="qr"><img src="${qr}" onload="setTimeout(function(){window.print()},300)"></div>
+    <div class="scan">Scan to register</div>
+    <div class="venue">Gibby Center for the Arts · 51 W Main St, Middletown, DE</div>
+    </body></html>`);
+  w.document.close();
 }
 
 /* ---------------- graphic preview ---------------- */
@@ -1745,7 +1818,8 @@ function cardCls(c){
         <button class="btn ghost" onclick="document.getElementById('pf${c.id}').click()">${c.poster?'Replace':'Attach'} Eventbrite poster</button>
         <button class="btn ghost" onclick="document.getElementById('pp${c.id}').click()">${c.poster_portrait?'Replace':'Attach'} website poster</button></div>
       <input id="pf${c.id}" type="file" accept="image/png,image/jpeg" class="hidden" onchange="attachPoster(${c.id}, event, 'landscape')">
-      <input id="pp${c.id}" type="file" accept="image/png,image/jpeg" class="hidden" onchange="attachPoster(${c.id}, event, 'portrait')">`:''}
+      <input id="pp${c.id}" type="file" accept="image/png,image/jpeg" class="hidden" onchange="attachPoster(${c.id}, event, 'portrait')">
+      <button class="btn ghost" style="margin-top:8px" onclick="printFlyer(${c.id})">Print flyer (with QR code)</button>`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
     ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="archiveRecord('classes',${c.id},'class')">Archive class</button>`:''}
     <div id="gfx${c.id}"></div>
@@ -2803,7 +2877,7 @@ async function submitClassNow(){
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
- 'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
+ 'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 

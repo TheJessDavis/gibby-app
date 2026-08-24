@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.11.1-resubmit-keeps-slot"
+VERSION = "10.12.0-marketing"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -144,6 +144,16 @@ def init_db():
     except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE slots ADD COLUMN source TEXT DEFAULT 'manual'")
     except sqlite3.OperationalError: pass
+    # Which channel sold the ticket (Eventbrite aff= code: fb/site/descene/flyer).
+    try: c.execute("ALTER TABLE registrations ADD COLUMN source TEXT DEFAULT ''")
+    except sqlite3.OperationalError: pass
+    # Marketing: the notify-me interest list, opt-outs, and a one-value meta store
+    # (holds the unsubscribe-link signing key).
+    c.execute("""CREATE TABLE IF NOT EXISTS marketing_list(
+        email TEXT PRIMARY KEY, name TEXT, source TEXT, created TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
+        email TEXT PRIMARY KEY, created TEXT)""")
+    c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
     for col in ("promoted","reminded","followed_up","low_alerted"):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
@@ -268,15 +278,16 @@ def sync_registrations(class_id, _req_fn=None):
         existing = c.execute("SELECT id FROM registrations WHERE class_id=? AND external_id=?",
                              (class_id, ext)).fetchone() if ext else None
         if existing:
-            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=?,checked_in=? WHERE id=?""",
+            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=?,checked_in=?,source=? WHERE id=?""",
                       (a["name"], a["email"], a["phone"], 1 if a["refunded"] else 0,
-                       1 if a.get("checked_in") else 0, existing["id"]))
+                       1 if a.get("checked_in") else 0, a.get("source") or "", existing["id"]))
             updated += 1
         else:
-            c.execute("""INSERT INTO registrations(class_id,name,email,phone,refunded,checked_in,external_id,created)
-                         VALUES(?,?,?,?,?,?,?,?)""",
+            c.execute("""INSERT INTO registrations(class_id,name,email,phone,refunded,checked_in,external_id,source,created)
+                         VALUES(?,?,?,?,?,?,?,?,?)""",
                       (class_id, a["name"], a["email"], a["phone"],
-                       1 if a["refunded"] else 0, 1 if a.get("checked_in") else 0, ext or None, now()))
+                       1 if a["refunded"] else 0, 1 if a.get("checked_in") else 0, ext or None,
+                       a.get("source") or "", now()))
             added += 1
     total = c.execute("SELECT COUNT(*) FROM registrations WHERE class_id=? AND refunded=0",
                       (class_id,)).fetchone()[0]
@@ -457,6 +468,7 @@ CSRF_EXEMPT = {
     "/api/forgot",        # anonymous
     "/api/reset",         # authenticated by the emailed reset token
     "/api/client-error",  # error boundaries must be able to report before sign-in
+    "/api/notify-signup", # public interest-list form on /notify
 }
 
 def session_csrf(token):
@@ -630,7 +642,7 @@ def start_graphic_review(c, cls, actor_id=None, spawn=True):
 BACKOFF = [60, 300, 900, 3600]        # 1 min, 5 min, 15 min, 1 hour
 MAX_ATTEMPTS = len(BACKOFF) + 1       # first try + 4 retries
 QUEUE_TICK = 20                       # seconds between sweeps
-PLATFORM_LABEL = {"canva":"Canva", "eventbrite":"Eventbrite", "facebook":"Facebook",
+PLATFORM_LABEL = {"canva":"Canva", "eventbrite":"Eventbrite", "facebook":"Facebook", "instagram":"Instagram",
                   "wix":"Wix", "descene":"DelawareScene", "gcal":"Google Calendar"}
 
 def refresh_publishing_flag(c, class_id):
@@ -652,7 +664,7 @@ def queue_publish(class_id, image_url=None, instructor_name=""):
     """Queue every outbound post for a newly published class."""
     c = db()
     # No Wix: the site is Squarespace, reached through the /embed iframe instead.
-    for platform in ("eventbrite", "facebook", "descene", "gcal"):
+    for platform in ("eventbrite", "facebook", "instagram", "descene", "gcal"):
         payload = {}
         if platform == "eventbrite": payload["image_url"] = image_url
         if platform in ("gcal", "descene"): payload["instructor_name"] = instructor_name
@@ -678,6 +690,9 @@ def _run_platform(platform, cls, payload):
             res = integrations.post_eventbrite(cls, cfg, payload.get("image_url"))
         elif platform == "facebook":
             res = integrations.post_facebook(cls, cfg, None)
+        elif platform == "instagram":
+            res = integrations.post_instagram(cls, cfg,
+                f"{mailer.APP_URL}/class-poster/{cls['id']}")
         elif platform == "wix":
             res = integrations.post_wix(cls, cfg)
         elif platform == "descene":
@@ -1190,6 +1205,24 @@ def run_scheduler(asof=None):
                     f"Keep open or Cancel and refund. Students are only emailed if you cancel.",
                     today, cfg)
                 if sent: actions.append(f"under-minimum decision nudge: {cls['title']}")
+            if days == 7 and enrolled < (cls["max_p"] or 0):
+                # A week out and not full: one automatic 'spots still open' post
+                # on the Facebook Page. Not a student email, so no approval gate;
+                # the email_log claim keeps it once-only.
+                try:
+                    c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(?,?,?,0)",
+                              (cls["id"], "fb_week_boost", now()))
+                    boosted = True
+                except sqlite3.IntegrityError:
+                    boosted = False
+                if boosted:
+                    res = integrations.promote_facebook({**cls, "_enrolled": enrolled},
+                                                        integrations.load_config())
+                    if res.get("ok") and res.get("id") and not str(res["id"]).startswith("fb-dryrun"):
+                        merge_external(cls["id"], {"facebook_boost_id": res["id"]})
+                        actions.append(f"week-out Facebook booster: {cls['title']}")
+                    elif not res.get("ok") and not str(res.get("status","")).startswith("skipped"):
+                        print(f"[scheduler] week-out booster failed for {cls['title']}: {res.get('error') or res.get('status')}")
             close_days = int(cls.get("close_days") or 0)
             if close_days and days == close_days:
                 # Registration has just closed. This number will not move now, which
@@ -1484,7 +1517,10 @@ class H(http.server.BaseHTTPRequestHandler):
         p = urllib.parse.urlparse(self.path).path
         if p == "/embed": return self.embed_page()
         if p == "/embed.json": return self.embed_json()
+        if p == "/notify": return self.notify_page()
+        if p == "/unsubscribe": return self.unsubscribe_page()
         if p.startswith("/class-photo/"): return self.class_photo(p)
+        if p.startswith("/class-poster/"): return self.class_poster(p)
         if p.startswith("/media/"): return self.serve_media(p)
         if p.startswith("/api/"): return self.api_get(p)
         return self.static(p)
@@ -1529,6 +1565,78 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if is_text else ""))
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
+
+    def class_poster(self, p):
+        """PUBLIC landscape poster for a published class (the one Eventbrite and
+        Facebook get). Instagram publishing needs a public image URL."""
+        try: cid = int(p.split("/")[2].split(".")[0])
+        except (IndexError, ValueError): return self.send_json({"error":"not found"},404)
+        c = db()
+        row = c.execute("""SELECT poster, photo FROM classes
+                           WHERE id=? AND status='approved' AND deleted_at IS NULL""",(cid,)).fetchone()
+        c.close()
+        if not row: return self.send_json({"error":"not found"},404)
+        durl = (row["poster"] or row["photo"] or "")
+        m = re.match(r"^data:(image/[a-z+.-]+);base64,(.*)$", durl, re.S)
+        if not m: return self.send_json({"error":"no image"},404)
+        try: blob = base64.b64decode(m.group(2))
+        except Exception: return self.send_json({"error":"bad image"},404)
+        self.send_response(200)
+        self.send_header("Content-Type", m.group(1))
+        self.send_header("Content-Length", str(len(blob)))
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.end_headers()
+        self.wfile.write(blob)
+
+    def _tiny_page(self, title, inner):
+        html = (f"<!doctype html><html><head><meta charset='utf-8'>"
+                f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                f"<title>{title}</title><style>body{{font-family:Georgia,serif;background:#FAF6EE;"
+                f"color:#1E160A;max-width:430px;margin:0 auto;padding:40px 20px}}"
+                f"h1{{font-size:1.5rem}}input,button{{font-size:1rem;padding:12px;border-radius:10px;"
+                f"border:1px solid #CBBFA8;width:100%;box-sizing:border-box;margin-top:8px}}"
+                f"button{{background:#1E160A;color:#fff;border:none;font-weight:700;cursor:pointer}}"
+                f".ok{{background:#E8F2E2;border-radius:12px;padding:14px;margin-top:14px}}</style>"
+                f"</head><body>{inner}</body></html>").encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers(); self.wfile.write(html)
+
+    def notify_page(self):
+        self._tiny_page("Get notified - Gibby Center for the Arts",
+            "<h1>Be first to hear about new classes</h1>"
+            "<p>Art workshops at the Gibby Center for the Arts in Middletown. "
+            "Leave your email and we will let you know when new classes open for registration.</p>"
+            "<form onsubmit=\"event.preventDefault();var b=this.querySelector('button');b.disabled=true;"
+            "fetch('/api/notify-signup',{method:'POST',headers:{'Content-Type':'application/json'},"
+            "body:JSON.stringify({email:this.email.value,name:this.name.value})})"
+            ".then(function(r){return r.json()}).then(function(d){"
+            "document.getElementById('done').style.display='block';})\">"
+            "<input name='name' placeholder='Your name (optional)'>"
+            "<input name='email' type='email' required placeholder='you@email.com'>"
+            "<button>Keep me posted</button></form>"
+            "<div class='ok' id='done' style='display:none'>You are on the list! "
+            "See what is coming up now at <a href='https://theeverett.org/artworkshops'>theeverett.org/artworkshops</a>.</div>")
+
+    def unsubscribe_page(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        try:
+            e64 = (q.get("e") or [""])[0]
+            email = base64.urlsafe_b64decode(e64 + "=" * (-len(e64) % 4)).decode().strip().lower()
+            tok = (q.get("t") or [""])[0]
+        except Exception:
+            email, tok = "", ""
+        if not email or not secrets.compare_digest(tok, unsub_token(email)):
+            return self._tiny_page("Unsubscribe", "<h1>That link is not valid</h1>"
+                "<p>Please use the unsubscribe link from the bottom of the email we sent you.</p>")
+        c = db()
+        c.execute("INSERT OR IGNORE INTO marketing_optout(email,created) VALUES(?,?)", (email, now()))
+        c.commit(); c.close()
+        return self._tiny_page("Unsubscribed",
+            "<h1>You are unsubscribed</h1><p>No more class announcements will be sent to "
+            f"{email}. Emails about classes you are actually registered for still arrive as usual.</p>")
 
     def class_photo(self, p):
         """PUBLIC image for a published class (vertical poster if there is one,
@@ -1627,7 +1735,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "desc": cls.get("description") or "",
                 "img": (f"/class-photo/{cls['id']}"
                         if (cls.get("poster_portrait") or cls.get("photo") or "").startswith("data:image/") else ""),
-                "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}"})
+                "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=site"})
         out.sort(key=lambda x: x["date"])
         body = json.dumps({"classes": out}).encode()
         self.send_response(200)
@@ -1841,7 +1949,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "status": wstat, "attempts": 0, "error": werr,
                                    "next_run_at": None}
             jobs.pop("wix", None)   # legacy rows from before Wix was dropped
-            order = ["canva","eventbrite","website","facebook","gcal","descene"]
+            order = ["canva","eventbrite","website","facebook","instagram","gcal","descene"]
             out = [jobs[k] for k in order if k in jobs] + [v for k,v in jobs.items() if k not in order]
             return self.send_json({"class_status": row["status"],
                                    "publishing": bool(row["publishing_in_progress"]),
@@ -1937,7 +2045,13 @@ class H(http.server.BaseHTTPRequestHandler):
             }
             totals["margin"] = (totals["net"] / totals["revenue"]) if totals["revenue"] else 0
             totals["fill"] = (totals["seats"] / totals["planned"]) if totals["planned"] else 0
-            return self.send_json({"classes": out, "totals": totals,
+            # Which channel sold the tickets (the aff= code Eventbrite hands back).
+            c2 = db()
+            chan_rows = c2.execute("""SELECT COALESCE(NULLIF(source,''),'direct') AS ch, COUNT(*) AS n
+                                      FROM registrations WHERE refunded=0 GROUP BY ch ORDER BY n DESC""").fetchall()
+            channels = [{"channel": r["ch"], "tickets": r["n"]} for r in chan_rows]
+            c2.close()
+            return self.send_json({"classes": out, "totals": totals, "channels": channels,
                                    "by_class": rollup("title"), "by_instructor": rollup("instructor")})
         if p == "/api/feedback":
             # What instructors actually said, grouped by class title so a repeat of
@@ -2532,6 +2646,53 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json(integrations.facebook_check(integrations.load_config()))
+        if p == "/api/notify-signup":
+            # PUBLIC: the /notify interest form. Store-and-thank, nothing else.
+            b = self.read_json()
+            email = (b.get("email") or "").strip().lower()[:120]
+            name = (b.get("name") or "").strip()[:80]
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                return self.send_json({"error":"bad email"},400)
+            c = db()
+            c.execute("INSERT OR IGNORE INTO marketing_list(email,name,source,created) VALUES(?,?,?,?)",
+                      (email, name, "site", now()))
+            c.execute("DELETE FROM marketing_optout WHERE email=?", (email,))  # signing up again = opting back in
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
+        if p == "/api/marketing":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            regs = c.execute("SELECT COUNT(DISTINCT LOWER(email)) FROM registrations WHERE email IS NOT NULL AND email!=''").fetchone()[0]
+            signups = c.execute("SELECT COUNT(*) FROM marketing_list").fetchone()[0]
+            optouts = c.execute("SELECT COUNT(*) FROM marketing_optout").fetchone()[0]
+            audience = marketing_audience(c)
+            past = [dict(r) for r in c.execute("""SELECT class_id,email_type,sent_at,recipients FROM email_log
+                     WHERE email_type LIKE 'announcement%' ORDER BY sent_at DESC LIMIT 10""")]
+            c.close()
+            return self.send_json({"past_students": regs, "signups": signups, "optouts": optouts,
+                                   "audience": len(audience), "recent": past,
+                                   "notify_url": f"{mailer.APP_URL}/notify"})
+        if p == "/api/marketing/send":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            subject = (b.get("subject") or "").strip()
+            body = (b.get("body") or "").strip()
+            if not subject or len(body) < 30:
+                return self.send_json({"error":"Write a subject and a real message first."},400)
+            c = db()
+            recips = marketing_audience(c)
+            if not recips:
+                c.close(); return self.send_json({"error":"Nobody on the list yet."},400)
+            # Once-ledger entry (unique type per send) doubles as the history log.
+            c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(0,?,?,?)",
+                      (f"announcement_{int(time.time())}", now(), len(recips)))
+            c.commit(); c.close()
+            cfg = mailer.load_email_config()
+            threading.Thread(target=send_announcement_bg, args=(subject, body, recips, cfg), daemon=True).start()
+            print(f"[marketing] {u['name']} queued announcement {subject!r} to {len(recips)}")
+            return self.send_json({"ok":True, "queued": len(recips)})
         if p == "/api/sync-calendar":
             u = self.require("admin")
             if not u: return
@@ -3489,6 +3650,45 @@ class H(http.server.BaseHTTPRequestHandler):
             (subj, body), to = after_commit[1], after_commit[2]
             mailer.send(to, subj, body)
         return self.send_json({"ok": True})
+
+def unsub_key():
+    """Stable random key for signing unsubscribe links; minted once, kept in meta."""
+    c = db()
+    r = c.execute("SELECT v FROM meta WHERE k='unsub_key'").fetchone()
+    if r: c.close(); return r["v"]
+    k = secrets.token_urlsafe(32)
+    c.execute("INSERT OR IGNORE INTO meta(k,v) VALUES('unsub_key',?)", (k,))
+    c.commit()
+    r = c.execute("SELECT v FROM meta WHERE k='unsub_key'").fetchone()
+    c.close()
+    return r["v"]
+
+def unsub_token(email):
+    import hmac
+    return hmac.new(unsub_key().encode(), email.lower().encode(), hashlib.sha256).hexdigest()[:24]
+
+def unsub_link(email):
+    e = base64.urlsafe_b64encode(email.lower().encode()).decode().rstrip("=")
+    return f"{mailer.APP_URL}/unsubscribe?e={e}&t={unsub_token(email)}"
+
+def marketing_audience(c):
+    """Unique announcement recipients: everyone who ever registered for a class
+    plus the notify-me list, minus opt-outs and staff accounts."""
+    regs = {r["email"].strip().lower() for r in
+            c.execute("SELECT DISTINCT email FROM registrations WHERE email IS NOT NULL AND email!=''")}
+    signups = {r["email"] for r in c.execute("SELECT email FROM marketing_list")}
+    optout = {r["email"] for r in c.execute("SELECT email FROM marketing_optout")}
+    staff = {r["email"].lower() for r in c.execute("SELECT email FROM users WHERE deleted_at IS NULL")}
+    return sorted((regs | signups) - optout - staff)
+
+def send_announcement_bg(subject, body, recips, cfg):
+    """One email per recipient (no address leaking), each with its own
+    unsubscribe link. Runs in a background thread."""
+    sent = 0
+    for r in recips:
+        full = body.rstrip() + f"\n\n--\nNo longer want these updates? Unsubscribe: {unsub_link(r)}"
+        if mailer.send(r, subject, full, cfg): sent += 1
+    print(f"[marketing] announcement sent to {sent}/{len(recips)}")
 
 def invite_instructor(c, name, email, proto, host):
     """Find or create an instructor account by email, for admin submit-on-behalf.
