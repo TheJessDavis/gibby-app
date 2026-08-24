@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.0-formatted-event-pages"
+VERSION = "10.1-embed-matches-site"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1566,14 +1566,17 @@ class H(http.server.BaseHTTPRequestHandler):
                     vid_html = ('<video controls preload="metadata" playsinline src="' + e(v)
                                 + '" style="width:100%;border-radius:12px;margin-top:8px"></video>')
                 price = cls.get("ticket_price")
-                price_txt = (" " + DOT + " $" + ("%g" % price)) if price else ""
-                ages = e(cls.get("age_label") or cls.get("age_range") or "")
-                return ('<a class="c" href="https://www.eventbrite.com/e/' + e(str(ebid))
-                        + '" target="_blank" rel="noopener">' + pic
+                ages = (cls.get("age_label") or cls.get("age_range") or "").replace("Ages ", "Ages: ")
+                meta = e(ages) + ((" &nbsp;I&nbsp; $" + ("%g" % price)) if price else "")
+                desc = "".join("<p>" + e(par.strip()) + "</p>"
+                               for par in (cls.get("description") or "").split("\n\n") if par.strip())
+                return ('<div class="c">' + pic
                         + '<div class="t">' + e(cls.get("title") or "") + "</div>"
-                        + '<div class="m">' + e(when) + "</div>"
-                        + '<div class="m">' + ages + price_txt + "</div>" + vid_html
-                        + '<div class="b">Sign up on Eventbrite ' + ARROW + "</div></a>")
+                        + '<div class="w">' + e(when) + "</div>"
+                        + '<div class="d">' + desc + "</div>"
+                        + '<div class="m">' + meta + "</div>" + vid_html
+                        + '<a class="b" href="https://www.eventbrite.com/e/' + e(str(ebid))
+                        + '" target="_blank" rel="noopener">Register</a></div>')
             body = "".join(card(*i) for i in items) or \
                    '<p class="none">New classes are coming soon. Check back shortly!</p>'
             # A season heading in the site's style, worked out from the classes on
@@ -1587,16 +1590,27 @@ class H(http.server.BaseHTTPRequestHandler):
             heading = ('<h2 class="season">' + " / ".join(seasons) + "</h2>") if seasons else ""
             page = f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Classes at The Gibby</title><style>
-  body{{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:transparent;color:#171512}}
-  .wrap{{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;padding:6px}}
-  .c{{display:block;background:#FBF7EF;border-radius:18px;padding:14px;text-decoration:none;color:#171512;box-shadow:0 6px 16px rgba(0,0,0,.07)}}
-  .c img{{width:100%;height:150px;object-fit:cover;border-radius:12px;margin-bottom:10px}}
-  .t{{font-weight:800;font-size:17px;letter-spacing:-.01em;margin-bottom:4px}}
-  .m{{font-size:12.5px;color:#5A554C;font-weight:600;margin-top:2px}}
-  .b{{margin-top:10px;display:inline-block;background:#171512;color:#fff;font-weight:800;font-size:12.5px;border-radius:999px;padding:8px 14px}}
+<title>Classes at The Gibby</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  /* Styled to sit inside theeverett.org's Art Workshops page and read like the
+     hand-made cards around it: tall poster, centered navy text, outlined
+     REGISTER button. */
+  body{{margin:0;font-family:'Poppins',-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;background:transparent;color:#26272b}}
+  .wrap{{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:44px 34px;padding:6px}}
+  .c{{text-align:center;color:#26272b}}
+  .c img{{width:72%;max-width:220px;aspect-ratio:3/4;object-fit:cover;margin:0 auto 14px;display:block}}
+  .t{{font-weight:600;font-size:21px;line-height:1.25;color:#1b2a4a;margin-bottom:2px}}
+  .w{{font-size:15px;color:#26272b;margin-bottom:12px}}
+  .d{{font-size:14.5px;line-height:1.5;color:#26272b}}
+  .d p{{margin:0 0 12px}}
+  .m{{font-size:15px;color:#26272b;margin:2px 0 14px}}
+  .b{{display:inline-block;border:1px solid #1b2a4a;color:#1b2a4a;background:transparent;
+      font-weight:500;font-size:13px;letter-spacing:.08em;text-transform:uppercase;
+      border-radius:8px;padding:11px 26px;text-decoration:none}}
   .none{{font-size:15px;color:#5A554C;padding:20px;text-align:center}}
-  .season{{font-size:34px;font-weight:800;letter-spacing:-.01em;margin:10px 6px 16px;color:#1d3557}}
+  .season{{font-size:38px;font-weight:800;letter-spacing:-.01em;margin:10px 0 26px;color:#16324c}}
 </style></head><body>{heading}<div class="wrap">{body}</div>
 <script>
   // Tell the host page (the Squarespace embed) how tall this content really is,
