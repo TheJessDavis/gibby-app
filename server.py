@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.3-series-reschedule"
+VERSION = "10.4-poster-swap-syncs"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2931,9 +2931,17 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"That image is too large. Please use one under 10MB."},400)
             col = "poster" if kind == "landscape" else "poster_portrait"
             c.execute(f"UPDATE classes SET {col}=? WHERE id=?", (img or None, cid))
+            fresh = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
             c.commit(); c.close()
             print(f"[poster] class #{cid}: {'attached by ' + u['name'] if img else 'removed by ' + u['name']}")
-            return self.send_json({"ok":True, "attached": bool(img)})
+            eb = None
+            if img and kind == "landscape" and fresh.get("status") == "approved":
+                # Already published: the new poster goes onto the live listing too.
+                # (The portrait poster only feeds the website, which reads the DB.)
+                try: eb = integrations.update_event_logo(fresh, integrations.load_config())
+                except Exception as e: eb = f"failed: {e}"
+                print(f"[poster] class #{cid}: eventbrite {eb}")
+            return self.send_json({"ok":True, "attached": bool(img), "eventbrite": eb})
         if p.startswith("/api/classes/") and p.endswith("/graphic"):   # save poster text + rebuild it
             u = self.require("admin")
             if not u: return

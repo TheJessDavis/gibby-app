@@ -358,6 +358,29 @@ def _push_structured_content(eid, cls, cfg):
         print("[eventbrite] structured content failed (plain description still shows):", e)
         return False
 
+def update_event_logo(cls, cfg):
+    """Push the class's current landscape poster onto its existing Eventbrite
+    event, so swapping the poster after publishing updates the listing too.
+    Returns a plain-English result string."""
+    if not (cfg["eventbrite_token"] and cfg["eventbrite_org_id"]):
+        return "skipped: no Eventbrite config"
+    try:
+        ext = json.loads(cls.get("external_ids") or "{}")
+    except Exception:
+        ext = {}
+    eid = ext.get("eventbrite_id")
+    if not eid:
+        return "skipped: never published to Eventbrite"
+    img = cls.get("poster") or ext.get("canva_image_url")
+    if not img:
+        return "skipped: no landscape poster to send"
+    if not cfg["live"]:
+        return f"dry-run (would update the image on event {eid})"
+    logo_id = _eventbrite_logo_id(img, cfg)
+    _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", token=cfg["eventbrite_token"],
+         json_body={"event": {"logo_id": logo_id}})
+    return "image updated"
+
 def update_eventbrite_details(cls, cfg):
     """Push a published class's CURRENT details onto its existing Eventbrite event:
     title, description, capacity, ticket price and sales cutoff. Same listing,

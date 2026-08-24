@@ -1535,7 +1535,11 @@ function attachPoster(id, ev, kind){
   if(f.size > 10*1024*1024){ alert('That image is '+Math.round(f.size/1048576)+'MB. Please use one under 10MB.'); return; }
   const r = new FileReader();
   r.onload = async e => {
-    try{ await api('/api/classes/'+id+'/poster','POST',{image:e.target.result, kind:kind||'landscape'}); adminApprovals(); }
+    try{
+      const r = await api('/api/classes/'+id+'/poster','POST',{image:e.target.result, kind:kind||'landscape'});
+      if(r.eventbrite) alert('Poster saved. Eventbrite listing: '+r.eventbrite+'.');
+      adminApprovals();
+    }
     catch(err){ alert('Could not attach that poster.\n\n'+err.message); }
   };
   r.readAsDataURL(f);
@@ -1692,7 +1696,12 @@ function cardCls(c){
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>
       <div class="two" style="margin-top:8px">
         <button class="btn ghost" onclick="openLiveEdit(${c.id})">Edit details</button>
-        <button class="btn ghost" onclick="startReschedule(${c.id})">Change date or time</button></div>`:''}
+        <button class="btn ghost" onclick="startReschedule(${c.id})">Change date or time</button></div>
+      <div class="two" style="margin-top:8px">
+        <button class="btn ghost" onclick="document.getElementById('pf${c.id}').click()">${c.poster?'Replace':'Attach'} Eventbrite poster</button>
+        <button class="btn ghost" onclick="document.getElementById('pp${c.id}').click()">${c.poster_portrait?'Replace':'Attach'} website poster</button></div>
+      <input id="pf${c.id}" type="file" accept="image/png,image/jpeg" class="hidden" onchange="attachPoster(${c.id}, event, 'landscape')">
+      <input id="pp${c.id}" type="file" accept="image/png,image/jpeg" class="hidden" onchange="attachPoster(${c.id}, event, 'portrait')">`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
     ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="archiveRecord('classes',${c.id},'class')">Archive class</button>`:''}
     <div id="gfx${c.id}"></div>
