@@ -1287,7 +1287,7 @@ const pct = n => (n*100).toFixed(0)+'%';
 // whole pounds, and a minus sign that sits outside the currency symbol
 const money0 = n => (n<0?'-':'')+'$'+Math.abs(Math.round(+n||0)).toLocaleString();
 async function adminMarketing(){
-  const d = await api('/api/marketing');
+  const d = await api('/api/marketing','POST',{});
   // Prefill with the upcoming approved classes so the announcement writes itself.
   let upcoming = [];
   try{
