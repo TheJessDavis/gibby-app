@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.7.2-descene-confirmed"
+VERSION = "10.8.0-facebook-page-posts"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2469,6 +2469,10 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json(integrations.eventbrite_orgs(integrations.load_config()))
+        if p == "/api/test-facebook":
+            u = self.require("admin")
+            if not u: return
+            return self.send_json(integrations.facebook_check(integrations.load_config()))
         if p == "/api/sync-calendar":
             u = self.require("admin")
             if not u: return

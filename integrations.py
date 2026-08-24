@@ -583,17 +583,101 @@ def sync_attendees(cls, cfg=None, _req_fn=None):
     if not cfg.get("live") and not _req_fn: return None
     return [normalize_attendee(a) for a in fetch_attendees(event_id, cfg, _req_fn)]
 
+def facebook_check(cfg):
+    """Verify the Facebook keys: the token must belong to the configured Page
+    and carry permission to post. Returns the Page's name so the admin can see
+    the right Page is hooked up."""
+    if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
+        return {"ok": False, "error": "FB_PAGE_ID and FB_PAGE_TOKEN are not both set on Render yet."}
+    try:
+        res = _req(f"https://graph.facebook.com/v23.0/me?fields=id,name",
+                   method="GET", token=cfg["fb_page_token"])
+    except urllib.error.HTTPError as e:
+        try:
+            msg = (json.loads(e.read().decode()).get("error") or {}).get("message") or f"HTTP {e.code}"
+        except Exception:
+            msg = f"HTTP {e.code}"
+        return {"ok": False, "error": f"Facebook rejected the token: {msg}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    matches = str(res.get("id")) == str(cfg["fb_page_id"])
+    return {"ok": matches, "page_id": res.get("id"), "page_name": res.get("name"),
+            "configured_page_id": cfg["fb_page_id"], "page_id_matches": matches,
+            **({} if matches else {"error": "The token belongs to a different Page than FB_PAGE_ID."})}
+
 def post_facebook(cls, cfg, link=None):
-    # Facebook removed Event creation from the Graph API, so this posts to the Page.
+    """Post the class to the Gibby's Facebook Page. Meta removed Event creation
+    from the Graph API (no outside app can make a real Page Event any more), so
+    this publishes the next best thing: a Page photo post with the landscape
+    poster, the date and time up top, the full description, and the Eventbrite
+    registration link."""
     if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
         return _no("skipped: no Facebook config")
     if not cfg["live"]:
         return _ok("fb-dryrun", "dry-run (Page post, not an Event)")
-    msg = f"{cls['title']} — {cls.get('slot_date','')} {cls.get('slot_time','')}\n\n{cls.get('description','')}"
-    if link: msg += f"\n\nSign up: {link}"
-    res = _req(f"https://graph.facebook.com/v20.0/{cfg['fb_page_id']}/feed",
-        form={"message": msg, "access_token": cfg["fb_page_token"]})
-    return _ok(res.get("id"), "posted to Page")
+    if not link:
+        try:
+            ext = json.loads(cls.get("external_ids") or "{}")
+        except Exception:
+            ext = {}
+        if ext.get("eventbrite_id"):
+            link = f"https://www.eventbrite.com/e/{ext['eventbrite_id']}"
+    if not link and cfg.get("eventbrite_token"):
+        # Eventbrite is configured but its job has not landed yet. Raising makes
+        # the queue retry with backoff, so the post goes out WITH the link.
+        raise RuntimeError("waiting for the Eventbrite link before posting")
+    try:
+        dp = (cls.get("slot_date") or "").split(", ")[-1].strip().split()
+        mon, day = _MON[dp[0]], int(dp[1])
+        year = _season_year(mon)
+        wd = datetime.date(year, mon, day).strftime("%A")
+        months = ["January","February","March","April","May","June","July",
+                  "August","September","October","November","December"]
+        span = (cls.get("class_time") or cls.get("slot_time") or "").strip()
+        header = f"{wd}, {months[mon-1]} {day}, {year}" + (f" · {span}" if span else "")
+        try:
+            n = len(json.loads(cls.get("session_dates") or "[]")) if cls.get("is_series") else 1
+        except Exception:
+            n = 1
+        if n > 1:
+            header = f"{n} weekly sessions starting {header}"
+    except Exception:
+        header = f"{cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time') or ''}".strip()
+    if cls.get("donation_based"):
+        price = "Donation-based"
+    elif cls.get("ticket_price"):
+        price = "$%g per person" % cls["ticket_price"]
+    else:
+        price = "Free"
+    msg = (f"{cls.get('title','')}\n\n{header}\n"
+           f"Gibby Center for the Arts, 51 W Main St, Middletown\n{price}\n\n"
+           + _event_description(cls))
+    if link:
+        msg += f"\n\nRegister: {link}"
+    try:
+        m = re.match(r"^data:image/([a-z]+);base64,(.*)$", cls.get("poster") or "", re.S)
+        if m:
+            import base64 as _b64
+            data = _b64.b64decode(m.group(2))
+            body = _multipart_post(
+                f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/photos",
+                {"caption": msg, "published": "true", "access_token": cfg["fb_page_token"]},
+                "source", "poster." + ("jpg" if m.group(1) == "jpeg" else m.group(1)), data)
+            res = json.loads(body.decode() or "{}")
+            return _ok(res.get("post_id") or res.get("id"),
+                       "posted to the Facebook Page with the poster")
+        res = _req(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/feed",
+            form={"message": msg, **({"link": link} if link else {}),
+                  "access_token": cfg["fb_page_token"]})
+        return _ok(res.get("id"), "posted to the Facebook Page")
+    except urllib.error.HTTPError as e:
+        # Surface Facebook's own error message instead of a bare HTTP 400.
+        try:
+            err = json.loads(e.read().decode()).get("error") or {}
+            detail = f"Facebook said: {err.get('message')} (code {err.get('code')})"
+        except Exception:
+            detail = f"Facebook returned HTTP {e.code}"
+        raise RuntimeError(detail)
 
 def post_wix(cls, cfg):
     if not (cfg["wix_api_key"] and cfg["wix_site_id"]):

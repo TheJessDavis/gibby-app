@@ -1202,7 +1202,9 @@ async function adminConnections(){
       <button class="btn ${it.status==='connected'?'warn':'dark'}" style="margin-top:12px"
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
         ${it.status==='connected'?'Disconnect':'Connect'}</button>`}
-      ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>`:''}</div>`).join('')}
+      ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>`:''}
+      ${it.id==='facebook'?`<button class="btn ghost" style="margin-top:8px" onclick="testFacebook()">Verify Page token</button>
+        <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
@@ -1378,6 +1380,12 @@ async function testEventbrite(){
                         : '\n\nPROBLEM FOUND: the server\'s EVENTBRITE_ORG_ID is "'+r.configured_org_id+'", which is NOT one of your organizations. Fix it on Render, then retry the failed steps.')
     : '\n\nEVENTBRITE_ORG_ID is not set on the server yet.';
   alert('Token works! Your Eventbrite organization(s):\n\n'+(list||'(none found)')+match);
+}
+
+async function testFacebook(){
+  const r=await api('/api/test-facebook','POST',{});
+  if(!r.ok){ alert('Facebook check failed:\n'+(r.error||'unknown error')); return; }
+  alert('Token works! It posts as the Page:\n\n'+r.page_name+'  (Page ID '+r.page_id+')\n\nThat matches FB_PAGE_ID on the server. Publishing will now post to this Page.');
 }
 
 /* ---------------- graphic preview ---------------- */
@@ -2718,7 +2726,7 @@ async function submitClassNow(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','testFacebook','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
