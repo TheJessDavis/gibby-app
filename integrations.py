@@ -33,8 +33,10 @@ def load_config():
         # 'Gibby Center for the Arts', 51 West Main Street, Middletown DE. Without
         # a venue every listing says 'Location TBD'.
         "eventbrite_venue_id": os.environ.get("EVENTBRITE_VENUE_ID", "299115315"),
-        "fb_page_id":        os.environ.get("FB_PAGE_ID", ""),
-        "fb_page_token":     os.environ.get("FB_PAGE_TOKEN", ""),
+        # Tokens copied out of Facebook's debugger wrap across lines, so pasted
+        # values often carry stray newlines or spaces; strip ALL whitespace.
+        "fb_page_id":        "".join(os.environ.get("FB_PAGE_ID", "").split()),
+        "fb_page_token":     "".join(os.environ.get("FB_PAGE_TOKEN", "").split()),
         "wix_api_key":       os.environ.get("WIX_API_KEY", ""),
         "wix_site_id":       os.environ.get("WIX_SITE_ID", ""),
         "canva_token":       os.environ.get("CANVA_TOKEN", ""),

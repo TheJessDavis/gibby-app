@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.8.1-fb-user-token-ok"
+VERSION = "10.8.2-fb-token-strip"
 
 # ---------------------------------------------------------------- database ----
 def db():
