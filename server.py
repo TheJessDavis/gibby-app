@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.4-poster-swap-syncs"
+VERSION = "10.5-http11"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1347,6 +1347,12 @@ def scheduler_loop():
 
 # ------------------------------------------------------------- handler ----
 class H(http.server.BaseHTTPRequestHandler):
+    # HTTP/1.1 with keep-alive. The default HTTP/1.0 closes the socket after
+    # every response, and Render's proxy intermittently turns that into
+    # "sent an invalid response" for visitors. Every handler in this file sets
+    # Content-Length, which 1.1 requires.
+    protocol_version = "HTTP/1.1"
+
     def log_message(self, *a): pass  # quiet
 
     # -- helpers --
