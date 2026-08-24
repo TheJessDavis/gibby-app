@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "9.9-embed-autoheight"
+VERSION = "9.9.1-website-season"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1577,11 +1577,13 @@ class H(http.server.BaseHTTPRequestHandler):
             body = "".join(card(*i) for i in items) or \
                    '<p class="none">New classes are coming soon. Check back shortly!</p>'
             # A season heading in the site's style, worked out from the classes on
-            # show ("FALL 2026 / SPRING 2027"), so the section names itself.
+            # show. The WEBSITE's convention is calendar seasons (a December 2026
+            # class is FALL 2026 there), unlike the app's internal programming
+            # season used for contracts, where December belongs to spring.
             seasons = []
             for d, cls, _eb in items:
-                s = season_label(d.month)
-                if s and s not in seasons: seasons.append(s)
+                s = (f"FALL {d.year}" if d.month >= 8 else f"SPRING {d.year}")
+                if s not in seasons: seasons.append(s)
             heading = ('<h2 class="season">' + " / ".join(seasons) + "</h2>") if seasons else ""
             page = f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
