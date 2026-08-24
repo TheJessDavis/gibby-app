@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.5-http11"
+VERSION = "10.6-native-site-cards"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1422,6 +1422,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         p = urllib.parse.urlparse(self.path).path
         if p == "/embed": return self.embed_page()
+        if p == "/embed.json": return self.embed_json()
         if p.startswith("/class-photo/"): return self.class_photo(p)
         if p.startswith("/media/"): return self.serve_media(p)
         if p.startswith("/api/"): return self.api_get(p)
@@ -1533,6 +1534,47 @@ class H(http.server.BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError): return
                 remaining -= len(chunk)
         return
+
+    def embed_json(self):
+        """PUBLIC data feed for the website: the site's own script renders the
+        cards natively (no iframe, so a network blip can never paint an error
+        page into the site). Only already-public information appears here."""
+        c = db()
+        rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved'
+                    AND deleted_at IS NULL""").fetchall()]
+        c.close()
+        today = datetime.date.today()
+        out = []
+        for cls in rows:
+            try: ext = json.loads(cls.get("external_ids") or "{}")
+            except Exception: ext = {}
+            if not ext.get("eventbrite_id"): continue
+            d = _class_date(cls)
+            end = _class_end_date(cls) or d
+            if not d or (end and end < today): continue
+            when = day_label(d) + " · " + (cls.get("class_time") or cls.get("slot_time") or "")
+            if cls.get("is_series"):
+                try: n = len(json.loads(cls.get("session_dates") or "[]"))
+                except Exception: n = 0
+                if n > 1: when += f" · {n}-week course"
+            ages = (cls.get("age_label") or cls.get("age_range") or "").replace("Ages ", "Ages: ")
+            out.append({
+                "title": cls.get("title") or "", "when": when, "date": d.isoformat(),
+                "ages": ages,
+                "price": ("Donation-based" if cls.get("donation_based")
+                          else (("$%g" % cls["ticket_price"]) if cls.get("ticket_price") else "")),
+                "desc": cls.get("description") or "",
+                "img": (f"/class-photo/{cls['id']}"
+                        if (cls.get("poster_portrait") or cls.get("photo") or "").startswith("data:image/") else ""),
+                "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}"})
+        out.sort(key=lambda x: x["date"])
+        body = json.dumps({"classes": out}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body); return
 
     def embed_page(self):
             # PUBLIC page for the Squarespace site: an always-current list of
