@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.8.2-fb-token-strip"
+VERSION = "10.8.3-retry-skipped"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2182,10 +2182,12 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             jid = int(p.split("/")[3]); c = db()
+            # 'skipped' usually means the platform had no keys at the time; once
+            # keys are added, re-queueing is exactly what the admin wants.
             got = c.execute("""UPDATE job_queue SET status='queued', attempts=0, next_run_at=?, updated=?
-                               WHERE id=? AND status='failed'""", (now(), now(), jid)).rowcount
+                               WHERE id=? AND status IN ('failed','skipped')""", (now(), now(), jid)).rowcount
             c.commit(); c.close()
-            if got != 1: return self.send_json({"error":"That job is not in a failed state."},409)
+            if got != 1: return self.send_json({"error":"That job is not in a failed or skipped state."},409)
             print(f"[queue] job #{jid} manually re-queued by {u['name']}")
             return self.send_json({"ok":True})
         if p == "/api/jobs":       # full queue, for diagnosis
