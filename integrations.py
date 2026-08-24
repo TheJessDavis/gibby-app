@@ -237,6 +237,26 @@ def _eventbrite_logo_id(image_url, cfg):
                  token=tok, json_body=body)
     return media.get("id")
 
+def ages_open_line(cls):
+    """The ages phrase as a plain sentence for descriptions: 'Ages 15+' becomes
+    'Open to ages 15 to 110', 'Ages 5–14' becomes 'Open to ages 5 to 14'."""
+    label = (cls.get("age_label") or cls.get("age_range") or "").strip()
+    if not label:
+        return ""
+    if label.lower().replace("-", " ") == "all ages":
+        return "Open to all ages"
+    body = re.sub(r"(?i)^ages\s+", "", label)
+    outs = []
+    for part in [p.strip() for p in body.split("&") if p.strip()]:
+        m = re.match(r"^(\d+)\s*[–—-]\s*(\d+)$", part)
+        if m:
+            outs.append(f"{m.group(1)} to {m.group(2)}"); continue
+        m = re.match(r"^(\d+)\+$", part)
+        if m:
+            outs.append(f"{m.group(1)} to 110"); continue
+        outs.append(part)
+    return "Open to ages " + " and ".join(outs)
+
 def _event_description(cls):
     """The full Eventbrite description for a class: series dates, the ages phrase,
     a video-preview link when the video is app-hosted, then the instructor's FAQ.
@@ -250,7 +270,7 @@ def _event_description(cls):
         lines = "".join(f"<li>{s['date']} · {s['start']} – {s['end']}</li>" for s in sessions)
         desc = (f"<p><b>A {len(sessions)}-week course.</b> One ticket covers all "
                 f"{len(sessions)} sessions:</p><ul>{lines}</ul>") + desc
-    ages = cls.get("age_label") or cls.get("age_range") or ""
+    ages = ages_open_line(cls)
     if ages:
         desc = f"<p><b>{ages}</b></p>" + desc
     vurl0 = (cls.get("video") or "").strip()
