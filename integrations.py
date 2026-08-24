@@ -30,6 +30,9 @@ def load_config():
         # as a default deliberately: clearing it would silently post events under
         # the wrong organizer. Override with EVENTBRITE_ORGANIZER_ID if it changes.
         "eventbrite_organizer_id": os.environ.get("EVENTBRITE_ORGANIZER_ID", "76506239933"),
+        # 'Gibby Center for the Arts', 51 West Main Street, Middletown DE. Without
+        # a venue every listing says 'Location TBD'.
+        "eventbrite_venue_id": os.environ.get("EVENTBRITE_VENUE_ID", "299115315"),
         "fb_page_id":        os.environ.get("FB_PAGE_ID", ""),
         "fb_page_token":     os.environ.get("FB_PAGE_TOKEN", ""),
         "wix_api_key":       os.environ.get("WIX_API_KEY", ""),
@@ -313,10 +316,13 @@ def update_eventbrite_details(cls, cfg):
         return "skipped: never published to Eventbrite"
     if not cfg["live"]:
         return f"dry-run (would update event {eid})"
+    ev_body = {"name": {"html": cls["title"]},
+               "description": {"html": _event_description(cls)},
+               "capacity": cls.get("max_p")}
+    if cfg.get("eventbrite_venue_id"):   # heals older events that said 'Location TBD'
+        ev_body["venue_id"] = cfg["eventbrite_venue_id"]
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", token=cfg["eventbrite_token"],
-         json_body={"event": {"name": {"html": cls["title"]},
-                              "description": {"html": _event_description(cls)},
-                              "capacity": cls.get("max_p")}})
+         json_body={"event": ev_body})
     try:
         tc_body = {"cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}",
                    "quantity_total": cls.get("max_p")}
@@ -356,6 +362,8 @@ def post_eventbrite(cls, cfg, image_url=None):
         "currency": "USD", "capacity": cls.get("max_p")}
     if cfg.get("eventbrite_organizer_id"):     # omit rather than send an empty id
         event["organizer_id"] = cfg["eventbrite_organizer_id"]
+    if cfg.get("eventbrite_venue_id"):
+        event["venue_id"] = cfg["eventbrite_venue_id"]
     if logo_id: event["logo_id"] = logo_id
     ev = _req(f"https://www.eventbriteapi.com/v3/organizations/{cfg['eventbrite_org_id']}/events/",
         token=cfg["eventbrite_token"], json_body={"event": event})
