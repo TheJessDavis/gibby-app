@@ -9,7 +9,7 @@ approval). External posting (Eventbrite, Facebook, Wix, Canva, Descene) and
 emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
-import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re
+import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64
 import integrations, mailer, gcal, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "9.4-open-to-ages"
+VERSION = "9.5-light-embed-and-recovery"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -765,7 +765,11 @@ def publish_now(c, cls, actor_id=None, spawn=True):
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
     c.execute("UPDATE classes SET status='approved' WHERE id=?",(cls["id"],))
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
-    seed_registrations(c, cls)
+    # Demo students exist so DEV screens have data. On a live install they are
+    # poison: fake enrollment numbers, and real-looking addresses that would
+    # receive real emails. Only seed when nothing is live.
+    if not (os.environ.get("GIBBY_LIVE") or os.environ.get("EMAIL_LIVE")):
+        seed_registrations(c, cls)
     subj, body = mailer.tmpl_approved(cls, instr)
     # a hand-attached poster wins over the Canva render: an admin chose it on purpose
     img = cls.get("poster") or json.loads(cls.get("external_ids") or "{}").get("canva_image_url")
@@ -1411,6 +1415,7 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         p = urllib.parse.urlparse(self.path).path
         if p == "/embed": return self.embed_page()
+        if p.startswith("/class-photo/"): return self.class_photo(p)
         if p.startswith("/media/"): return self.serve_media(p)
         if p.startswith("/api/"): return self.api_get(p)
         return self.static(p)
@@ -1455,6 +1460,30 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if is_text else ""))
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
+
+    def class_photo(self, p):
+        """PUBLIC image for a published class (vertical poster if there is one,
+        else the class photo), served as a real resource so the embed page stays
+        small: a multi-megabyte image inlined as a data URL makes the page huge
+        and mobile browsers give up on it (the 'giant broken image')."""
+        try: cid = int(p.split("/")[2].split(".")[0])
+        except (IndexError, ValueError): return self.send_json({"error":"not found"},404)
+        c = db()
+        row = c.execute("""SELECT poster_portrait, photo FROM classes
+                           WHERE id=? AND status='approved' AND deleted_at IS NULL""",(cid,)).fetchone()
+        c.close()
+        if not row: return self.send_json({"error":"not found"},404)
+        durl = (row["poster_portrait"] or row["photo"] or "")
+        m = re.match(r"^data:(image/[a-z+.-]+);base64,(.*)$", durl, re.S)
+        if not m: return self.send_json({"error":"no image"},404)
+        try: blob = base64.b64decode(m.group(2))
+        except Exception: return self.send_json({"error":"bad image"},404)
+        self.send_response(200)
+        self.send_header("Content-Type", m.group(1))
+        self.send_header("Content-Length", str(len(blob)))
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.end_headers()
+        self.wfile.write(blob)
 
     def serve_media(self, p):
         q = urllib.parse.urlparse(self.path).query
@@ -1529,8 +1558,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     except Exception: n = 0
                     if n > 1: when += " " + DOT + " " + str(n) + "-week course"
                 pic = ""
-                if (cls.get("photo") or "").startswith("data:image/"):
-                    pic = '<img src="' + e(cls["photo"]) + '" alt="">'
+                if (cls.get("poster_portrait") or cls.get("photo") or "").startswith("data:image/"):
+                    pic = '<img loading="lazy" src="/class-photo/' + str(cls["id"]) + '" alt="">'
                 vid_html = ""
                 v = (cls.get("video") or "").strip()
                 if "/media/" in v:
@@ -2619,6 +2648,50 @@ class H(http.server.BaseHTTPRequestHandler):
             mailer.send(admins, "New class submission",
                 f"{u['name']} submitted \"{b.get('title')}\" for {when}. Review it in the app.")
             return self.send_json({"ok":True})
+        if p == "/api/admin/purge-demo-registrations":
+            # One-shot cleanup: demo-seeded students carry no external_id (real
+            # Eventbrite attendees always do). Removing them fixes enrollment
+            # numbers and stops any email ever reaching a made-up address.
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            n = c.execute("DELETE FROM registrations WHERE external_id IS NULL").rowcount
+            c.commit(); c.close()
+            print(f"[registrations] purged {n} demo row(s) by {u['name']}")
+            return self.send_json({"ok": True, "removed": n})
+        if p.startswith("/api/classes/") and p.endswith("/republish-eventbrite"):
+            # Recovery for a listing someone deleted by hand ON Eventbrite: make a
+            # fresh event for the class and point everything at it. Refuses when
+            # the stored listing is still alive, so it can never duplicate.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3])
+            c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            c.close()
+            if not row: return self.send_json({"error":"not found"},404)
+            cls = dict(row)
+            if cls.get("status") != "approved":
+                return self.send_json({"error":"Only published classes can be republished."},400)
+            cfg = integrations.load_config()
+            try: ext = json.loads(cls.get("external_ids") or "{}")
+            except Exception: ext = {}
+            old = ext.get("eventbrite_id")
+            if old:
+                st = integrations.eventbrite_event_status(old, cfg)
+                if st and st not in ("deleted","ended","canceled"):
+                    return self.send_json({"error":f"The Eventbrite listing is still {st}. Nothing to recover; edit it instead."},409)
+            img = cls.get("poster") or ext.get("canva_image_url")
+            try:
+                res = integrations.post_eventbrite(cls, cfg, img)
+            except Exception as e:
+                return self.send_json({"error":f"Eventbrite refused: {e}"},502)
+            if not (isinstance(res, dict) and res.get("ok") and res.get("id")):
+                return self.send_json({"error":str(res)[:300]},502)
+            merge_external(cid, {"eventbrite_id": res["id"]})
+            print(f"[republish] class #{cid} by {u['name']}: new Eventbrite event {res['id']}")
+            return self.send_json({"ok": True, "eventbrite_id": res["id"],
+                                   "url": f"https://www.eventbrite.com/e/{res['id']}"})
         if p.startswith("/api/classes/") and p.endswith("/update-live"):
             # Edit ANY aspect of an already-published class. Everything it was
             # sent to updates in place: the Eventbrite listing (title, description,

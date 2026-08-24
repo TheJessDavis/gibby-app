@@ -288,6 +288,16 @@ def _event_description(cls):
             desc = desc + f"<h3>Good to know</h3>{rows}"
     return desc
 
+def eventbrite_event_status(eid, cfg):
+    """The live status of an Eventbrite event ('live', 'draft', 'deleted', ...),
+    or None when it cannot be read."""
+    try:
+        res = _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", method="GET",
+                   token=cfg["eventbrite_token"])
+        return res.get("status")
+    except Exception:
+        return None
+
 def update_eventbrite_details(cls, cfg):
     """Push a published class's CURRENT details onto its existing Eventbrite event:
     title, description, capacity, ticket price and sales cutoff. Same listing,
