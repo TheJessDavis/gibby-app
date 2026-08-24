@@ -1689,7 +1689,9 @@ function cardCls(c){
     ${actingRole()==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>
-      ${!c.is_series?`<button class="btn ghost" style="margin-top:8px" onclick="startReschedule(${c.id})">Change date or time</button>`:''}`:''}
+      <div class="two" style="margin-top:8px">
+        <button class="btn ghost" onclick="openLiveEdit(${c.id})">Edit details</button>
+        ${!c.is_series?`<button class="btn ghost" onclick="startReschedule(${c.id})">Change date or time</button>`:'<span></span>'}</div>`:''}
     <button class="btn ghost" style="margin-top:10px" onclick="previewGraphic(${c.id})">Preview graphic</button>
     ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="archiveRecord('classes',${c.id},'class')">Archive class</button>`:''}
     <div id="gfx${c.id}"></div>
@@ -1821,6 +1823,44 @@ async function openEditForm(id){
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>
       <button class="btn dark" onclick="submitEdit(${id})">Send to instructor</button></div></div>`;
+}
+/* Edit a PUBLISHED class. Same fields as the review edit, but saving pushes the
+   changes straight onto the live Eventbrite listing, the calendar booking and
+   the website - in place, nothing republished, nothing duplicated. */
+function openLiveEdit(id){
+  const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
+  $('#view').innerHTML=`
+    <h2>Edit a <em>live class</em></h2>
+    <p class="sub">This class is published. Saving updates Eventbrite, the calendar and the website in place - same listing, same links. Students are not emailed.</p>
+    <div class="err" id="eerr"></div>
+    <label>Class title</label><input id="e_title" value="${esc(c.title)}">
+    <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
+    <label>Age range</label><select id="e_age">${AGES.map(a=>`<option ${a===c.age_range?'selected':''}>${a}</option>`).join('')}</select>
+    <label>Alcohol available for purchase?</label>
+    <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <div class="two"><div><label>Max</label><input id="e_max" type="number" value="${c.max_p}"></div><div><label>Min</label><input id="e_min" type="number" value="${c.min_p}"></div></div>
+    <div class="two"><div><label>Ticket ($)</label><input id="e_ticket" type="number" value="${c.ticket_price}"></div><div><label>Instructor pay ($)</label><input id="e_pay" type="number" value="${c.instructor_pay}"></div></div>
+    <label>Pay model</label><select id="e_paym"><option value="flat" ${c.pay_model!=='split'?'selected':''}>Flat fee</option><option value="split" ${c.pay_model==='split'?'selected':''}>60% of ticket sales</option></select>
+    <label>Registration closes</label><select id="e_close">${[0,1,2,3,5,7,14].map(d=>`<option value="${d}" ${d===(c.close_days||0)?'selected':''}>${d===0?'Never (sell until start)':d+' day'+(d===1?'':'s')+' before'}</option>`).join('')}</select>
+    <label>Graphic headline</label><input id="e_head" value="${esc(c.headline||'')}">
+    <label>Script subtitle</label><input id="e_sub" value="${esc(c.subtitle||'')}">
+    <div class="hint" style="margin-top:8px">Need a different date or time? Use <b>Change date or time</b> on the class card instead.</div>
+    <div style="height:80px"></div>
+    <div class="fab"><div class="two">
+      <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>
+      <button class="btn green" onclick="submitLiveEdit(${id})">Save &amp; update everywhere</button></div></div>`;
+}
+async function submitLiveEdit(id){
+  const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
+  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
+    alcohol:alc, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
+    ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
+    close_days:+$('#e_close').value, headline:$('#e_head').value, subtitle:$('#e_sub').value};
+  try{
+    const r=await api('/api/classes/'+id+'/update-live','POST',body);
+    alert(`Saved.\n\nEventbrite: ${r.eventbrite}\nCalendar: ${r.calendar}\nWebsite: updates itself.`);
+    renderAdmin('approvals');
+  }catch(e){ showErr('eerr',(e.data&&e.data.error)||e.message); }
 }
 async function submitEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
@@ -2664,7 +2704,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','startReschedule','submitReschedule','closeResched','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','toggleMenu','menuPick','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

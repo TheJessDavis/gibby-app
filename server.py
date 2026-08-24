@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "9.1-welcome-and-worksheet"
+VERSION = "9.2-edit-anything-live"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2619,6 +2619,51 @@ class H(http.server.BaseHTTPRequestHandler):
             mailer.send(admins, "New class submission",
                 f"{u['name']} submitted \"{b.get('title')}\" for {when}. Review it in the app.")
             return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/update-live"):
+            # Edit ANY aspect of an already-published class. Everything it was
+            # sent to updates in place: the Eventbrite listing (title, description,
+            # capacity, ticket price, sales cutoff), the calendar booking, and the
+            # website embed on its next read. Nothing is republished or duplicated.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); b = self.read_json()
+            c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if row["status"] not in ("approved","graphic_review"):
+                c.close(); return self.send_json({"error":"Use the normal review flow for classes that are not published yet."},400)
+            sets, vals = [], []
+            for k in ("title","description","age_range","headline","subtitle"):
+                if k in b: sets.append(f"{k}=?"); vals.append(b[k])
+            if "age_range" in b:
+                sets.append("age_label=?"); vals.append(age_label(b["age_range"]))
+            for k in ("max_p","min_p","ticket_price","instructor_pay","close_days"):
+                if k in b: sets.append(f"{k}=?"); vals.append(b[k])
+            if b.get("pay_model") in ("flat","split"):
+                sets.append("pay_model=?"); vals.append(b["pay_model"])
+            if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            if not sets: c.close(); return self.send_json({"error":"Nothing to change."},400)
+            vals.append(cid)
+            c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
+            audit(c, cid, row["status"], "edited-live", u["id"])
+            fresh = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
+            c.commit(); c.close()
+            cfg = integrations.load_config()
+            try: eb_result = integrations.update_eventbrite_details(fresh, cfg)
+            except Exception as e: eb_result = f"failed: {e}"
+            gcfg = gcal.load_gcal_config()
+            gcal_result = "unchanged"
+            try:
+                ext = json.loads(fresh.get("external_ids") or "{}")
+                if ext.get("gcal_event_id"):
+                    removed = gcal.delete_events(ext.get("gcal_event_id") or "", gcfg)
+                    new_gid = gcal.create_event({**fresh, "instructor_name": u.get("name","")}, gcfg)
+                    if new_gid: merge_external(cid, {"gcal_event_id": new_gid})
+                    gcal_result = "rebooked with the new details" if new_gid else "could not rewrite the booking"
+            except Exception as e:
+                gcal_result = f"failed: {e}"
+            print(f"[live-edit] class #{cid} by {u['name']}: eventbrite {eb_result}; gcal {gcal_result}")
+            return self.send_json({"ok": True, "eventbrite": eb_result, "calendar": gcal_result})
         if p.startswith("/api/classes/") and p.endswith("/reschedule"):
             # Move a published one-day class to a new time. Everything it was sent
             # to updates IN PLACE: the Eventbrite event moves (same listing, same

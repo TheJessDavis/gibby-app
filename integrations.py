@@ -237,6 +237,73 @@ def _eventbrite_logo_id(image_url, cfg):
                  token=tok, json_body=body)
     return media.get("id")
 
+def _event_description(cls):
+    """The full Eventbrite description for a class: series dates, the ages phrase,
+    a video-preview link when the video is app-hosted, then the instructor's FAQ.
+    One builder shared by create and update so an edit can never drift."""
+    desc = cls.get("description", "")
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception:
+        sessions = []
+    if cls.get("is_series") and sessions:
+        lines = "".join(f"<li>{s['date']} · {s['start']} – {s['end']}</li>" for s in sessions)
+        desc = (f"<p><b>A {len(sessions)}-week course.</b> One ticket covers all "
+                f"{len(sessions)} sessions:</p><ul>{lines}</ul>") + desc
+    ages = cls.get("age_label") or cls.get("age_range") or ""
+    if ages:
+        desc = f"<p><b>{ages}</b></p>" + desc
+    vurl0 = (cls.get("video") or "").strip()
+    if vurl0 and "/media/" in vurl0:
+        desc = f'<p>\U0001F3AC <a href="{vurl0}">Watch a video preview of this class</a></p>' + desc
+    try:
+        faq = json.loads(cls.get("faq") or "[]")
+    except Exception:
+        faq = []
+    if faq:
+        import html as _html
+        rows = "".join(f"<p><b>{_html.escape(x.get('q',''))}</b><br>{_html.escape(x.get('a',''))}</p>"
+                       for x in faq if x.get("q") and x.get("a"))
+        if rows:
+            desc = desc + f"<h3>Good to know</h3>{rows}"
+    return desc
+
+def update_eventbrite_details(cls, cfg):
+    """Push a published class's CURRENT details onto its existing Eventbrite event:
+    title, description, capacity, ticket price and sales cutoff. Same listing,
+    same URL, nothing republished or duplicated."""
+    if not (cfg["eventbrite_token"] and cfg["eventbrite_org_id"]):
+        return "skipped: no Eventbrite config"
+    try:
+        ext = json.loads(cls.get("external_ids") or "{}")
+    except Exception:
+        ext = {}
+    eid = ext.get("eventbrite_id")
+    if not eid:
+        return "skipped: never published to Eventbrite"
+    if not cfg["live"]:
+        return f"dry-run (would update event {eid})"
+    _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", token=cfg["eventbrite_token"],
+         json_body={"event": {"name": {"html": cls["title"]},
+                              "description": {"html": _event_description(cls)},
+                              "capacity": cls.get("max_p")}})
+    try:
+        tc_body = {"cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}",
+                   "quantity_total": cls.get("max_p")}
+        close_days = int(cls.get("close_days") or 0)
+        start, _end = _iso_times(cls, cfg)
+        if close_days > 0 and start:
+            tc_body["sales_end"] = (datetime.datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ")
+                                    - datetime.timedelta(days=close_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        tcs = _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/",
+                   method="GET", token=cfg["eventbrite_token"])
+        for tc in (tcs.get("ticket_classes") or [])[:1]:
+            _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/{tc['id']}/",
+                 token=cfg["eventbrite_token"], json_body={"ticket_class": tc_body})
+    except Exception as e:
+        print("[eventbrite] ticket update failed (event details updated):", e)
+    return "updated"
+
 def post_eventbrite(cls, cfg, image_url=None):
     if not (cfg["eventbrite_token"] and cfg["eventbrite_org_id"]):
         return _no("skipped: no Eventbrite config")
@@ -250,35 +317,7 @@ def post_eventbrite(cls, cfg, image_url=None):
     if image_url:                      # attach the Canva graphic; never let this block the event
         try: logo_id = _eventbrite_logo_id(image_url, cfg)
         except Exception as e: print("[eventbrite] logo upload failed (posting without it):", e)
-    # A series is ONE listing with one ticket; spell the dates out in the description
-    # so students know exactly what they are buying.
-    desc = cls.get("description", "")
-    try:
-        sessions = json.loads(cls.get("session_dates") or "[]")
-    except Exception:
-        sessions = []
-    if cls.get("is_series") and sessions:
-        lines = "".join(f"<li>{s['date']} · {s['start']} – {s['end']}</li>" for s in sessions)
-        desc = (f"<p><b>A {len(sessions)}-week course.</b> One ticket covers all "
-                f"{len(sessions)} sessions:</p><ul>{lines}</ul>") + desc
-    # Ages as ONE phrase ("Ages 5–14"), not the raw multi-select list.
-    ages = cls.get("age_label") or cls.get("age_range") or ""
-    if ages:
-        desc = f"<p><b>{ages}</b></p>" + desc
-    # The instructor's FAQ, if any, goes under the description on the event page.
-    try:
-        faq = json.loads(cls.get("faq") or "[]")
-    except Exception:
-        faq = []
-    vurl0 = (cls.get("video") or "").strip()
-    if vurl0 and "/media/" in vurl0:
-        desc = f'<p>\U0001F3AC <a href="{vurl0}">Watch a video preview of this class</a></p>' + desc
-    if faq:
-        import html as _html
-        rows = "".join(f"<p><b>{_html.escape(x.get('q',''))}</b><br>{_html.escape(x.get('a',''))}</p>"
-                       for x in faq if x.get("q") and x.get("a"))
-        if rows:
-            desc = desc + f"<h3>Good to know</h3>{rows}"
+    desc = _event_description(cls)
     event = {
         "name": {"html": cls["title"]},
         "description": {"html": desc},
