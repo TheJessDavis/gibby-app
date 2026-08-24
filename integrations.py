@@ -261,35 +261,36 @@ def ages_open_line(cls):
     return "Open to ages " + " and ".join(outs)
 
 def _event_description(cls):
-    """The full Eventbrite description for a class: series dates, the ages phrase,
-    a video-preview link when the video is app-hosted, then the instructor's FAQ.
-    One builder shared by create and update so an edit can never drift."""
-    desc = cls.get("description", "")
+    """The full Eventbrite description for a class: the ages phrase, a video
+    preview link when the video is app-hosted, series dates, then the FAQ.
+    PLAIN TEXT on purpose: Eventbrite escapes markup in this field, so any HTML
+    tags would display literally on the event page. One builder shared by create
+    and update so an edit can never drift."""
+    parts = []
+    ages = ages_open_line(cls)
+    if ages:
+        parts.append(ages)
+    vurl0 = (cls.get("video") or "").strip()
+    if vurl0 and "/media/" in vurl0:
+        parts.append(f"\U0001F3AC Watch a video preview of this class: {vurl0}")
     try:
         sessions = json.loads(cls.get("session_dates") or "[]")
     except Exception:
         sessions = []
     if cls.get("is_series") and sessions:
-        lines = "".join(f"<li>{s['date']} · {s['start']} – {s['end']}</li>" for s in sessions)
-        desc = (f"<p><b>A {len(sessions)}-week course.</b> One ticket covers all "
-                f"{len(sessions)} sessions:</p><ul>{lines}</ul>") + desc
-    ages = ages_open_line(cls)
-    if ages:
-        desc = f"<p><b>{ages}</b></p>" + desc
-    vurl0 = (cls.get("video") or "").strip()
-    if vurl0 and "/media/" in vurl0:
-        desc = f'<p>\U0001F3AC <a href="{vurl0}">Watch a video preview of this class</a></p>' + desc
+        lines = "\n".join(f"  {s['date']} · {s['start']} – {s['end']}" for s in sessions)
+        parts.append(f"A {len(sessions)}-week course. One ticket covers all "
+                     f"{len(sessions)} sessions:\n{lines}")
+    parts.append(cls.get("description", "") or "")
     try:
         faq = json.loads(cls.get("faq") or "[]")
     except Exception:
         faq = []
-    if faq:
-        import html as _html
-        rows = "".join(f"<p><b>{_html.escape(x.get('q',''))}</b><br>{_html.escape(x.get('a',''))}</p>"
+    rows = "\n\n".join(f"{x.get('q','').strip()}\n{x.get('a','').strip()}"
                        for x in faq if x.get("q") and x.get("a"))
-        if rows:
-            desc = desc + f"<h3>Good to know</h3>{rows}"
-    return desc
+    if rows:
+        parts.append(f"Good to know\n\n{rows}")
+    return "\n\n".join(p for p in parts if p)
 
 def eventbrite_event_status(eid, cfg):
     """The live status of an Eventbrite event ('live', 'draft', 'deleted', ...),
