@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "9.8-plaintext-descriptions"
+VERSION = "9.9-embed-autoheight"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1595,7 +1595,17 @@ class H(http.server.BaseHTTPRequestHandler):
   .b{{margin-top:10px;display:inline-block;background:#171512;color:#fff;font-weight:800;font-size:12.5px;border-radius:999px;padding:8px 14px}}
   .none{{font-size:15px;color:#5A554C;padding:20px;text-align:center}}
   .season{{font-size:34px;font-weight:800;letter-spacing:-.01em;margin:10px 6px 16px;color:#1d3557}}
-</style></head><body>{heading}<div class="wrap">{body}</div></body></html>"""
+</style></head><body>{heading}<div class="wrap">{body}</div>
+<script>
+  // Tell the host page (the Squarespace embed) how tall this content really is,
+  // so the iframe hugs the cards instead of reserving a fixed block of space.
+  function gibbyPing(){{
+    parent.postMessage({{gibbyEmbedHeight: document.documentElement.scrollHeight}}, "*");
+  }}
+  window.addEventListener("load", gibbyPing);
+  window.addEventListener("resize", gibbyPing);
+  setInterval(gibbyPing, 1000);
+</script></body></html>"""
             data = page.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
