@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.13.1-painttube-icon"
+VERSION = "10.14.0-login-fixes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -199,7 +199,8 @@ def init_db():
     # Session lifetime + rotating refresh tokens.
     for col, typ in (("expires_at","TEXT"), ("refresh_token","TEXT"),
                      ("refresh_expires_at","TEXT"), ("revoked_at","TEXT"),
-                     ("rotated_from","TEXT"), ("revoked_reason","TEXT"), ("csrf_token","TEXT")):
+                     ("rotated_from","TEXT"), ("revoked_reason","TEXT"), ("csrf_token","TEXT"),
+                     ("remember","INTEGER DEFAULT 1")):
         try: c.execute(f"ALTER TABLE sessions ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
     c.execute("CREATE INDEX IF NOT EXISTS sessions_refresh ON sessions(refresh_token)")
@@ -433,20 +434,25 @@ REFRESH_TTL = 30 * 24 * 3600      # refresh token: 30 days, single use
 def _ts(seconds_ahead=0):
     return (datetime.datetime.now() + datetime.timedelta(seconds=seconds_ahead)).isoformat(timespec="seconds")
 
-def new_session(c, user_id, rotated_from=None):
+def new_session(c, user_id, rotated_from=None, remember=1):
     """Issue a fresh access + refresh pair plus a CSRF token bound to the session.
     Returns (access, refresh, csrf)."""
     access, refresh = secrets.token_hex(24), secrets.token_hex(32)
     csrf = secrets.token_urlsafe(32)
     c.execute("""INSERT INTO sessions(token,user_id,created,expires_at,refresh_token,
-                                      refresh_expires_at,rotated_from,csrf_token)
-                 VALUES(?,?,?,?,?,?,?,?)""",
-              (access, user_id, now(), _ts(ACCESS_TTL), refresh, _ts(REFRESH_TTL), rotated_from, csrf))
+                                      refresh_expires_at,rotated_from,csrf_token,remember)
+                 VALUES(?,?,?,?,?,?,?,?,?)""",
+              (access, user_id, now(), _ts(ACCESS_TTL), refresh, _ts(REFRESH_TTL), rotated_from, csrf,
+               1 if remember else 0))
     return access, refresh, csrf
 
-def session_cookies(access, refresh, secure=""):
-    return [f"gibby_session={access}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ACCESS_TTL}{secure}",
-            f"gibby_refresh={refresh}; Path=/; HttpOnly; SameSite=Lax; Max-Age={REFRESH_TTL}{secure}"]
+def session_cookies(access, refresh, secure="", remember=True):
+    """Persistent cookies when 'remember me' is on; browser-session cookies (die
+    on close) when it is off."""
+    keep_a = f"; Max-Age={ACCESS_TTL}" if remember else ""
+    keep_r = f"; Max-Age={REFRESH_TTL}" if remember else ""
+    return [f"gibby_session={access}; Path=/; HttpOnly; SameSite=Lax{keep_a}{secure}",
+            f"gibby_refresh={refresh}; Path=/; HttpOnly; SameSite=Lax{keep_r}{secure}"]
 
 CLEAR_COOKIES = ["gibby_session=; Path=/; Max-Age=0", "gibby_refresh=; Path=/; Max-Age=0"]
 
@@ -2259,15 +2265,21 @@ class H(http.server.BaseHTTPRequestHandler):
                                       (b.get("email","").strip().lower(),)).fetchone()
             if not row:
                 c.close(); return self.send_json({"error":"No account for that email."},401)
-            h,_ = hash_pw(b.get("password",""), row["pw_salt"])
+            pw = b.get("password","")
+            h,_ = hash_pw(pw, row["pw_salt"])
             if h != row["pw_hash"]:
-                c.close(); return self.send_json({"error":"Wrong password."},401)
-            access, refresh, csrf = new_session(c, row["id"])
+                # Phones love smuggling a space in with an autofilled or pasted
+                # password; retry with the ends trimmed before rejecting.
+                h2,_ = hash_pw(pw.strip(), row["pw_salt"])
+                if h2 != row["pw_hash"]:
+                    c.close(); return self.send_json({"error":"Wrong password."},401)
+            remember = bool(b.get("remember", True))
+            access, refresh, csrf = new_session(c, row["id"], remember=remember)
             c.commit(); c.close()
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
             return self.send_json({"user":{"name":row["name"],"role":row["role"],"email":row["email"]},
                                    "expires_in": ACCESS_TTL, "csrf_token": csrf},
-                                  cookie=session_cookies(access, refresh, secure))
+                                  cookie=session_cookies(access, refresh, secure, remember))
         if p == "/api/refresh":
             # Single-use rotation: the presented refresh token is revoked and a brand
             # new access+refresh pair is issued.
@@ -2280,8 +2292,27 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"invalid refresh token"},401, cookie=CLEAR_COOKIES)
             if row["revoked_at"]:
                 if row["revoked_reason"] == "rotated":
-                    # A single-use token presented twice after it was already spent
-                    # means it leaked. Kill every session this user has.
+                    # GRACE WINDOW: the same refresh arriving twice within a minute
+                    # is almost always innocent (the home-screen app and a browser
+                    # tab racing, or a retried request), not theft. Issue a fresh
+                    # independent pair instead of nuking every session.
+                    try:
+                        age = (datetime.datetime.now()
+                               - datetime.datetime.fromisoformat(row["revoked_at"])).total_seconds()
+                    except (TypeError, ValueError):
+                        age = 1e9
+                    if age < 60:
+                        remember = bool(row["remember"]) if "remember" in row.keys() else True
+                        access, refresh, csrf = new_session(c, row["user_id"],
+                                                            rotated_from=row["token"], remember=remember)
+                        urow = c.execute("SELECT name,role,email FROM users WHERE id=?",(row["user_id"],)).fetchone()
+                        c.commit(); c.close()
+                        secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
+                        print(f"[session] grace refresh for user {urow['email']} ({age:.0f}s after rotation)")
+                        return self.send_json({"ok":True, "user":dict(urow), "expires_in": ACCESS_TTL,
+                                               "csrf_token": csrf},
+                                              cookie=session_cookies(access, refresh, secure, remember))
+                    # Old spent token presented again much later: it leaked.
                     revoke_all_for_user(c, row["user_id"], "(refresh token reuse detected)", reason="reuse")
                     c.commit(); c.close()
                     print(f"[session] REFRESH REUSE for user {row['user_id']}: all sessions revoked")
@@ -2295,14 +2326,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 revoke_session(c, refresh=rtok, reason="expired"); c.commit(); c.close()
                 return self.send_json({"error":"Your session has expired. Please sign in again."},
                                       401, cookie=CLEAR_COOKIES)
+            remember = bool(row["remember"]) if "remember" in row.keys() else True
             revoke_session(c, token=row["token"], refresh=rtok, reason="rotated")   # old pair dies here
-            access, refresh, csrf = new_session(c, row["user_id"], rotated_from=row["token"])
+            access, refresh, csrf = new_session(c, row["user_id"], rotated_from=row["token"], remember=remember)
             urow = c.execute("SELECT name,role,email FROM users WHERE id=?",(row["user_id"],)).fetchone()
             c.commit(); c.close()
             secure = "; Secure" if self.headers.get("X-Forwarded-Proto","") == "https" else ""
             return self.send_json({"ok":True, "user":dict(urow), "expires_in": ACCESS_TTL,
                                    "csrf_token": csrf},
-                                  cookie=session_cookies(access, refresh, secure))
+                                  cookie=session_cookies(access, refresh, secure, remember))
         if p == "/api/logout":
             # Revoke BOTH halves server-side. The next request with either token fails.
             access_tok, refresh_tok = self.cookie("gibby_session"), self.cookie("gibby_refresh")

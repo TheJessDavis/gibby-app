@@ -804,7 +804,14 @@ function renderLogin(){
      <div style="text-align:left">
        <div class="err" id="lerr"></div>
        <label>Email</label><input id="le" placeholder="you@theeverett.org" autocomplete="username">
-       <label>Password</label><input id="lp" type="password" placeholder="Your password" autocomplete="current-password">
+       <label>Password</label>
+       <div style="position:relative">
+         <input id="lp" type="password" placeholder="Your password" autocomplete="current-password" style="padding-right:44px">
+         <button type="button" onclick="togglePw('lp',this)" aria-label="Show password"
+           style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;font-size:18px;cursor:pointer;padding:6px">👁️</button>
+       </div>
+       <label class="chk" style="margin:10px 0 0;display:flex;gap:8px;align-items:center">
+         <input type="checkbox" id="lremember" checked> <span>Remember me on this device</span></label>
        <label>Sign in as</label>
        <div class="seg roleseg" id="lrole"><button class="on" data-v="instructor" onclick="segPick(this)">Instructor</button><button data-v="admin" onclick="segPick(this)">Admin</button></div>
        <div style="height:16px"></div>
@@ -817,10 +824,18 @@ function renderLogin(){
 async function doLogin(){
   const chosen = $('#lrole') ? $('#lrole').querySelector('.on').dataset.v : null;
   try{
-    await api('/api/login','POST',{email:$('#le').value,password:$('#lp').value});
+    await api('/api/login','POST',{email:$('#le').value,password:$('#lp').value,
+      remember: $('#lremember') ? $('#lremember').checked : true});
     LOGIN_CHOICE = chosen;
     boot();
   }catch(e){ const x=$('#lerr'); x.textContent=e.message; x.classList.add('show'); }
+}
+function togglePw(id,btn){
+  const f=$('#'+id); if(!f) return;
+  const show = f.type==='password';
+  f.type = show ? 'text' : 'password';
+  btn.textContent = show ? '🙈' : '👁️';
+  btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
 }
 async function logout(){ await api('/api/logout','POST'); ME=null; VIEWAS=null; boot(); }
 
@@ -2880,7 +2895,7 @@ async function submitClassNow(){
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
  'testEventbrite','testFacebook','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
- 'submitChangePw','submitForgot','submitReset','doLogin','logout',
+ 'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
