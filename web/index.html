@@ -605,6 +605,11 @@ async function openContract(id){
       </div>
     </div>
     <div class="err" id="cterr"></div>
+    <button type="button" onclick="ctAskToggle()" style="border:none;background:none;font-family:inherit;font-weight:800;font-size:12.5px;color:var(--ink-soft);cursor:pointer;text-align:left;padding:8px 0 0;text-decoration:underline">💬 Questions about your contract before signing?</button>
+    <div id="ct_ask" style="display:none">
+      <textarea id="ct_q" placeholder="Ask anything: pay, materials, cancellation, wording. It goes straight to The Gibby team and they will get back to you." style="min-height:90px"></textarea>
+      <button class="btn ghost" type="button" style="margin-top:8px" onclick="ctAskSend(${c.id})">Send question to The Gibby</button>
+    </div>
     <label>Type your full name (this is your signature)</label><input id="ct_name" value="${esc(ME&&ME.name||'')}" placeholder="Your full legal name">
     <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
     <div class="hint">${ME&&ME.address
@@ -697,6 +702,20 @@ async function submitReschedule(){
       + (r.students_emailed?`\nStudents emailed: ${r.students_emailed}`:''));
     RESCHED=null; VIEWAS='admin'; renderAdmin('approvals');
   }catch(e){ alert((e.data&&e.data.error)||'Could not move the class. Try again.'); }
+}
+function ctAskToggle(){
+  const b=$('#ct_ask'); if(!b) return;
+  b.style.display = b.style.display==='none' ? '' : 'none';
+  if(b.style.display==='') $('#ct_q').focus();
+}
+async function ctAskSend(id){
+  const q=($('#ct_q').value||'').trim();
+  if(q.length<5){ alert('Write your question first.'); return; }
+  try{
+    await api('/api/classes/'+id+'/contract-question','POST',{question:q});
+    alert('Sent! The Gibby team got your question by email and will get back to you. You can wait for the answer, or sign now if you feel ready.');
+    $('#ct_q').value=''; ctAskToggle();
+  }catch(e){ alert(e.message); }
 }
 async function saveAsTemplate(id){
   const r=await api('/api/classes/'+id+'/make-template','POST',{});
@@ -2919,7 +2938,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','saveAsTemplate','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

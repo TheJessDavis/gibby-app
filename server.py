@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.14.4-contract-sign-fix"
+VERSION = "10.15.0-contract-questions"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2574,6 +2574,27 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("UPDATE classes SET template_requested=1 WHERE id=?",(row["id"],))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        mq = re.match(r"^/api/classes/(\d+)/contract-question$", p)
+        if mq:
+            # An instructor asks the admins something about their contract before
+            # signing. Staff-facing email, so no approval gate applies.
+            u = self.require("instructor")
+            if not u: return
+            q = (self.read_json().get("question") or "").strip()
+            if len(q) < 5:
+                return self.send_json({"error":"Write your question first."},400)
+            cid = int(mq.group(1)); c = db()
+            row = c.execute("SELECT title FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            admins = emails_for(c, "WHERE role='admin'")
+            c.close()
+            title = row["title"] if row else f"class #{cid}"
+            mailer.send(admins, f"Contract question from {u['name']}: {title}",
+                f"{u['name']} has a question about the contract for \"{title}\" and is "
+                f"holding off on signing until it is answered:\n\n"
+                f"{q[:4000]}\n\n"
+                f"Reply directly to {u.get('email','')} to answer.")
+            print(f"[contract] question from {u['name']} on class #{cid}")
+            return self.send_json({"ok":True, "sent_to": len(admins)})
         mm = re.match(r"^/api/classes/(\d+)/sign-contract$", p)
         if mm:
             u = self.require("instructor")
