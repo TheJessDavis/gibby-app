@@ -518,7 +518,10 @@ function renderProfile(){
   if(PF_SKILLS===null) PF_SKILLS = ((ME&&ME.skills)||[]).slice();
   const left = SKILL_IDEAS.filter(x=>!PF_SKILLS.includes(x));
   $('#view').innerHTML=`<div style="max-width:420px;margin:0 auto">
-    <button class="btn ghost" style="padding:8px 16px" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">\u2190 Back to home</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <button class="btn ghost" style="padding:8px 16px" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">\u2190 Back to home</button>
+      <button class="btn dark" style="padding:8px 18px;font-size:.85rem" onclick="saveProfile()">Save</button>
+    </div>
     <h2 style="margin-top:14px">Your <em>profile</em></h2>
     <p class="sub">Your name, photo and skills, shown on your classes.</p>
     <div class="err" id="perr"></div>
