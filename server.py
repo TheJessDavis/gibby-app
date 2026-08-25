@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.12.5-age-options"
+VERSION = "10.13.0-pwa"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1556,7 +1556,8 @@ class H(http.server.BaseHTTPRequestHandler):
             path = os.path.join(WEB, "index.html")  # SPA fallback
         ctype = {"html":"text/html","js":"application/javascript","css":"text/css",
                  "png":"image/png","gif":"image/gif","jpg":"image/jpeg","jpeg":"image/jpeg",
-                 "svg":"image/svg+xml","webp":"image/webp","ico":"image/x-icon"}.get(path.rsplit(".",1)[-1],"application/octet-stream")
+                 "svg":"image/svg+xml","webp":"image/webp","ico":"image/x-icon",
+                 "json":"application/json","webmanifest":"application/manifest+json"}.get(path.rsplit(".",1)[-1],"application/octet-stream")
         with open(path,"rb") as f: data = f.read()
         self.send_response(200)
         is_text = ctype.startswith("text/") or "javascript" in ctype or "svg" in ctype

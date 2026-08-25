@@ -1,0 +1,14 @@
+{
+  "name": "Gibby Class Manager",
+  "short_name": "Gibby",
+  "description": "Class slots, submissions, approvals and rosters for the Gibby Center for the Arts.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FAF6EE",
+  "theme_color": "#1E160A",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
