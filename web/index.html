@@ -596,16 +596,16 @@ async function openContract(id){
   if(!c||!c.contract_text) return alert('Could not load the contract.');
   const m=document.createElement('div'); m.id='ctmodal';
   m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:14px';
-  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:480px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:18px 20px">
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:480px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:18px 20px;overflow-y:auto">
     <h2 style="margin:0 0 8px">Instructor <em>contract</em></h2>
-    <div style="flex:1;position:relative;min-height:120px;display:flex">
-      <pre id="ct_pre" style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;padding-bottom:34px;margin:0">${esc(c.contract_text)}</pre>
+    <div style="flex:1;position:relative;min-height:160px;display:flex">
+      <pre id="ct_pre" style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;padding-bottom:34px;margin:0">${esc(c.contract_text)}<span id="ct_end" style="display:block;height:1px"></span></pre>
       <div id="ct_fade" style="position:absolute;left:0;right:0;bottom:0;height:56px;border-radius:0 0 12px 12px;background:linear-gradient(rgba(251,247,239,0),#FBF7EF 78%);pointer-events:none;display:flex;align-items:flex-end;justify-content:center">
         <span style="background:var(--ink);color:#fff;font-size:10.5px;font-weight:800;border-radius:999px;padding:5px 12px;margin-bottom:7px">↓ Scroll to read the rest</span>
       </div>
     </div>
     <div class="err" id="cterr"></div>
-    <label>Type your full name (this is your signature)</label><input id="ct_name" placeholder="${esc(ME&&ME.name||'')}">
+    <label>Type your full name (this is your signature)</label><input id="ct_name" value="${esc(ME&&ME.name||'')}" placeholder="Your full legal name">
     <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
     <div class="hint">${ME&&ME.address
       ? 'Pre-filled from your profile. You can edit it just for this contract, or change it on your profile to make it stick.'
@@ -625,9 +625,18 @@ async function openContract(id){
   // The Sign button unlocks once they have actually seen the whole contract.
   const pre=$('#ct_pre'), fade=$('#ct_fade'), btn=$('#ct_signbtn');
   const unlock=()=>{ btn.disabled=false; btn.style.opacity='1'; btn.textContent='Sign contract'; fade.style.display='none'; };
-  const check=()=>{ if(pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 24) unlock(); };
+  const check=()=>{ if(pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 48) unlock(); };
   pre.addEventListener('scroll', check);
+  // Belt and braces: a sentinel at the very end of the text unlocks the moment
+  // it becomes visible, which survives every mobile rounding/layout quirk that
+  // scroll math can miss.
+  const endMark=$('#ct_end');
+  if(endMark && window.IntersectionObserver){
+    new IntersectionObserver((es,obs)=>{ if(es.some(e=>e.isIntersecting)){ unlock(); obs.disconnect(); } },
+                             {root: pre, threshold: 0}).observe(endMark);
+  }
   setTimeout(check, 250);   // short contracts that fit without scrolling unlock at once
+  setTimeout(check, 1200);  // and again after mobile layout settles
 }
 let CT_DRAWN=false;
 function padInit(){
