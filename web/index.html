@@ -1295,7 +1295,15 @@ async function adminConnections(){
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
+    <div class="card"><div class="row"><div><h3>Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div>
+      <button class="btn ghost" style="margin-top:10px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
+      <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
+}
+async function refileContracts(){
+  if(!confirm('Re-file every signed contract to Google Drive as a PDF?')) return;
+  const r=await api('/api/admin/refile-contracts','POST',{});
+  alert('Re-filing '+r.refiling+' contract'+(r.refiling===1?'':'s')+' as PDFs. They appear in the Gibby Contracts folder within a minute or two.\n\nThe old .html copies stay put; delete them from Drive whenever you like.');
 }
 async function testEmail(){
   const r=await api('/api/test-email','POST',{});
@@ -2937,7 +2945,7 @@ async function submitClassNow(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','testFacebook','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','testFacebook','refileContracts','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','returnFollowup','sendFeedback','setCalView',
