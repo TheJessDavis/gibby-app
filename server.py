@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.16.0-contract-pdf"
+VERSION = "10.16.1-drive-pdf"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -872,10 +872,17 @@ def push_contract_to_drive(cls):
 <b>Address:</b> {e(cls.get('contract_address',''))}<br>
 <b>Date signed:</b> {e((cls.get('contract_signed_at') or '')[:10])}<br>
 <b>Class:</b> {e(cls.get('title',''))}</p>{sig_html}</body></html>"""
-    fname = f"Contract - {cls.get('title','class')} - {cls.get('contract_name','')} - {(cls.get('contract_signed_at') or '')[:10]}.html"
+    fname = f"Contract - {cls.get('title','class')} - {cls.get('contract_name','')} - {(cls.get('contract_signed_at') or '')[:10]}.pdf"
+    # The bridge (Version 11+) files a ready-made PDF when one is sent, and
+    # converts the HTML itself as a fallback for older payloads.
+    pdf_b64 = ""
+    try:
+        pdf_b64 = base64.b64encode(contract_pdf_bytes(cls)).decode()
+    except Exception as ex:
+        print("[contract] pdf build failed, bridge will convert the html:", ex)
     try:
         payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "contract",
-                              "filename": fname, "html": doc}).encode()
+                              "filename": fname, "html": doc, "pdf": pdf_b64}).encode()
         req = urllib.request.Request(cfg["webhook_url"], data=payload,
             headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
         with urllib.request.urlopen(req, timeout=60) as r:
@@ -3126,6 +3133,16 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"{who} for {when}.\n\n"
                 f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
+        if p == "/api/admin/refile-contracts":
+            # One-shot: re-send every signed contract to Drive (as PDFs now).
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            n = c.execute("""UPDATE classes SET contract_drive=0
+                             WHERE contract_status='signed' AND deleted_at IS NULL""").rowcount
+            c.commit(); c.close()
+            threading.Thread(target=sweep_contracts_to_drive, daemon=True).start()
+            return self.send_json({"ok":True, "refiling": n})
         if p == "/api/admin/reassign-instructor":
             u = self.require("admin")
             if not u: return
