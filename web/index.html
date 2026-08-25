@@ -607,6 +607,9 @@ async function openContract(id){
     <div class="err" id="cterr"></div>
     <label>Type your full name (this is your signature)</label><input id="ct_name" placeholder="${esc(ME&&ME.name||'')}">
     <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
+    <div class="hint">${ME&&ME.address
+      ? 'Pre-filled from your profile. You can edit it just for this contract, or change it on your profile to make it stick.'
+      : 'This gets saved to your profile too, so your next contract fills it in automatically.'}</div>
     <label>Sign here with your finger (or mouse)</label>
     <div style="background:#fff;border:2px solid var(--line);border-radius:12px;position:relative">
       <canvas id="ct_pad" style="display:block;width:100%;height:120px;touch-action:none;border-radius:10px"></canvas>
