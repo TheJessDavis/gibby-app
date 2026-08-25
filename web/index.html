@@ -49,8 +49,9 @@
   @media(max-width:560px){.edithint{display:none}}
   .view{flex:1;padding:20px;padding-bottom:120px}
   @font-face{font-family:'Summer Fresh';src:url('/SummerFresh.ttf') format('truetype');font-display:swap}
-  h2{font-family:'Summer Fresh',var(--disp);font-size:30px;letter-spacing:.01em;margin:6px 0 4px;font-weight:400}
-  h2 em{font-family:inherit;font-style:normal;font-weight:400}
+  .hi{font-family:'Summer Fresh',var(--disp);font-size:34px;font-weight:400;letter-spacing:.01em;margin:2px 0 -2px}
+  h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
+  h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
   .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4}
   .tabs{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
   .tabs button{flex:0 1 auto;border:none;background:var(--white);padding:9px 16px;border-radius:999px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--ink);box-shadow:0 3px 9px rgba(0,0,0,.05)}
@@ -79,7 +80,7 @@
   .clswhen{font-size:12px;font-weight:800;color:rgba(23,21,18,.55)}
   .clslab{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:rgba(23,21,18,.55)}
   .clsname{font-size:20px;font-weight:800;letter-spacing:-.02em;margin:1px 0 3px}
-  .card h3{margin:0 0 4px;font-size:17px;font-weight:400;letter-spacing:.01em;font-family:'Summer Fresh',var(--disp)}
+  .card h3{margin:0 0 4px;font-size:16px;font-weight:800;letter-spacing:-.01em}
   .card .meta{font-size:12px;color:var(--ink-soft);font-weight:700}
   .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
   .pill{font-size:10.5px;font-weight:800;padding:5px 10px;border-radius:999px;white-space:nowrap}
@@ -915,6 +916,7 @@ async function loadNavBadges(){
 async function adminDashboard(){
   const d = await api('/api/dashboard');
   $('#tab').innerHTML = `
+    <div class="hi">Hi ${esc(((ME&&ME.name)||'').split(' ')[0]||'there')}!</div>
     <h2>Needs <em>you</em></h2>
     <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
     ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
@@ -2187,7 +2189,8 @@ async function instrOpen(){
   if(!$('#tab')) return;
   if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
   if(!ROOM_PICK){
-    $('#tab').innerHTML = `<h2>Pick a <em>room</em></h2>
+    $('#tab').innerHTML = `<div class="hi">Hi ${esc(((ME&&ME.name)||'').split(' ')[0]||'there')}!</div>
+      <h2>Pick a <em>room</em></h2>
       ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick the room, then a new time.</span></div>`:''}
       ${RESCHED?`<div class="tip">\u{1F4C6} <span>Moving <b>${esc(RESCHED.title)}</b> (now ${esc(RESCHED.slot_date)}). Pick the room, then the new window.</span></div>`:''}
       <p class="sub">Where will your class live? You can change your mind any time.</p>
