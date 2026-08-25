@@ -1921,7 +1921,7 @@ async function publishClass(id, ev){
 }
 /* The single source of truth for age ranges. Used by the class form, the admin
    edit form and the template editor. */
-const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14','Ages 15–18','Ages 18+','Ages 21+'];
+const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Ages 15–18','Ages 16+','Ages 18+','Ages 21+'];
 function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
 async function openEditForm(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
@@ -2573,7 +2573,7 @@ function openForm(slot, draftPayload){
   initFormHelpers();
 }
 // Under-14 groups trigger the "do you need a volunteer assistant?" question.
-const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 11–14'];
+const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14'];
 function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
 /* Mirrors age_label() on the server so the instructor sees the exact phrase that
    will appear on Eventbrite and the poster, not the raw checkbox list. */
