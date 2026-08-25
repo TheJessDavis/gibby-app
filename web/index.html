@@ -49,7 +49,6 @@
   @media(max-width:560px){.edithint{display:none}}
   .view{flex:1;padding:20px;padding-bottom:120px}
   @font-face{font-family:'Summer Fresh';src:url('/SummerFresh.ttf') format('truetype');font-display:swap}
-  .hi{font-family:'Summer Fresh',var(--disp);font-size:34px;font-weight:400;letter-spacing:.01em;margin:2px 0 -2px}
   h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
   h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
   .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4}
@@ -67,7 +66,7 @@
   .hello .ava,.hello .ava-i{width:46px;height:46px;font-size:17px;vertical-align:0;margin:0;border-radius:50%}
   .helloava{position:relative;border:none;background:none;padding:0;cursor:pointer;line-height:0}
   .helloava .avaedit{position:absolute;right:-3px;bottom:-3px;font-size:11px;background:var(--white);border-radius:50%;width:19px;height:19px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,0,0,.18)}
-  .hello b{font-size:20px;letter-spacing:-.02em;display:block;line-height:1.15}
+  .hello b{font-family:'Summer Fresh',var(--disp);font-weight:400;font-size:26px;letter-spacing:.01em;display:block;line-height:1.1}
   .hello small{font-size:12px;font-weight:700;color:var(--ink-soft)}
   #tab .clscard.cls-pending{background:var(--yellow)}
   #tab .clscard.cls-review{background:var(--purple)}
@@ -916,7 +915,6 @@ async function loadNavBadges(){
 async function adminDashboard(){
   const d = await api('/api/dashboard');
   $('#tab').innerHTML = `
-    <div class="hi">Hi ${esc(((ME&&ME.name)||'').split(' ')[0]||'there')}!</div>
     <h2>Needs <em>you</em></h2>
     <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
     ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
@@ -2189,8 +2187,7 @@ async function instrOpen(){
   if(!$('#tab')) return;
   if(!slots.length){ $('#tab').innerHTML='<h2>Grab an <em>open slot</em></h2><div class="muted">No open slots right now.</div>'; return; }
   if(!ROOM_PICK){
-    $('#tab').innerHTML = `<div class="hi">Hi ${esc(((ME&&ME.name)||'').split(' ')[0]||'there')}!</div>
-      <h2>Pick a <em>room</em></h2>
+    $('#tab').innerHTML = `<h2>Pick a <em>room</em></h2>
       ${RESUB?`<div class="tip">\u267b\ufe0f <span>Resubmitting <b>${esc(RESUB.title)}</b>. Pick the room, then a new time.</span></div>`:''}
       ${RESCHED?`<div class="tip">\u{1F4C6} <span>Moving <b>${esc(RESCHED.title)}</b> (now ${esc(RESCHED.slot_date)}). Pick the room, then the new window.</span></div>`:''}
       <p class="sub">Where will your class live? You can change your mind any time.</p>
