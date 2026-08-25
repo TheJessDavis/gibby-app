@@ -683,6 +683,11 @@ async function submitReschedule(){
     RESCHED=null; VIEWAS='admin'; renderAdmin('approvals');
   }catch(e){ alert((e.data&&e.data.error)||'Could not move the class. Try again.'); }
 }
+async function saveAsTemplate(id){
+  const r=await api('/api/classes/'+id+'/make-template','POST',{});
+  alert(r.existing
+    ? 'A template with this title already exists, so nothing was duplicated.'
+    : 'Saved! It now appears under Templates and in the "Start from a template" list on the class form.'); }
 async function reqTemplate(id){
   try{ await api('/api/classes/'+id+'/request-template','POST',{});
     alert('Sent! The Gibby will consider adding it to the template library.');
@@ -1823,6 +1828,8 @@ function cardCls(c){
     ${actingRole()==='instructor' && c.status!=='cancelled' ? (c.template_requested
       ? `<div class="meta" style="margin-top:8px">\u2b50 Requested as a template. The Gibby is considering it.</div>`
       : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">\u2b50 Request this to be a template</button>`) : ''}
+    ${actingRole()==='admin' && c.status!=='cancelled'
+      ? `<button class="btn ghost" style="margin-top:8px" onclick="saveAsTemplate(${c.id})">\u2b50 Save as template${c.template_requested?' (instructor asked!)':''}</button>` : ''}
     ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
       <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
@@ -2897,7 +2904,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','saveAsTemplate','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

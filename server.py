@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.14.0-login-fixes"
+VERSION = "10.14.1-save-as-template"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3601,6 +3601,30 @@ class H(http.server.BaseHTTPRequestHandler):
                 (b.get("title","").strip() or "Untitled", b.get("category","Uncategorized"),
                  b.get("age","All Ages"), b.get("description",""), json.dumps(b.get("supplies",[]))))
             c.commit(); c.close(); return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/make-template"):
+            # Admin turns an existing class into a reusable template, straight
+            # from the class card. Idempotent by title: a second click reports
+            # the template already exists instead of duplicating it.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"class not found"},404)
+            cls = dict(row)
+            title = (cls.get("title") or "").strip() or "Untitled"
+            if c.execute("SELECT id FROM templates WHERE title=? AND archived=0",(title,)).fetchone():
+                c.execute("UPDATE classes SET template_requested=0 WHERE id=?",(cid,))
+                c.commit(); c.close()
+                return self.send_json({"ok":True, "existing":True})
+            try: supplies = json.loads(cls.get("supplies") or "[]")
+            except Exception: supplies = []
+            c.execute("INSERT INTO templates(title,category,age,description,supplies) VALUES(?,?,?,?,?)",
+                      (title, "From a past class", cls.get("age_label") or cls.get("age_range") or "All Ages",
+                       cls.get("description") or "", json.dumps(supplies)))
+            c.execute("UPDATE classes SET template_requested=0 WHERE id=?",(cid,))
+            c.commit(); c.close()
+            print(f"[template] {u['name']} saved class #{cid} '{title}' as a template")
+            return self.send_json({"ok":True, "existing":False})
         if p.startswith("/api/templates/") and p.endswith("/archive"):
             u = self.require("admin")
             if not u: return
