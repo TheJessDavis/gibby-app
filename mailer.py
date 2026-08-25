@@ -38,7 +38,8 @@ def load_email_config():
 
 APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
 
-def send(to, subject, body, cfg=None):
+def send(to, subject, body, cfg=None, attachments=None):
+    """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
     recips = [r for r in recips if r and "@" in r]
@@ -48,12 +49,16 @@ def send(to, subject, body, cfg=None):
     if APP_URL not in body:
         body = body.rstrip() + f"\n\nOpen the Gibby Class Manager: {APP_URL}"
     if not (cfg["email_live"] and cfg["smtp_host"]):
-        print(f"[email] DRY-RUN from={cfg['mail_from']} to={recips} subject={subject!r}")
+        print(f"[email] DRY-RUN from={cfg['mail_from']} to={recips} subject={subject!r}"
+              + (f" attachments={[a[0] for a in attachments]}" if attachments else ""))
         return True
     try:
         msg = EmailMessage()
         msg["From"] = cfg["mail_from"]; msg["To"] = ", ".join(recips); msg["Subject"] = subject
         msg.set_content(body)
+        for fn, data, mime in (attachments or []):
+            mt, _, st = (mime or "application/octet-stream").partition("/")
+            msg.add_attachment(data, maintype=mt, subtype=st or "octet-stream", filename=fn)
         ctx = ssl.create_default_context()
         with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
             s.starttls(context=ctx)

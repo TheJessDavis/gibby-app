@@ -10,7 +10,7 @@ emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
 import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64
-import integrations, mailer, gcal, threading, time
+import integrations, mailer, gcal, pdfgen, threading, time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.15.3-hi-fixed"
+VERSION = "10.16.0-contract-pdf"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -841,6 +841,20 @@ def _season_pivot():
     except ValueError:
         return 12, 2026
 
+def contract_pdf_bytes(cls):
+    """The signed contract as a real PDF (readable anywhere, unlike the HTML
+    copies): contract text, signed-by block, and the drawn signature."""
+    footer = [f"Signed by: {cls.get('contract_name','')}",
+              f"Address: {cls.get('contract_address','')}",
+              f"Date signed: {(cls.get('contract_signed_at') or '')[:10]}",
+              f"Class: {cls.get('title','')}"]
+    return pdfgen.contract_pdf(cls.get("contract_text") or "",
+                               cls.get("contract_signature") or "", footer)
+
+def contract_pdf_name(cls):
+    safe = re.sub(r"[^A-Za-z0-9 ,'-]", "", cls.get("title") or "class")
+    return f"Contract - {safe} - {cls.get('contract_name','')} - {(cls.get('contract_signed_at') or '')[:10]}.pdf"
+
 def push_contract_to_drive(cls):
     """File the signed contract into the Gibby Contracts folder on Google Drive,
     through the same bridge script that handles the calendar. Returns the Drive
@@ -1527,6 +1541,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/unsubscribe": return self.unsubscribe_page()
         if p.startswith("/class-photo/"): return self.class_photo(p)
         if p.startswith("/class-poster/"): return self.class_poster(p)
+        if p.startswith("/contract-pdf/"): return self.contract_pdf_dl(p)
         if p.startswith("/media/"): return self.serve_media(p)
         if p.startswith("/api/"): return self.api_get(p)
         return self.static(p)
@@ -1573,6 +1588,34 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if is_text else ""))
         self.send_header("Content-Length",str(len(data)))
         self.end_headers(); self.wfile.write(data)
+
+    def contract_pdf_dl(self, p):
+        """Signed-in download of a signed contract as PDF. Admins get any;
+        instructors only their own."""
+        u = self.current_user()
+        if not u: return self.send_json({"error":"sign in first"},401)
+        try: cid = int(p.split("/")[2].split(".")[0])
+        except (IndexError, ValueError): return self.send_json({"error":"not found"},404)
+        c = db()
+        row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+        c.close()
+        if not row or row["contract_status"] != "signed":
+            return self.send_json({"error":"no signed contract for that class"},404)
+        if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+            return self.send_json({"error":"not yours"},403)
+        cls = dict(row)
+        try:
+            pdf = contract_pdf_bytes(cls)
+        except Exception as ex:
+            print("[contract] pdf build failed:", ex)
+            return self.send_json({"error":"could not build the PDF"},500)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Disposition", f'attachment; filename="{contract_pdf_name(cls)}"')
+        self.send_header("Content-Length", str(len(pdf)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(pdf)
 
     def class_poster(self, p):
         """PUBLIC landscape poster for a published class (the one Eventbrite and
@@ -2635,11 +2678,18 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception as ex:
                 print("[contract] immediate Drive filing failed:", ex)
             first = (u.get("name") or "").split(" ")[0] or "there"
+            pdf_att = []
+            try:
+                fresh_row = dict(row); fresh_row.update({"contract_name": name, "contract_address": addr,
+                    "contract_signed_at": now(), "contract_signature": b.get("signature") or ""})
+                pdf_att = [(contract_pdf_name(fresh_row), contract_pdf_bytes(fresh_row), "application/pdf")]
+            except Exception as ex:
+                print("[contract] pdf build failed, sending text only:", ex)
             mailer.send(u["email"], f"Your signed contract for {row['title']}",
                 f"Hi {first},\n\nThank you! Your instructor contract for \"{row['title']}\" is signed "
-                f"and on file at The Gibby. Here is your copy for your records.\n\n"
-                f"Signed by: {name}\nAddress: {addr}\nDate: {now()[:10]}\n\n"
-                f"{'-'*40}\n{row['contract_text'] or ''}\n{'-'*40}\n\nThe Gibby")
+                f"and on file at The Gibby. Your copy is attached as a PDF.\n\n"
+                f"Signed by: {name}\nAddress: {addr}\nDate: {now()[:10]}\n\nThe Gibby",
+                attachments=pdf_att)
             return self.send_json({"ok":True})
         mm = re.match(r"^/api/users/(\d+)/ask-to-teach$", p)
         if mm:

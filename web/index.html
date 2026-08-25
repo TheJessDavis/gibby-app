@@ -1855,7 +1855,8 @@ function cardCls(c){
     ${c.status==='incomplete'?`<div class="meta" style="margin-top:10px;color:#B45309">Note: ${esc(c.admin_note)}</div>`:''}
     ${c.status==='incomplete' && actingRole()==='instructor' ? `<button class="btn dark" style="margin-top:10px" onclick="startResubmit(${c.id})">Fix and resubmit</button>`:''}
     ${c.contract_status==='signed'?`<div class="meta" style="margin-top:8px">\u{1F58A}\uFE0F Contract signed by ${esc(c.contract_name||'')} on ${esc((c.contract_signed_at||'').slice(0,10))}</div>
-      ${c.contract_signature?`<img src="${c.contract_signature}" alt="signature" style="height:36px;margin-top:4px;background:#fff;border-radius:8px;padding:2px 8px">`:''}`:''}
+      ${c.contract_signature?`<img src="${c.contract_signature}" alt="signature" style="height:36px;margin-top:4px;background:#fff;border-radius:8px;padding:2px 8px">`:''}
+      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="/contract-pdf/${c.id}" target="_blank">⬇ Download contract (PDF)</a>`:''}
     ${c.contract_status==='sent' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px;color:#B45309">\u{1F4DD} Contract sent, waiting on signature</div>`:''}
     ${(()=>{ let fq=c.faq; try{ if(typeof fq==='string') fq=JSON.parse(fq||'[]'); }catch(_){ fq=[]; }
       return (fq&&fq.length)?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">FAQ (${fq.length})</summary>
