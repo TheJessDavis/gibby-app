@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.7-verified-backups"
+VERSION = "10.20.0-compact"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2178,7 +2178,9 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
                                    "backup": backup_status(),
                                    "backup_running": _meta_get("backup_running") == "1",
-                                   "backup_stage": _meta_get("backup_stage")})
+                                   "backup_stage": _meta_get("backup_stage"),
+                                   "compact_running": _meta_get("compact_running") == "1",
+                                   "compact": json.loads(_meta_get("last_compact") or "{}")})
         if p.startswith("/api/class/") and p.endswith("/registrations"):
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3054,6 +3056,27 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"{who} for {when}.\n\n"
                 f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
+        if p == "/api/admin/compact-db":
+            u = self.require("admin")
+            if not u: return
+            b = backup_status()
+            if not (b.get("ok") and (b.get("at") or "")[:10] == datetime.date.today().isoformat()):
+                return self.send_json({"error": "Run a backup first. Compaction is refused "
+                                                "without a verified backup from today."}, 400)
+            if _meta_get("compact_running") == "1":
+                return self.send_json({"started": False, "error": "A compaction is already running."})
+            def _run():
+                _meta_set("compact_running", "1")
+                try:
+                    compact_database()
+                except Exception as e:
+                    import traceback; traceback.print_exc()
+                    _meta_set("last_compact", json.dumps(
+                        {"ok": False, "error": f"{type(e).__name__}: {e}", "at": now()}))
+                finally:
+                    _meta_set("compact_running", "0")
+            threading.Thread(target=_run, daemon=True).start()
+            return self.send_json({"started": True})
         if p == "/api/admin/db-info":
             u = self.require("admin")
             if not u: return
@@ -3992,6 +4015,51 @@ def daily_backup_if_due():
         print("[backup] FAILED:", r.get("error"))
         _meta_set("last_backup_day", "")     # let the next tick retry
     return r
+
+def compact_database():
+    """Reclaim the disk that historic audit snapshots are holding.
+
+    audit_log is append-only and guarded by triggers; this is the one deliberate,
+    admin-invoked exception, and it removes ONLY the base64 image blobs inside old
+    snapshots. Every status, timestamp, actor and ordinary field is left exactly
+    as recorded. Refused unless a verified backup from today exists."""
+    before = os.path.getsize(DB) if os.path.exists(DB) else 0
+    c = db()
+    freed_rows = 0
+    try:
+        c.execute("DROP TRIGGER IF EXISTS audit_no_update")
+        c.execute("DROP TRIGGER IF EXISTS audit_no_delete")
+        for rid, snap in c.execute("SELECT id, snapshot FROM audit_log").fetchall():
+            if not snap or len(snap) < 100_000: continue
+            try: obj = json.loads(snap)
+            except Exception: continue
+            obj = {k: (f"[{len(v)//1024}KB image removed {datetime.date.today().isoformat()}]"
+                       if isinstance(v, str) and v.startswith("data:image/") else v)
+                   for k, v in obj.items()}
+            c.execute("UPDATE audit_log SET snapshot=? WHERE id=?", (json.dumps(obj), rid))
+            freed_rows += 1
+        c.execute("UPDATE job_queue SET payload='{}' WHERE status IN ('done','skipped')")
+        c.commit()
+    finally:
+        # the guarantee goes straight back on, even if the pass above failed
+        c.execute("""CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log
+                     BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END""")
+        c.execute("""CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log
+                     BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END""")
+        c.commit()
+        c.close()
+    v = sqlite3.connect(DB, timeout=120)
+    try:
+        v.isolation_level = None
+        v.execute("VACUUM")
+    finally:
+        v.close()
+    after = os.path.getsize(DB) if os.path.exists(DB) else 0
+    out = {"ok": True, "rows_cleaned": freed_rows, "before_bytes": before,
+           "after_bytes": after, "at": now()}
+    _meta_set("last_compact", json.dumps(out))
+    print(f"[compact] {before//1048576}MB -> {after//1048576}MB, {freed_rows} audit rows cleaned")
+    return out
 
 def invite_instructor(c, name, email, proto, host):
     """Find or create an instructor account by email, for admin submit-on-behalf.

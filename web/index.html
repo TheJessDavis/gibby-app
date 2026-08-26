@@ -1301,7 +1301,11 @@ async function adminConnections(){
         : 'No backup has run yet.'}</div></div>${d.backup&&d.backup.ok?'<span class="pill appr">protected</span>':'<span class="pill inc">at risk</span>'}</div>
       <div class="meta" style="margin-top:8px">A full copy of the database (classes, registrations, accounts, contracts and signatures) is snapshotted every night into the <b>Gibby Backups</b> folder on Drive.</div>
       ${d.backup&&d.backup.link?`<a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.backup.link}" target="_blank">Open the latest backup on Drive</a>`:''}
-      <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button></div>
+      <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button>
+      <div class="meta" style="margin-top:10px">${d.compact&&d.compact.ok
+        ? 'Compacted '+esc((d.compact.at||'').slice(0,10))+': '+Math.round(d.compact.before_bytes/1048576)+' MB \u2192 '+Math.round(d.compact.after_bytes/1048576)+' MB'
+        : 'Old audit entries can hold large images. Compacting removes those blobs (never the history itself) and reclaims disk.'}</div>
+      <button class="btn ghost" style="margin-top:6px" onclick="compactDb()">Compact database</button></div>
     <div class="card"><div class="row"><div><h3>Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
       <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div>
@@ -1328,6 +1332,24 @@ async function backupNow(){
     alert('Still uploading. Check the Backups card again in a minute.');
     renderAdmin('connections');
   }catch(e){ alert('Backup failed:\n\n'+e.message); renderAdmin('connections'); }
+}
+async function compactDb(){
+  if(!confirm('Compact the database?\n\nThis removes the large images stored inside OLD audit entries and reclaims disk space. The audit history itself (what changed, when, and by whom) is kept. A verified backup from today is required.')) return;
+  try{
+    const r=await api('/api/admin/compact-db','POST',{});
+    if(!r.started){ alert(r.error||'Could not start.'); return; }
+    for(let i=0;i<40;i++){
+      await new Promise(res=>setTimeout(res,3000));
+      const d=await api('/api/integrations');
+      if(!d.compact_running){
+        const cp=d.compact||{};
+        alert(cp.ok ? 'Compacted.\n\n'+Math.round(cp.before_bytes/1048576)+' MB \u2192 '+Math.round(cp.after_bytes/1048576)+' MB\n'+cp.rows_cleaned+' audit entries cleaned.'
+                    : 'Compaction failed:\n\n'+(cp.error||'unknown reason'));
+        renderAdmin('connections'); return;
+      }
+    }
+    alert('Still working. Check the Backups card again shortly.'); renderAdmin('connections');
+  }catch(e){ alert('Compaction failed:\n\n'+e.message); }
 }
 async function refileContracts(){
   if(!confirm('Re-file every signed contract to Google Drive as a PDF?')) return;
@@ -3005,7 +3027,7 @@ async function submitClassNow(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','testFacebook','refileContracts','backupNow','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','returnFollowup','sendFeedback','setCalView',
