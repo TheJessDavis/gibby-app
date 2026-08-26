@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.4-db-info"
+VERSION = "10.19.5-table-sizes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3058,7 +3058,21 @@ class H(http.server.BaseHTTPRequestHandler):
             c.close()
             try: st = os.statvfs(os.path.dirname(DB) or ".")
             except Exception: st = None
+            # where the bytes actually are, biggest table first
+            sizes = {}
+            c2 = db()
+            for (tbl,) in c2.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+                cols = [r[1] for r in c2.execute(f"PRAGMA table_info({tbl})").fetchall()]
+                if not cols: continue
+                expr = "+".join(f"COALESCE(LENGTH(CAST({col} AS BLOB)),0)" for col in cols)
+                try:
+                    sizes[tbl] = c2.execute(f"SELECT COALESCE(SUM({expr}),0), COUNT(*) FROM {tbl}").fetchone()
+                except Exception:
+                    pass
+            c2.close()
+            top = sorted(sizes.items(), key=lambda kv: -kv[1][0])[:8]
             return self.send_json({
+                "tables": [{"table": t, "bytes": v[0], "rows": v[1]} for t, v in top],
                 "db_bytes": os.path.getsize(DB) if os.path.exists(DB) else 0,
                 "live_bytes": (cnt - free) * pg, "dead_bytes": free * pg,
                 "disk_free_bytes": (st.f_bavail * st.f_frsize) if st else None,
