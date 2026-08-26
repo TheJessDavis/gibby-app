@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.18.1-photo-kind"
+VERSION = "10.19.0-backups"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1452,6 +1452,8 @@ def scheduler_loop():
             except Exception as e: print("[contract] sweep error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
+            try: daily_backup_if_due()
+            except Exception as e: print("[backup] error:", e)
             prune_sessions()          # tidy away long-dead auth rows
             try:
                 c = db()
@@ -2166,7 +2168,8 @@ class H(http.server.BaseHTTPRequestHandler):
             c=db(); rows=[dict(r) for r in c.execute("SELECT * FROM integrations").fetchall()]; c.close()
             cfg = integrations.load_config(); conf = integrations.configured(cfg)
             for r in rows: r["configured"] = conf.get(r["id"], r["id"] == "website")
-            return self.send_json({"integrations": rows, "live": bool(cfg["live"])})
+            return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
+                                   "backup": backup_status()})
         if p.startswith("/api/class/") and p.endswith("/registrations"):
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3042,6 +3045,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"{who} for {when}.\n\n"
                 f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
+        if p == "/api/admin/backup-now":
+            u = self.require("admin")
+            if not u: return
+            r = backup_to_drive()
+            if r.get("ok"): _meta_set("last_backup_day", datetime.date.today().isoformat())
+            return self.send_json(r)
         if p == "/api/admin/refile-contracts":
             # One-shot: re-send every signed contract to Drive (as PDFs now).
             u = self.require("admin")
@@ -3760,6 +3769,92 @@ def send_announcement_bg(subject, body, recips, cfg):
         full = body.rstrip() + f"\n\n--\nNo longer want these updates? Unsubscribe: {unsub_link(r)}"
         if mailer.send(r, subject, full, cfg): sent += 1
     print(f"[marketing] announcement sent to {sent}/{len(recips)}")
+
+# --------------------------------------------------------------- backups ----
+# The whole business lives in one SQLite file on a Render disk: classes,
+# registrations, accounts, signed contracts and their signature drawings.
+# Nightly it is snapshotted and pushed to Drive through the same bridge the
+# calendar uses, so losing the disk costs a day at worst instead of everything.
+BACKUP_KEEP_DAYS = 30
+
+def _db_snapshot_gz():
+    """A CONSISTENT gzipped copy of the live database. sqlite3's own backup API
+    is used rather than reading the file: a plain copy taken mid-write produces a
+    corrupt database, which is the classic way backups turn out worthless."""
+    import gzip, tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".db"); os.close(fd)
+    try:
+        src = sqlite3.connect(DB)
+        dst = sqlite3.connect(tmp)
+        try:
+            with dst:
+                src.backup(dst)
+        finally:
+            dst.close(); src.close()
+        raw = open(tmp, "rb").read()
+        return gzip.compress(raw, 6), len(raw)
+    finally:
+        try: os.remove(tmp)
+        except OSError: pass
+
+def _meta_get(k, default=""):
+    c = db(); r = c.execute("SELECT v FROM meta WHERE k=?", (k,)).fetchone(); c.close()
+    return r["v"] if r else default
+
+def _meta_set(k, v):
+    c = db()
+    c.execute("INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, str(v)))
+    c.commit(); c.close()
+
+def backup_to_drive():
+    """Push one snapshot to the Gibby Backups folder. Returns a result dict."""
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"):
+        return {"ok": False, "error": "the Drive bridge is not configured"}
+    try:
+        blob, raw_len = _db_snapshot_gz()
+    except Exception as e:
+        return {"ok": False, "error": f"could not snapshot the database: {e}"}
+    fname = f"gibby-backup-{datetime.date.today().isoformat()}.db.gz"
+    try:
+        payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "backup",
+                              "filename": fname, "mime": "application/gzip",
+                              "keep_days": BACKUP_KEEP_DAYS,
+                              "data": base64.b64encode(blob).decode()}).encode()
+        req = urllib.request.Request(cfg["webhook_url"], data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+        with urllib.request.urlopen(req, timeout=180) as r:
+            res = json.loads(r.read().decode("utf-8", "replace"))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if not res.get("ok"):
+        return {"ok": False, "error": str(res.get("error") or res)[:300]}
+    out = {"ok": True, "file": fname, "bytes": len(blob), "raw_bytes": raw_len,
+           "link": res.get("link"), "trashed": res.get("trashed", 0),
+           "at": now()}
+    _meta_set("last_backup", json.dumps(out))
+    print(f"[backup] {fname}: {len(blob)//1024}KB gz (from {raw_len//1024}KB), "
+          f"{out['trashed']} expired copies trashed")
+    return out
+
+def backup_status():
+    try:
+        d = json.loads(_meta_get("last_backup") or "{}")
+    except Exception:
+        d = {}
+    return d
+
+def daily_backup_if_due():
+    """One snapshot per calendar day, whoever gets there first."""
+    today = datetime.date.today().isoformat()
+    if _meta_get("last_backup_day") == today:
+        return None
+    _meta_set("last_backup_day", today)      # claim first: a failure must not spin
+    r = backup_to_drive()
+    if not r.get("ok"):
+        print("[backup] FAILED:", r.get("error"))
+        _meta_set("last_backup_day", "")     # let the next tick retry
+    return r
 
 def invite_instructor(c, name, email, proto, host):
     """Find or create an instructor account by email, for admin submit-on-behalf.

@@ -1295,10 +1295,26 @@ async function adminConnections(){
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
+    <div class="card"><div class="row"><div><h3>Backups</h3><div class="meta">${d.backup&&d.backup.ok
+        ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
+        : 'No backup has run yet.'}</div></div>${d.backup&&d.backup.ok?'<span class="pill appr">protected</span>':'<span class="pill inc">at risk</span>'}</div>
+      <div class="meta" style="margin-top:8px">A full copy of the database (classes, registrations, accounts, contracts and signatures) is snapshotted every night into the <b>Gibby Backups</b> folder on Drive.</div>
+      ${d.backup&&d.backup.link?`<a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.backup.link}" target="_blank">Open the latest backup on Drive</a>`:''}
+      <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button></div>
     <div class="card"><div class="row"><div><h3>Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
       <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
+}
+async function backupNow(){
+  const b=event&&event.target; if(b){ b.disabled=true; b.textContent='Backing up\u2026'; }
+  try{
+    const r=await api('/api/admin/backup-now','POST',{});
+    if(r.ok) alert('Backed up.\n\n'+r.file+'  ('+Math.round(r.bytes/1024)+' KB)\nSaved to the Gibby Backups folder on Drive.'
+      + (r.trashed?'\n'+r.trashed+' copy older than 30 days was cleared.':''));
+    else alert('Backup failed:\n\n'+(r.error||'unknown reason'));
+  }catch(e){ alert('Backup failed:\n\n'+e.message); }
+  renderAdmin('connections');
 }
 async function refileContracts(){
   if(!confirm('Re-file every signed contract to Google Drive as a PDF?')) return;
@@ -2976,7 +2992,7 @@ async function submitClassNow(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','testFacebook','refileContracts','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','testFacebook','refileContracts','backupNow','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','returnFollowup','sendFeedback','setCalView',
