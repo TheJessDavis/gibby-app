@@ -10,7 +10,7 @@ emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
 import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64
-import integrations, mailer, gcal, pdfgen, threading, time
+import integrations, mailer, gcal, pdfgen, threading, time, io
 PROCESS_STARTED = time.time()
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.5-table-sizes"
+VERSION = "10.19.6-audit-slim"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -585,7 +585,13 @@ def audit(c, class_id, prev_status, new_status, actor_id):
     place the app writes audit_log, and it never updates or deletes; DB triggers
     enforce that even against bugs. actor_id is None for automated (scheduler) changes."""
     r = c.execute("SELECT * FROM classes WHERE id=?", (class_id,)).fetchone()
-    snap = json.dumps({k: r[k] for k in r.keys()}) if r else "{}"
+    # Image data URLs are NOT part of the audit trail: nothing reads them back
+    # (the viewer hides them), and snapshotting a multi-megabyte poster on every
+    # status change grew this table to 273MB across 30 rows, which is what broke
+    # backups. Record a marker instead so the entry still says an image existed.
+    snap = json.dumps({k: (f"[{len(r[k])//1024}KB image omitted]"
+                           if isinstance(r[k], str) and r[k].startswith("data:image/") else r[k])
+                       for k in r.keys()}) if r else "{}"
     c.execute("INSERT INTO audit_log(class_id,prev_status,new_status,actor_id,ts,snapshot) VALUES(?,?,?,?,?,?)",
               (class_id, prev_status, new_status, actor_id, now(), snap))
 
@@ -3840,12 +3846,12 @@ BACKUP_KEEP_DAYS = 30
 def _db_snapshot_gz():
     """A CONSISTENT, COMPACT gzipped copy of the live database.
 
-    VACUUM INTO is used rather than a file copy or sqlite3's backup API for two
-    reasons: a plain copy taken mid-write is corrupt, and a straight page-for-page
-    copy carries every FREE page along with it. SQLite marks deleted pages free
-    without wiping them, so a database that has had large images replaced still
-    holds the old image bytes -- which do not compress, and turned the first
-    attempt at this into a payload too big to upload."""
+    VACUUM INTO gives a clean copy without the free pages a page-for-page copy
+    would drag along (SQLite frees deleted pages without wiping them). Then, IN
+    THE COPY ONLY, historic image blobs are replaced with markers: the live
+    audit_log is append-only and is left exactly as it is, but its old snapshots
+    carry megabytes of poster data that would otherwise make the backup too big
+    to upload. Everything that identifies what happened and when is preserved."""
     import gzip, tempfile
     fd, tmp = tempfile.mkstemp(suffix=".db"); os.close(fd)
     os.remove(tmp)                      # VACUUM INTO insists the target not exist
@@ -3862,8 +3868,39 @@ def _db_snapshot_gz():
                     dst.close()
         finally:
             src.close()
-        raw = open(tmp, "rb").read()
-        return gzip.compress(raw, 6), len(raw)
+
+        cp = sqlite3.connect(tmp)
+        try:
+            cp.execute("DROP TRIGGER IF EXISTS audit_no_update")
+            cp.execute("DROP TRIGGER IF EXISTS audit_no_delete")
+            for rid, snap in cp.execute("SELECT id, snapshot FROM audit_log").fetchall():
+                if not snap or len(snap) < 100_000: continue
+                try: obj = json.loads(snap)
+                except Exception: continue
+                obj = {k: (f"[{len(v)//1024}KB image omitted from backup]"
+                           if isinstance(v, str) and v.startswith("data:image/") else v)
+                       for k, v in obj.items()}
+                cp.execute("UPDATE audit_log SET snapshot=? WHERE id=?", (json.dumps(obj), rid))
+            # finished jobs keep their payload for no reason; it can hold image data
+            cp.execute("UPDATE job_queue SET payload='{}' WHERE status IN ('done','skipped')")
+            cp.execute("""CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log
+                          BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END""")
+            cp.execute("""CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log
+                          BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END""")
+            cp.commit()
+            cp.execute("VACUUM")        # reclaim what the stripping freed
+            cp.commit()
+        finally:
+            cp.close()
+
+        raw_len = os.path.getsize(tmp)
+        buf = io.BytesIO()              # stream through gzip: never hold two copies
+        with open(tmp, "rb") as fin, gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as gz:
+            while True:
+                chunk = fin.read(1 << 20)
+                if not chunk: break
+                gz.write(chunk)
+        return buf.getvalue(), raw_len
     finally:
         try: os.remove(tmp)
         except OSError: pass
