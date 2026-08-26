@@ -9,7 +9,7 @@ Config-driven and DRY-RUN-SAFE:
 
 When you have real credentials, this is where posting goes live: set the keys,
 flip "live": true, and approvals will create the real Eventbrite event, Facebook
-Page post, Wix event, and Canva graphic. (Descene has no API; see below.)
+Page post, and Canva graphic. (Descene has no API; see below.)
 
 NOTE: endpoint paths/payloads follow each platform's current API shape but should
 be verified against live docs before go-live. Real Eventbrite posting also needs
@@ -37,8 +37,6 @@ def load_config():
         # values often carry stray newlines or spaces; strip ALL whitespace.
         "fb_page_id":        "".join(os.environ.get("FB_PAGE_ID", "").split()),
         "fb_page_token":     "".join(os.environ.get("FB_PAGE_TOKEN", "").split()),
-        "wix_api_key":       os.environ.get("WIX_API_KEY", ""),
-        "wix_site_id":       os.environ.get("WIX_SITE_ID", ""),
         "canva_token":       os.environ.get("CANVA_TOKEN", ""),
         "canva_template_id": os.environ.get("CANVA_TEMPLATE_ID", ""),
     }
@@ -54,7 +52,6 @@ def configured(cfg):
     return {
         "eventbrite": bool(cfg["eventbrite_token"] and cfg["eventbrite_org_id"]),
         "facebook":   bool(cfg["fb_page_id"] and cfg["fb_page_token"]),
-        "wix":        bool(cfg["wix_api_key"] and cfg["wix_site_id"]),
         "canva":      bool(cfg["canva_token"] and cfg["canva_template_id"]),
         "descene":    True,   # guest form submission, no keys needed
     }
@@ -821,16 +818,6 @@ def post_instagram(cls, cfg, image_url):
         except Exception:
             raise RuntimeError(f"Instagram returned HTTP {e.code}")
 
-def post_wix(cls, cfg):
-    if not (cfg["wix_api_key"] and cfg["wix_site_id"]):
-        return _no("skipped: no Wix config")
-    if not cfg["live"]:
-        return _ok("wix-dryrun", "dry-run (would create Wix event)")
-    res = _req("https://www.wixapis.com/events/v1/events",
-        headers={"Authorization": cfg["wix_api_key"], "wix-site-id": cfg["wix_site_id"]},
-        json_body={"event": {"title": cls["title"], "description": cls.get("description", "")}})
-    return _ok((res.get("event") or {}).get("id"), "event created")
-
 def post_descene(cls, cfg):
     """Submit the class to DelawareScene (delawarescene.com), the Delaware
     Division of the Arts events calendar. There is no API, but the public
@@ -983,7 +970,6 @@ def publish(cls, cfg=None, image_url=None):
         "canva":      canva,
         "eventbrite": _safe(post_eventbrite, cls, cfg, image_url),   # 2. post + attach graphic
         "facebook":   _safe(post_facebook, cls, cfg, None),
-        "wix":        _safe(post_wix, cls, cfg),
         "descene":    _safe(post_descene, cls, cfg),
     }
     ext = {}
