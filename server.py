@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.2-vacuum-snapshot"
+VERSION = "10.19.3-backup-diag"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2170,7 +2170,8 @@ class H(http.server.BaseHTTPRequestHandler):
             for r in rows: r["configured"] = conf.get(r["id"], r["id"] == "website")
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
                                    "backup": backup_status(),
-                                   "backup_running": _meta_get("backup_running") == "1"})
+                                   "backup_running": _meta_get("backup_running") == "1",
+                                   "backup_stage": _meta_get("backup_stage")})
         if p.startswith("/api/class/") and p.endswith("/registrations"):
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3070,6 +3071,10 @@ class H(http.server.BaseHTTPRequestHandler):
                         _meta_set("last_backup_day", datetime.date.today().isoformat())
                     else:
                         _meta_set("last_backup", json.dumps({"ok": False, "error": r.get("error"), "at": now()}))
+                except Exception as e:
+                    import traceback; traceback.print_exc()
+                    _meta_set("last_backup", json.dumps(
+                        {"ok": False, "error": f"{type(e).__name__}: {e}", "at": now()}))
                 finally:
                     _meta_set("backup_running", "0")
             threading.Thread(target=_run, daemon=True).start()
@@ -3845,10 +3850,12 @@ def backup_to_drive():
     cfg = gcal.load_gcal_config()
     if not cfg.get("webhook_url"):
         return {"ok": False, "error": "the Drive bridge is not configured"}
+    _meta_set("backup_stage", "snapshotting")
     try:
         blob, raw_len = _db_snapshot_gz()
     except Exception as e:
         return {"ok": False, "error": f"could not snapshot the database: {e}"}
+    _meta_set("backup_stage", f"uploading {len(blob)//1024}KB (from {raw_len//1024}KB)")
     fname = f"gibby-backup-{datetime.date.today().isoformat()}.db.gz"
     b64_len = (len(blob) + 2) // 3 * 4
     if b64_len > 45_000_000:            # Apps Script refuses payloads near 50MB
@@ -3860,10 +3867,11 @@ def backup_to_drive():
                               "data": base64.b64encode(blob).decode()}).encode()
         req = urllib.request.Request(cfg["webhook_url"], data=payload,
             headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
-        with urllib.request.urlopen(req, timeout=180) as r:
+        with urllib.request.urlopen(req, timeout=120) as r:
             res = json.loads(r.read().decode("utf-8", "replace"))
     except Exception as e:
         return {"ok": False, "error": str(e)}
+    _meta_set("backup_stage", "done")
     if not res.get("ok"):
         return {"ok": False, "error": str(res.get("error") or res)[:300]}
     out = {"ok": True, "file": fname, "bytes": len(blob), "raw_bytes": raw_len,
