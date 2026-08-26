@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.18.0-image-shrink"
+VERSION = "10.18.1-photo-kind"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3294,13 +3294,16 @@ class H(http.server.BaseHTTPRequestHandler):
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             img = (b.get("image") or "").strip()
             kind = b.get("kind") or "landscape"
-            if kind not in ("landscape", "portrait"):
-                c.close(); return self.send_json({"error":"kind must be landscape or portrait"},400)
+            # 'photo' is the instructor's own class picture, set on the submission
+            # form. Admins can replace it here too, which is how oversized legacy
+            # images get swapped for downscaled ones.
+            if kind not in ("landscape", "portrait", "photo"):
+                c.close(); return self.send_json({"error":"kind must be landscape, portrait or photo"},400)
             if img and not img.startswith("data:image/"):
                 c.close(); return self.send_json({"error":"That does not look like an image."},400)
             if len(img) > 14_000_000:      # ~10MB of actual image as a data URL
                 c.close(); return self.send_json({"error":"That image is too large. Please use one under 10MB."},400)
-            col = "poster" if kind == "landscape" else "poster_portrait"
+            col = {"landscape": "poster", "portrait": "poster_portrait", "photo": "photo"}[kind]
             c.execute(f"UPDATE classes SET {col}=? WHERE id=?", (img or None, cid))
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
             c.commit(); c.close()
