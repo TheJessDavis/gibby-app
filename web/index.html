@@ -1717,19 +1717,49 @@ window.addEventListener('message', e => {
   closePricingGuide();
   const n = $('#draftnote'); if (n) n.textContent = 'Numbers brought in from the pricing guide. Check them and adjust freely.';
 });
+/* Every image the app stores is downscaled in the browser first. A phone photo
+   or a Canva export is 5-15MB, which bloats the database and makes the public
+   Art Workshops page crawl on mobile. Re-encoding to a sensible size is
+   invisible to whoever is uploading and permanent once done. */
+function shrinkImage(file, maxDim, quality){
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('Could not read that file.'));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => resolve(fr.result);   // not decodable: keep the original
+      img.onload = () => {
+        try{
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          if(scale === 1 && fr.result.length < 900000) return resolve(fr.result);
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const cv = document.createElement('canvas');
+          cv.width = w; cv.height = h;
+          const cx = cv.getContext('2d');
+          cx.fillStyle = '#fff'; cx.fillRect(0, 0, w, h);   // JPEG has no transparency
+          cx.drawImage(img, 0, 0, w, h);
+          const out = cv.toDataURL('image/jpeg', quality || 0.82);
+          resolve(out.length < fr.result.length ? out : fr.result);
+        }catch(_){ resolve(fr.result); }
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
 function attachPoster(id, ev, kind){
   const f = ev.target.files[0]; if(!f) return;
-  if(f.size > 10*1024*1024){ alert('That image is '+Math.round(f.size/1048576)+'MB. Please use one under 10MB.'); return; }
-  const r = new FileReader();
-  r.onload = async e => {
+  if(f.size > 40*1024*1024){ alert('That image is '+Math.round(f.size/1048576)+'MB, which is too big even to open. Please export a smaller one.'); return; }
+  (async () => {
     try{
-      const r = await api('/api/classes/'+id+'/poster','POST',{image:e.target.result, kind:kind||'landscape'});
+      const image = await shrinkImage(f, 1600, 0.82);
+      const r = await api('/api/classes/'+id+'/poster','POST',{image, kind:kind||'landscape'});
       if(r.eventbrite) alert('Poster saved. Eventbrite listing: '+r.eventbrite+'.');
       adminApprovals();
     }
     catch(err){ alert('Could not attach that poster.\n\n'+err.message); }
-  };
-  r.readAsDataURL(f);
+  })();
 }
 async function removePoster(id, kind){
   if(!confirm('Remove this poster? You can attach a different one after.')) return;
@@ -2679,8 +2709,9 @@ function ageChanged(){
 }
 function alcSel(b){ segPick(b);
   if(b.dataset.v==='yes'){ const c=document.querySelector('#f_ages input[value="Ages 21+"]'); if(c){c.checked=true; ageChanged();} } }
-function onPhoto(e){ const f=e.target.files[0]; if(!f)return; const r=new FileReader();
-  r.onload=ev=>{PHOTO=ev.target.result; $('#f_photo').innerHTML='<img src="'+PHOTO+'">';}; r.readAsDataURL(f); }
+function onPhoto(e){ const f=e.target.files[0]; if(!f)return;
+  shrinkImage(f, 1400, 0.82).then(d=>{ PHOTO=d; $('#f_photo').innerHTML='<img src="'+PHOTO+'">'; })
+    .catch(()=>alert('Could not read that image.')); }
 let CALC_DIR='pay';   // which end the instructor is working from: 'pay' or 'ticket'
 function calc(dir){
   if(dir) CALC_DIR=dir;
@@ -2949,7 +2980,7 @@ async function submitClassNow(){
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
  'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','returnFollowup','sendFeedback','setCalView',
- 'attachPoster','removePoster','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
+ 'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
