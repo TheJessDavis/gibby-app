@@ -11,6 +11,7 @@ until real account credentials are available.
 """
 import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64
 import integrations, mailer, gcal, pdfgen, threading, time
+PROCESS_STARTED = time.time()
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.3-backup-diag"
+VERSION = "10.19.4-db-info"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3047,6 +3048,23 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"{who} for {when}.\n\n"
                 f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
+        if p == "/api/admin/db-info":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            pg = c.execute("PRAGMA page_size").fetchone()[0]
+            cnt = c.execute("PRAGMA page_count").fetchone()[0]
+            free = c.execute("PRAGMA freelist_count").fetchone()[0]
+            c.close()
+            try: st = os.statvfs(os.path.dirname(DB) or ".")
+            except Exception: st = None
+            return self.send_json({
+                "db_bytes": os.path.getsize(DB) if os.path.exists(DB) else 0,
+                "live_bytes": (cnt - free) * pg, "dead_bytes": free * pg,
+                "disk_free_bytes": (st.f_bavail * st.f_frsize) if st else None,
+                "uptime_seconds": int(time.time() - PROCESS_STARTED),
+                "backup_running": _meta_get("backup_running"),
+                "backup_stage": _meta_get("backup_stage")})
         if p == "/api/admin/backup-now":
             # Uploading tens of megabytes to Drive takes far longer than the
             # proxy will hold a request open, so the work runs in the background
