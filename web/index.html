@@ -1310,11 +1310,23 @@ async function backupNow(){
   const b=event&&event.target; if(b){ b.disabled=true; b.textContent='Backing up\u2026'; }
   try{
     const r=await api('/api/admin/backup-now','POST',{});
-    if(r.ok) alert('Backed up.\n\n'+r.file+'  ('+Math.round(r.bytes/1024)+' KB)\nSaved to the Gibby Backups folder on Drive.'
-      + (r.trashed?'\n'+r.trashed+' copy older than 30 days was cleared.':''));
-    else alert('Backup failed:\n\n'+(r.error||'unknown reason'));
-  }catch(e){ alert('Backup failed:\n\n'+e.message); }
-  renderAdmin('connections');
+    if(!r.started){ alert(r.error||'Could not start the backup.'); renderAdmin('connections'); return; }
+    // The upload runs on the server; poll until the status card has an answer.
+    for(let i=0;i<40;i++){
+      await new Promise(res=>setTimeout(res,3000));
+      const d=await api('/api/integrations');
+      if(!d.backup_running){
+        const bk=d.backup||{};
+        alert(bk.ok
+          ? 'Backed up.\n\n'+bk.file+'  ('+Math.round(bk.bytes/1024)+' KB)\nSaved to the Gibby Backups folder on Drive.'
+            +(bk.trashed?'\n'+bk.trashed+' copy older than 30 days was cleared.':'')
+          : 'Backup failed:\n\n'+(bk.error||'unknown reason'));
+        renderAdmin('connections'); return;
+      }
+    }
+    alert('Still uploading. Check the Backups card again in a minute.');
+    renderAdmin('connections');
+  }catch(e){ alert('Backup failed:\n\n'+e.message); renderAdmin('connections'); }
 }
 async function refileContracts(){
   if(!confirm('Re-file every signed contract to Google Drive as a PDF?')) return;

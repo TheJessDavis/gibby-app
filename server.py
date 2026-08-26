@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.0-backups"
+VERSION = "10.19.1-backup-async"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2169,7 +2169,8 @@ class H(http.server.BaseHTTPRequestHandler):
             cfg = integrations.load_config(); conf = integrations.configured(cfg)
             for r in rows: r["configured"] = conf.get(r["id"], r["id"] == "website")
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
-                                   "backup": backup_status()})
+                                   "backup": backup_status(),
+                                   "backup_running": _meta_get("backup_running") == "1"})
         if p.startswith("/api/class/") and p.endswith("/registrations"):
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3046,11 +3047,25 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
         if p == "/api/admin/backup-now":
+            # Uploading tens of megabytes to Drive takes far longer than the
+            # proxy will hold a request open, so the work runs in the background
+            # and the Connections card reports the result when it lands.
             u = self.require("admin")
             if not u: return
-            r = backup_to_drive()
-            if r.get("ok"): _meta_set("last_backup_day", datetime.date.today().isoformat())
-            return self.send_json(r)
+            if _meta_get("backup_running") == "1":
+                return self.send_json({"started": False, "error": "A backup is already running."})
+            def _run():
+                _meta_set("backup_running", "1")
+                try:
+                    r = backup_to_drive()
+                    if r.get("ok"):
+                        _meta_set("last_backup_day", datetime.date.today().isoformat())
+                    else:
+                        _meta_set("last_backup", json.dumps({"ok": False, "error": r.get("error"), "at": now()}))
+                finally:
+                    _meta_set("backup_running", "0")
+            threading.Thread(target=_run, daemon=True).start()
+            return self.send_json({"started": True})
         if p == "/api/admin/refile-contracts":
             # One-shot: re-send every signed contract to Drive (as PDFs now).
             u = self.require("admin")
