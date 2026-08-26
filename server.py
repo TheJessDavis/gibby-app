@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.6-audit-slim"
+VERSION = "10.19.7-verified-backups"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3924,6 +3924,29 @@ def backup_to_drive():
         blob, raw_len = _db_snapshot_gz()
     except Exception as e:
         return {"ok": False, "error": f"could not snapshot the database: {e}"}
+    # A backup nobody has opened is not a backup. Decompress the exact bytes
+    # about to be uploaded and confirm SQLite can read them.
+    _meta_set("backup_stage", "verifying")
+    try:
+        import gzip, tempfile
+        fd, vt = tempfile.mkstemp(suffix=".db"); os.close(fd)
+        try:
+            with open(vt, "wb") as f:
+                f.write(gzip.decompress(blob))
+            v = sqlite3.connect(vt)
+            try:
+                ok = v.execute("PRAGMA integrity_check").fetchone()[0]
+                if ok != "ok":
+                    return {"ok": False, "error": f"the snapshot failed its integrity check ({ok})"}
+                counts = {t: v.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                          for t in ("classes", "registrations", "users", "audit_log")}
+            finally:
+                v.close()
+        finally:
+            try: os.remove(vt)
+            except OSError: pass
+    except Exception as e:
+        return {"ok": False, "error": f"the snapshot could not be verified: {e}"}
     _meta_set("backup_stage", f"uploading {len(blob)//1024}KB (from {raw_len//1024}KB)")
     fname = f"gibby-backup-{datetime.date.today().isoformat()}.db.gz"
     b64_len = (len(blob) + 2) // 3 * 4
@@ -3945,7 +3968,7 @@ def backup_to_drive():
         return {"ok": False, "error": str(res.get("error") or res)[:300]}
     out = {"ok": True, "file": fname, "bytes": len(blob), "raw_bytes": raw_len,
            "link": res.get("link"), "trashed": res.get("trashed", 0),
-           "at": now()}
+           "verified": counts, "at": now()}
     _meta_set("last_backup", json.dumps(out))
     print(f"[backup] {fname}: {len(blob)//1024}KB gz (from {raw_len//1024}KB), "
           f"{out['trashed']} expired copies trashed")
