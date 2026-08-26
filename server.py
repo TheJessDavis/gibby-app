@@ -42,7 +42,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.19.1-backup-async"
+VERSION = "10.19.2-vacuum-snapshot"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3052,10 +3052,18 @@ class H(http.server.BaseHTTPRequestHandler):
             # and the Connections card reports the result when it lands.
             u = self.require("admin")
             if not u: return
-            if _meta_get("backup_running") == "1":
+            started_at = _meta_get("backup_started")
+            stale = True
+            if _meta_get("backup_running") == "1" and started_at:
+                try:
+                    stale = (datetime.datetime.now()
+                             - datetime.datetime.fromisoformat(started_at)).total_seconds() > 900
+                except ValueError:
+                    stale = True
+            if _meta_get("backup_running") == "1" and not stale:
                 return self.send_json({"started": False, "error": "A backup is already running."})
             def _run():
-                _meta_set("backup_running", "1")
+                _meta_set("backup_running", "1"); _meta_set("backup_started", now())
                 try:
                     r = backup_to_drive()
                     if r.get("ok"):
@@ -3793,19 +3801,30 @@ def send_announcement_bg(subject, body, recips, cfg):
 BACKUP_KEEP_DAYS = 30
 
 def _db_snapshot_gz():
-    """A CONSISTENT gzipped copy of the live database. sqlite3's own backup API
-    is used rather than reading the file: a plain copy taken mid-write produces a
-    corrupt database, which is the classic way backups turn out worthless."""
+    """A CONSISTENT, COMPACT gzipped copy of the live database.
+
+    VACUUM INTO is used rather than a file copy or sqlite3's backup API for two
+    reasons: a plain copy taken mid-write is corrupt, and a straight page-for-page
+    copy carries every FREE page along with it. SQLite marks deleted pages free
+    without wiping them, so a database that has had large images replaced still
+    holds the old image bytes -- which do not compress, and turned the first
+    attempt at this into a payload too big to upload."""
     import gzip, tempfile
     fd, tmp = tempfile.mkstemp(suffix=".db"); os.close(fd)
+    os.remove(tmp)                      # VACUUM INTO insists the target not exist
     try:
         src = sqlite3.connect(DB)
-        dst = sqlite3.connect(tmp)
         try:
-            with dst:
-                src.backup(dst)
+            try:
+                src.execute("VACUUM INTO ?", (tmp,))
+            except sqlite3.OperationalError:
+                dst = sqlite3.connect(tmp)          # SQLite < 3.27: plain snapshot
+                try:
+                    with dst: src.backup(dst)
+                finally:
+                    dst.close()
         finally:
-            dst.close(); src.close()
+            src.close()
         raw = open(tmp, "rb").read()
         return gzip.compress(raw, 6), len(raw)
     finally:
@@ -3831,6 +3850,9 @@ def backup_to_drive():
     except Exception as e:
         return {"ok": False, "error": f"could not snapshot the database: {e}"}
     fname = f"gibby-backup-{datetime.date.today().isoformat()}.db.gz"
+    b64_len = (len(blob) + 2) // 3 * 4
+    if b64_len > 45_000_000:            # Apps Script refuses payloads near 50MB
+        return {"ok": False, "error": f"the snapshot is too big to upload ({len(blob)//1048576}MB compressed)"}
     try:
         payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "backup",
                               "filename": fname, "mime": "application/gzip",
