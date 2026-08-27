@@ -2037,6 +2037,7 @@ function cardCls(c){
     ${actingRole()==='instructor' && c.status!=='cancelled' ? (c.template_requested
       ? `<div class="meta" style="margin-top:8px">\u2b50 Requested as a template. The Gibby is considering it.</div>`
       : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">\u2b50 Request this to be a template</button>`) : ''}
+    ${c.is_kids?`<div class="meta" style="margin-top:8px">\u{1F9D2} Kids' class: liability waiver, photo release and a <b>required</b> emergency contact are collected at Eventbrite checkout.</div>`:''}
     ${actingRole()==='admin' && c.status!=='cancelled'
       ? `<button class="btn ghost" style="margin-top:8px" onclick="saveAsTemplate(${c.id})">\u2b50 Save as template${c.template_requested?' (instructor asked!)':''}</button>` : ''}
     ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
