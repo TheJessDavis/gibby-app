@@ -453,6 +453,7 @@ async function bootInner(){
   // role text, so nothing in the header says the same thing twice.
   if(user.role==='admin'){ sb.style.display='inline-block'; sb.textContent = (VIEWAS==='admin'?'Admin':'Instructor')+' \u21c4'; sb.title='Switch to '+(VIEWAS==='admin'?'instructor':'admin')+' view'; }
   else sb.style.display='none';
+  if(user && !user.tour_seen && !user.must_change_pw) setTimeout(startTour, 600);
   const mrev=/^#review-(\d+)$/.exec(location.hash||'');
   if(mrev){ REVIEW_FOCUS=+mrev[1]; history.replaceState(null,'',location.pathname+location.search); }
   if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('open');
@@ -550,6 +551,8 @@ function renderProfile(){
     <button class="btn dark" onclick="saveProfile()">Save</button>
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
+    <div style="height:8px"></div>
+    <button class="btn ghost" onclick="startTour()">🧭 Take the tour again</button>
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="logout()">👋 Sign out</button>
   </div>`;
@@ -780,6 +783,54 @@ function pfPickPhoto(ev){
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
 }
+/* ---------------- first-login guided tour ---------------- */
+const TOUR_INSTRUCTOR = [
+  ['\u{1F44B}','Welcome to the Gibby Class Manager','This is where you propose classes, sign your contract, and watch sign-ups roll in. Here is the one-minute lay of the land.'],
+  ['\u{1F5D3}\uFE0F','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. The time either side of your class is yours for setup and cleanup.'],
+  ['\u{1F4DD}','One form, then we take it from here','Describe your class once: photo, price, ages, description (40 to 75 words). Start from a template or copy a past class so repeats take thirty seconds. When you submit, The Gibby reviews it.'],
+  ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Nothing for you to post.'],
+  ['\u{1F58A}\uFE0F','Sign your contract in the app','After approval, My classes shows a Read-and-sign button. Sign with your finger and a PDF copy lands in your email.'],
+  ['\u{1F3A8}','My classes is your home base','Sign-ups appear there as people register (synced from Eventbrite hourly). You will get your roster by email the evening before class.'],
+  ['\u{1F464}','One tip: fill in your profile','Your photo and skills show on your classes, and your address pre-fills every contract so you never type it twice. That is the tour!'],
+];
+const TOUR_ADMIN = [
+  ['\u{1F44B}','Welcome, admin','You approve classes and the app does the posting. Here is the one-minute tour.'],
+  ['\u2705','Approvals is the engine room','New submissions wait there. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the instructor their contract.'],
+  ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes: the dashboard surfaces them. Emails to students are never sent without a person pressing the button.'],
+  ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted) and an instructor payouts ledger with mark-as-paid.'],
+  ['\u22EF','Everything else lives under More','Slots, templates, marketing announcements, connections, backups, the audit trail. The Connections tab also has Back up now and health checks.'],
+  ['\u2B50','Handy tricks','Any class card: save it as a template, print a flyer with a QR code, or download the signed contract PDF. Submitting for another instructor? The form has a picker. That is the tour!'],
+];
+let TOUR_I = 0, TOUR_STEPS_CUR = null;
+function startTour(){
+  TOUR_STEPS_CUR = actingRole()==='admin' ? TOUR_ADMIN : TOUR_INSTRUCTOR;
+  TOUR_I = 0; renderTourStep();
+}
+function renderTourStep(){
+  let m = document.getElementById('tourmodal');
+  if(!m){
+    m = document.createElement('div'); m.id = 'tourmodal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:80;display:flex;align-items:center;justify-content:center;padding:18px';
+    document.body.appendChild(m);
+  }
+  const [icon, title, body] = TOUR_STEPS_CUR[TOUR_I];
+  const last = TOUR_I === TOUR_STEPS_CUR.length - 1;
+  m.innerHTML = `<div style="background:#FFFDF8;border-radius:20px;max-width:400px;width:100%;padding:24px 22px;text-align:center">
+    <div style="font-size:44px">${icon}</div>
+    <h2 style="margin:10px 0 6px;font-size:22px">${title}</h2>
+    <p class="sub" style="margin:0 0 14px">${body}</p>
+    <div style="display:flex;gap:5px;justify-content:center;margin-bottom:14px">
+      ${TOUR_STEPS_CUR.map((_,i)=>`<span style="width:8px;height:8px;border-radius:50%;background:${i===TOUR_I?'var(--ink)':'var(--line)'}"></span>`).join('')}</div>
+    <div class="two">
+      ${TOUR_I>0?`<button class="btn ghost" onclick="TOUR_I--;renderTourStep()">Back</button>`:`<button class="btn ghost" onclick="endTour()">Skip</button>`}
+      <button class="btn dark" onclick="${last?'endTour()':'TOUR_I++;renderTourStep()'}">${last?'Let\u2019s go!':'Next'}</button></div></div>`;
+}
+async function endTour(){
+  const m = document.getElementById('tourmodal'); if(m) m.remove();
+  if(ME && !ME.tour_seen){ try{ await api('/api/tour-done','POST',{}); }catch(_){}
+    ME.tour_seen = 1; }
+}
+
 async function saveProfile(){
   const name=$('#pf_name').value.trim();
   if(!name) return showErr('perr','Name is required.');
@@ -1447,6 +1498,13 @@ async function sendAnnouncement(){
     renderAdmin('marketing');
   }catch(e){ const x=$('#mkerr'); x.textContent=(e.data&&e.data.error)||e.message; x.classList.add('show'); }
 }
+async function markPaid(id, paid){
+  if(paid && !confirm('Mark this payout as paid? The amount, today\u2019s date and your name go on the record.')) { renderAdmin('money'); return; }
+  if(!paid && !confirm('Unmark this payout? Use this only to correct a mistake.')) { renderAdmin('money'); return; }
+  try{ await api('/api/classes/'+id+'/mark-paid','POST',{paid}); }
+  catch(e){ alert(e.message); }
+  renderAdmin('money');
+}
 async function adminMoney(){
   const d = await api('/api/report/money');
   const t = d.totals;
@@ -1483,6 +1541,21 @@ async function adminMoney(){
       <div><b>${pct(t.fill)}</b><span>seats filled</span></div>
     </div>
 
+    ${(()=>{ const owed=d.classes.filter(c=>c.actual && c.status!=='cancelled' && (c.instructor_pay||0)>0);
+      if(!owed.length) return '';
+      const un=owed.filter(c=>!c.paid_at);
+      return `<label style="margin-top:18px">Instructor payouts</label>
+      <p class="sub" style="margin-top:2px">${un.length? un.length+' unpaid, '+money0(un.reduce((a,c)=>a+(c.instructor_pay||0),0))+' owed.' : 'Everyone is paid up.'} Ticking the box records the amount, date and who marked it.</p>
+      <div style="overflow-x:auto"><table class="money"><thead><tr>
+        <th>Instructor</th><th>Class</th><th class="num">Owed</th><th>Status</th></tr></thead><tbody>
+      ${owed.map(c=>`<tr>
+        <td><b>${esc(c.instructor||'')}</b></td>
+        <td>${esc(c.title)}<div class="meta">${esc(c.slot_date||'')} &middot; ${c.pay_model==='split'?'60% split':'flat fee'}</div></td>
+        <td class="num">${money(c.instructor_pay)}</td>
+        <td>${c.paid_at
+          ? `<label class="chk" style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" checked onchange="markPaid(${c.id},false)"> <span>paid ${money(c.paid_amount!=null?c.paid_amount:c.instructor_pay)} on ${esc(c.paid_at)}</span></label>`
+          : `<label class="chk" style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" onchange="markPaid(${c.id},true)"> <span>mark paid</span></label>`}</td></tr>`).join('')}
+      </tbody></table></div>`; })()}
     <label style="margin-top:18px">Best margin by class</label>
     <p class="sub" style="margin-top:2px">Which ideas are worth running again.</p>
     ${league(d.by_class,'run')}
@@ -3042,10 +3115,10 @@ async function submitClassNow(){
 ['approve','markIncomplete','publishClass','saveGraphic','emailClass','instrApprove',
  'instrDecline','promote','cancelClass','submitClass','submitEdit','saveProfile',
  'addSlot','addTemplate','archiveTpl','toggleInteg','syncCalendar','testEmail',
- 'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
+ 'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

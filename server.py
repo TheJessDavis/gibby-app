@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.22.0-real-money"
+VERSION = "10.23.0-payouts-tour"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -155,6 +155,12 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} REAL")
         except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE classes ADD COLUMN money_synced_at TEXT")
+    except sqlite3.OperationalError: pass
+    # Payables ledger: when an instructor was actually paid, by whom, how much.
+    for col, typ in (("paid_at","TEXT"), ("paid_by","INTEGER"), ("paid_amount","REAL")):
+        try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN tour_seen INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
     # Marketing: the notify-me interest list, opt-outs, and a one-value meta store
     # (holds the unsubscribe-link signing key).
@@ -1882,6 +1888,7 @@ class H(http.server.BaseHTTPRequestHandler):
             cq.close()
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
                 "role":u["role"],"must_change_pw":u.get("must_change_pw",0),
+                "tour_seen":u.get("tour_seen",0),
                 "photo":u.get("photo") or "", "skills":json.loads(u.get("skills") or "[]"),
                 "address":u.get("address") or "",
                 "contracts_to_sign":n_contracts},
@@ -2024,7 +2031,9 @@ class H(http.server.BaseHTTPRequestHandler):
                             # what Eventbrite actually collected and will pay out
                             "eb_gross": r["money_gross"], "eb_fees": r["money_fees"],
                             "eb_payout": r["money_payout"], "eb_refunded": r["money_refunded"],
-                            "eb_synced": (r["money_synced_at"] or "")[:16]})
+                            "eb_synced": (r["money_synced_at"] or "")[:16],
+                            "paid_at": (r["paid_at"] or "")[:10], "paid_amount": r["paid_amount"],
+                            "waives_pay": bool(r["waives_pay"])})
                 out.append(fin)
             c.close()
 
@@ -3607,6 +3616,32 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok":False,
                     "error":"Nothing to sync: this class has no Eventbrite event yet, or Eventbrite is not connected."})
             return self.send_json({"ok":True, **r})
+        if p.startswith("/api/classes/") and p.endswith("/mark-paid"):
+            # The payables ledger: records the amount at the moment of marking,
+            # so a later price edit can never rewrite what was actually paid.
+            u = self.require("admin")
+            if not u: return
+            cid = int(p.split("/")[3]); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if b.get("paid"):
+                fin = class_finance(dict(row), enrollment(c, cid))
+                amt = b.get("amount")
+                try: amt = float(amt) if amt is not None else fin["instructor_pay"]
+                except (TypeError, ValueError): amt = fin["instructor_pay"]
+                c.execute("UPDATE classes SET paid_at=?, paid_by=?, paid_amount=? WHERE id=?",
+                          (now(), u["id"], round(amt, 2), cid))
+                print(f"[payout] class #{cid} marked PAID ${amt:.2f} by {u['name']}")
+            else:
+                c.execute("UPDATE classes SET paid_at=NULL, paid_by=NULL, paid_amount=NULL WHERE id=?",(cid,))
+                print(f"[payout] class #{cid} payout UNMARKED by {u['name']}")
+            c.commit(); c.close()
+            return self.send_json({"ok": True})
+        if p == "/api/tour-done":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); c.execute("UPDATE users SET tour_seen=1 WHERE id=?",(u["id"],)); c.commit(); c.close()
+            return self.send_json({"ok": True})
         if p.startswith("/api/classes/") and p.endswith("/promote"):
             u = self.require("admin")
             if not u: return
