@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.23.0-payouts-tour"
+VERSION = "10.24.0-treasurer-sheet"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -938,6 +938,82 @@ def push_contract_to_drive(cls):
         print("[contract] Drive filing failed (will retry hourly):", ex)
     return None
 
+def sweep_treasurer_sheet():
+    """Nightly: rewrite 'Gibby Treasurer Sheet' on Drive. One row per class that
+    touches money, using ACTUAL Eventbrite payouts where they exist plus the
+    payables ledger, so the treasurer reconciles from one place."""
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"): return None
+    c = db()
+    rows_db = [dict(r) for r in c.execute("""
+        SELECT cl.*, u.name AS instr_name FROM classes cl
+        LEFT JOIN users u ON u.id=cl.instructor_id
+        WHERE cl.deleted_at IS NULL AND cl.status IN ('approved','cancelled')
+        ORDER BY cl.id""").fetchall()]
+    counts = {r["class_id"]: r["n"] for r in c.execute(
+        "SELECT class_id, COUNT(*) AS n FROM registrations WHERE refunded=0 GROUP BY class_id")}
+    c.close()
+    headers = ["ID","Class","Instructor","Date","Status","Tickets sold","Ticket $",
+               "Buyers paid $","Eventbrite fees $","Paid out to Gibby $","Refunded $",
+               "Pay model","Instructor pay owed $","Paid?","Paid on","Paid amount $",
+               "Materials (Gibby) $","Net to Gibby $","Money synced"]
+    out = []
+    tot = {"payout":0.0,"fees":0.0,"gross":0.0,"owed":0.0,"paid":0.0,"net":0.0,"sold":0}
+    for cl in rows_db:
+        sold = counts.get(cl["id"], 0)
+        fin = class_finance(cl, sold)
+        payout = cl.get("money_payout")
+        revenue = payout if payout is not None else fin["revenue"]
+        net = round(revenue - fin["instructor_pay"] - fin["gibby_materials"], 2)
+        out.append([cl["id"], cl.get("title") or "", cl.get("instr_name") or "",
+            cl.get("slot_date") or "", cl.get("status") or "", sold,
+            cl.get("ticket_price") or 0,
+            cl.get("money_gross") if cl.get("money_gross") is not None else "",
+            cl.get("money_fees") if cl.get("money_fees") is not None else "",
+            payout if payout is not None else f"(est {fin['revenue']:.2f})",
+            cl.get("money_refunded") or 0,
+            cl.get("pay_model") or "flat", round(fin["instructor_pay"], 2),
+            ("YES" if cl.get("paid_at") else "no"), (cl.get("paid_at") or "")[:10],
+            cl.get("paid_amount") if cl.get("paid_amount") is not None else "",
+            round(fin["gibby_materials"], 2), net,
+            (cl.get("money_synced_at") or "")[:16]])
+        tot["sold"] += sold
+        tot["gross"] += cl.get("money_gross") or 0
+        tot["fees"] += cl.get("money_fees") or 0
+        tot["payout"] += payout if payout is not None else 0
+        tot["owed"] += fin["instructor_pay"] if not cl.get("paid_at") else 0
+        tot["paid"] += cl.get("paid_amount") or 0
+        tot["net"] += net
+    out.append([])
+    out.append(["", "TOTALS", "", "", "", tot["sold"], "",
+                round(tot["gross"],2), round(tot["fees"],2), round(tot["payout"],2), "",
+                "", round(tot["owed"],2) , "(unpaid)", "", round(tot["paid"],2),
+                "", round(tot["net"],2),
+                f"updated {now()[:16]}"])
+    # rows must all be the same width for the bridge's setValues
+    out = [r + [""] * (len(headers) - len(r)) for r in out]
+    try:
+        payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "sheet",
+                              "name": "Gibby Treasurer Sheet",
+                              "headers": headers, "rows": out}).encode()
+        req = urllib.request.Request(cfg["webhook_url"], data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read().decode("utf-8", "replace"))
+        if res.get("ok"):
+            print(f"[treasurer] sheet updated: {len(out)} rows -> {res.get('link')}")
+            _meta_set("treasurer_sheet_link", res.get("link") or "")
+            return res.get("link")
+        print("[treasurer] bridge refused:", res)
+    except Exception as ex:
+        print("[treasurer] sheet update failed (retries next night):", ex)
+    return None
+
+def daily_treasurer_if_due():
+    today = datetime.date.today().isoformat()
+    if _meta_get("last_treasurer_day") == today: return
+    if sweep_treasurer_sheet(): _meta_set("last_treasurer_day", today)
+
 def sweep_master_sheet():
     """Keep 'Gibby Classes Master Sheet' on Google Drive current: one row per
     class ever submitted, rewritten wholesale every hour through the bridge
@@ -1499,6 +1575,8 @@ def scheduler_loop():
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
             except Exception as e: print("[backup] error:", e)
+            try: daily_treasurer_if_due()
+            except Exception as e: print("[treasurer] error:", e)
             prune_sessions()          # tidy away long-dead auth rows
             try:
                 c = db()
@@ -3160,6 +3238,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 "uptime_seconds": int(time.time() - PROCESS_STARTED),
                 "backup_running": _meta_get("backup_running"),
                 "backup_stage": _meta_get("backup_stage")})
+        if p == "/api/admin/treasurer-sheet-now":
+            u = self.require("admin")
+            if not u: return
+            link = sweep_treasurer_sheet()
+            if link: _meta_set("last_treasurer_day", datetime.date.today().isoformat())
+            return self.send_json({"ok": bool(link), "link": link})
         if p == "/api/admin/backup-now":
             # Uploading tens of megabytes to Drive takes far longer than the
             # proxy will hold a request open, so the work runs in the background
