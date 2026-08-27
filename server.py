@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.20.0-compact"
+VERSION = "10.21.0-desc-40-75"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2884,7 +2884,9 @@ class H(http.server.BaseHTTPRequestHandler):
             b = self.read_json()
             req = ["title","age_range","length","room"]
             miss=[k for k in req if not str(b.get(k,"")).strip()]
-            if len((b.get("description") or "").split()) < 50: miss.append("description (at least 50 words)")
+            dw = len((b.get("description") or "").split())
+            if dw < 40: miss.append("description (at least 40 words)")
+            elif dw > 75: miss.append(f"description (75 words maximum, currently {dw})")
             if not b.get("photo"): miss.append("photo")
             def _num(k):
                 try: return float(b.get(k))

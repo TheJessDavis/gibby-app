@@ -2611,14 +2611,14 @@ function openForm(slot, draftPayload){
     </div>
     <div class="hint">Submitting for someone else? Pick them here and the class, contract and emails all go to them.</div>`:''}
     <label>Class title</label><input id="f_title">
-    <label>Description <span style="color:var(--ink-soft);font-weight:600">(at least 50 words)</span></label>
-    <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 / 50 words</div>
+    <label>Description <span style="color:var(--ink-soft);font-weight:600">(40 to 75 words)</span></label>
+    <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 words (aim for 40 to 75)</div>
     <details class="eg"><summary>Stuck? See an example of the right length</summary>
       <div class="egbody">&ldquo;Make a hanging stained-glass suncatcher in a single relaxed evening.
       We&rsquo;ll cut and foil real glass, solder it the traditional way, and finish with a chain so
       it&rsquo;s ready to hang. Every step is demonstrated slowly, and no experience is needed.
       You&rsquo;ll leave with a finished piece and the itch to make another.&rdquo;
-      <div class="meta" style="margin-top:6px">53 words. Say what they&rsquo;ll make, what happens on
+      <div class="meta" style="margin-top:6px">53 words, comfortably in range. Say what they&rsquo;ll make, what happens on
       the night, and who it suits.</div></div>
     </details>
 
@@ -2820,7 +2820,11 @@ function calc(dir){
 }
 function wordCount(s){ return (s||'').trim().split(/\s+/).filter(Boolean).length; }
 function descCount(){ const n=wordCount($('#f_desc').value); const el=$('#f_desccount');
-  if(el){ el.textContent=n+' / 50 words'+(n>=50?' ✓':''); el.style.color=n>=50?'#3F7A32':'var(--ink-soft)'; } }
+  if(!el) return;
+  const ok = n>=40 && n<=75;
+  el.textContent = n+' words'+(ok?' ✓':(n>75?' — '+(n-75)+' over the 75 word limit':' (aim for 40 to 75)'));
+  el.style.color = ok ? '#3F7A32' : (n>75 ? '#B4442C' : 'var(--ink-soft)');
+}
 function validateForm(){
   /* Each missing item carries the element to mark and jump to, so a failed submit
      lands the instructor ON the gap instead of a list at the top of the page. */
@@ -2829,7 +2833,8 @@ function validateForm(){
   const add=(sel,label,short)=>miss.push({sel,label,short});
   if(!$('#f_title').value.trim()) add('#f_title','Class title','title');
   const dw=wordCount($('#f_desc').value);
-  if(dw<50) add('#f_desc','Description (at least 50 words'+(dw?', currently '+dw:'')+')','description');
+  if(dw<40) add('#f_desc','Description (at least 40 words'+(dw?', currently '+dw:'')+')','description');
+  else if(dw>75) add('#f_desc','Description (75 words maximum, currently '+dw+')','description');
   if(!$('#f_len').value) add('#f_len','Class length','length');
   const cs2=$('#f_cstart'), ce2=$('#f_cend');
   if(cs2 && ce2 && tmin(cs2.value) >= tmin(ce2.value))
