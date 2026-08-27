@@ -1575,7 +1575,8 @@ async function adminMoney(){
       <td class="num">${c.enrolled}/${c.planned}</td>
       <td class="num">${c.eb_payout!=null
         ? money0(c.eb_payout)+'<div class="meta">actual payout'+(c.eb_fees?'; '+money0(c.eb_fees)+' fees':'')+'</div>'
-        : money0(c.revenue)+'<div class="meta">estimate</div>'}</td>
+        : money0(c.revenue)+'<div class="meta">estimate</div>'}${(c.eb_refunded||c.refund_tickets)
+        ? '<div class="meta neg">'+(c.eb_refunded?money(c.eb_refunded)+' refunded':'')+(c.refund_tickets?' ('+c.refund_tickets+' ticket'+(c.refund_tickets===1?'':'s')+')':'')+'</div>' : ''}</td>
       <td class="num">${money0(c.instructor_pay)}<div class="meta">${c.pay_model==='split'
         ? '60% of sales'
         : ('flat' + (c.formula_pay!==c.instructor_pay ? ', 60% would be '+money0(c.formula_pay) : ''))}</div></td>

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.24.0-treasurer-sheet"
+VERSION = "10.25.0-refund-visibility"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2096,6 +2096,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 LEFT JOIN users u ON u.id = cl.instructor_id
                 WHERE cl.deleted_at IS NULL AND cl.status IN ('approved','cancelled')
                 ORDER BY cl.slot_date""")]
+            refund_counts = {x["class_id"]: x["n"] for x in c.execute(
+                "SELECT class_id, COUNT(*) AS n FROM registrations WHERE refunded=1 GROUP BY class_id")}
             out = []
             for r in rows:
                 enrolled = enrollment(c, r["id"])
@@ -2111,6 +2113,7 @@ class H(http.server.BaseHTTPRequestHandler):
                             "eb_payout": r["money_payout"], "eb_refunded": r["money_refunded"],
                             "eb_synced": (r["money_synced_at"] or "")[:16],
                             "paid_at": (r["paid_at"] or "")[:10], "paid_amount": r["paid_amount"],
+                            "refund_tickets": refund_counts.get(r["id"], 0),
                             "waives_pay": bool(r["waives_pay"])})
                 out.append(fin)
             c.close()

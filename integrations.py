@@ -641,9 +641,12 @@ def fetch_order_money(event_id, cfg):
             g = ((c.get("gross") or {}).get("value") or 0)
             f = (((c.get("eventbrite_fee") or {}).get("value") or 0)
                  + ((c.get("payment_fee") or {}).get("value") or 0))
-            if (o.get("status") or "") == "refunded":
+            st = (o.get("status") or "").lower()
+            if "refund" in st:            # 'refunded' and any partial variant
                 refunded += g
                 continue
+            if st not in ("placed", "transferred"):
+                continue                   # cancelled/deleted/abandoned: not money
             gross += g; fees += f; orders += 1
         pag = d.get("pagination") or {}
         cont = pag.get("continuation")
