@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.25.0-refund-visibility"
+VERSION = "10.26.0-kids-releases"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -156,6 +156,10 @@ def init_db():
         except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE classes ADD COLUMN money_synced_at TEXT")
     except sqlite3.OperationalError: pass
+    # Checkout answers synced from Eventbrite: emergency contact + photo consent.
+    for col, typ in (("emer_contact","TEXT"), ("photo_ok","INTEGER")):
+        try: c.execute(f"ALTER TABLE registrations ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError: pass
     # Payables ledger: when an instructor was actually paid, by whom, how much.
     for col, typ in (("paid_at","TEXT"), ("paid_by","INTEGER"), ("paid_amount","REAL")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
@@ -294,16 +298,19 @@ def sync_registrations(class_id, _req_fn=None):
         existing = c.execute("SELECT id FROM registrations WHERE class_id=? AND external_id=?",
                              (class_id, ext)).fetchone() if ext else None
         if existing:
-            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=?,checked_in=?,source=? WHERE id=?""",
+            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=?,checked_in=?,source=?,
+                         emer_contact=?,photo_ok=? WHERE id=?""",
                       (a["name"], a["email"], a["phone"], 1 if a["refunded"] else 0,
-                       1 if a.get("checked_in") else 0, a.get("source") or "", existing["id"]))
+                       1 if a.get("checked_in") else 0, a.get("source") or "",
+                       a.get("emer_contact") or "", a.get("photo_ok"), existing["id"]))
             updated += 1
         else:
-            c.execute("""INSERT INTO registrations(class_id,name,email,phone,refunded,checked_in,external_id,source,created)
-                         VALUES(?,?,?,?,?,?,?,?,?)""",
+            c.execute("""INSERT INTO registrations(class_id,name,email,phone,refunded,checked_in,external_id,source,
+                         emer_contact,photo_ok,created)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                       (class_id, a["name"], a["email"], a["phone"],
                        1 if a["refunded"] else 0, 1 if a.get("checked_in") else 0, ext or None,
-                       a.get("source") or "", now()))
+                       a.get("source") or "", a.get("emer_contact") or "", a.get("photo_ok"), now()))
             added += 1
     total = c.execute("SELECT COUNT(*) FROM registrations WHERE class_id=? AND refunded=0",
                       (class_id,)).fetchone()[0]
@@ -601,6 +608,16 @@ def _age_bounds(label):
     if len(nums) >= 2: return (int(nums[0]), int(nums[1]))
     return (int(nums[0]), int(nums[0]))
 
+def is_kids_class(cls):
+    """A class whose selected ages include anyone under 15 (All Ages counts:
+    children can attend). Drives the required emergency-contact question."""
+    parts = [p.strip() for p in (cls.get("age_range") or "").split(",") if p.strip()]
+    for p in parts:
+        b = _age_bounds(p)
+        if b and b[0] < 15:
+            return True
+    return False
+
 def age_label(age_range):
     """Turn a multi-select into ONE readable phrase for the public listing.
     'Ages 5–7, Ages 8–10, Ages 11–14' -> 'Ages 5–14'. Non-touching picks stay
@@ -756,6 +773,13 @@ def _run_platform(platform, cls, payload):
     except Exception as e:
         return False, str(e)          # network/HTTP blow-ups are retryable
     if res.get("ok"):
+        if platform == "eventbrite" and res.get("id") and is_kids_class(cls):
+            # Kids' class: registration must collect an emergency contact.
+            try:
+                r2 = integrations.require_emergency_contact(res["id"], cfg)
+                print(f"[eventbrite] class #{cls['id']} kids-class questions: {r2.get('status')}")
+            except Exception as e:
+                print(f"[eventbrite] emergency-contact setup failed (class #{cls['id']}): {e}")
         return True, res
     status = str(res.get("status") or "")
     if status.startswith("skipped") or status.startswith("manual"):
@@ -1411,12 +1435,14 @@ def run_scheduler(asof=None):
                 instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
                 if instr_row and instr_row["email"]:
                     first = (instr_row["name"] or "").split(" ")[0] or "there"
-                    regs = c.execute("""SELECT name,email,phone FROM registrations
+                    regs = c.execute("""SELECT name,email,phone,emer_contact,photo_ok FROM registrations
                                         WHERE class_id=? AND refunded=0 ORDER BY name""",(cls["id"],)).fetchall()
                     lines = "\n".join(
                         f"  {i+1}. {rr['name'] or '(no name)'}"
                         + (f"  |  {rr['email']}" if rr["email"] else "")
                         + (f"  |  {rr['phone']}" if rr["phone"] else "")
+                        + (f"\n     emergency contact: {rr['emer_contact']}" if rr["emer_contact"] else "")
+                        + ("\n     ** NO PHOTOS of this participant **" if rr["photo_ok"] == 0 else "")
                         for i, rr in enumerate(regs)) or "  (nobody registered)"
                     span = cls.get("class_time") or cls.get("slot_time") or ""
                     sent, why = send_class_email(c, cls, "roster", [instr_row["email"]],
@@ -2357,6 +2383,7 @@ class H(http.server.BaseHTTPRequestHandler):
             d["sessions"]=json.loads(d.get("session_dates") or "[]")
             d["is_series"]=bool(d.get("is_series"))
             d["alcohol"]=bool(d["alcohol"]); d["promoted"]=bool(d.get("promoted"))
+            d["is_kids"]=is_kids_class(d)
             d["enrolled"]=enrollment(c, d["id"])
             out.append(d)
         c.close()

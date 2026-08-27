@@ -572,7 +572,21 @@ def normalize_attendee(a):
         # Which channel sold the ticket: our aff= codes (fb/site/descene/flyer)
         # come back on the attendee as 'affiliate'.
         "source": (a.get("affiliate") or "").strip(),
+        **_answer_fields(a),
     }
+
+def _answer_fields(a):
+    """Emergency contact and photo consent from the checkout questions."""
+    emer, photo = "", None
+    for ans in (a.get("answers") or []):
+        q = (ans.get("question") or "").lower()
+        v = (ans.get("answer") or "").strip()
+        if not v: continue
+        if "emergency" in q:
+            emer = v[:200]
+        elif "photo" in q or "media" in q:
+            photo = 0 if "do not consent" in v.lower() else 1
+    return {"emer_contact": emer, "photo_ok": photo}
 
 def sync_attendees(cls, cfg=None, _req_fn=None):
     """All attendees for a class, normalized. Returns None when there is nothing to
@@ -655,6 +669,29 @@ def fetch_order_money(event_id, cfg):
     return {"gross": gross / 100.0, "fees": fees / 100.0,
             "payout": (gross - fees) / 100.0, "refunded": refunded / 100.0,
             "orders": orders}
+
+def require_emergency_contact(event_id, cfg):
+    """Kids' classes: make the Emergency Contact checkout question REQUIRED.
+    The organizer's default order form already carries the liability waiver,
+    photo/media release and an optional emergency-contact question on every
+    event; for a kids' class nobody should be able to register without one.
+    Creates the question if the account defaults ever lose it."""
+    if not cfg.get("eventbrite_token") or not event_id:
+        return _no("skipped: no Eventbrite config")
+    qs = _req(f"https://www.eventbriteapi.com/v3/events/{event_id}/questions/",
+              method="GET", token=cfg["eventbrite_token"]).get("questions") or []
+    tgt = next((q for q in qs if "emergency" in (q["question"]["text"] or "").lower()), None)
+    if tgt and tgt.get("required"):
+        return _ok(tgt["id"], "emergency contact already required")
+    if tgt:
+        _req(tgt["resource_uri"], token=cfg["eventbrite_token"], json_body={"question": {
+            "question": {"html": tgt["question"]["html"]}, "type": "text", "required": True}})
+        return _ok(tgt["id"], "emergency contact made required")
+    made = _req(f"https://www.eventbriteapi.com/v3/events/{event_id}/questions/",
+                token=cfg["eventbrite_token"], json_body={"question": {
+                    "question": {"html": "Emergency Contact (name and phone, required for participants under 18)"},
+                    "type": "text", "required": True}})
+    return _ok(made.get("id"), "emergency contact question created (required)")
 
 def post_facebook(cls, cfg, link=None):
     """Post the class to the Gibby's Facebook Page. Meta removed Event creation
