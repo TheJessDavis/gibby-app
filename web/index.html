@@ -1465,6 +1465,14 @@ async function adminMoney(){
   $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
     <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.</p>
     ${chanRow}
+    ${(t.eb_gross||t.eb_fees)?`<div class="card"><h3 style="font-size:1rem">Actual money (from Eventbrite orders)</h3>
+      <div class="meta" style="margin-top:6px">What buyers really paid and what lands in the bank, refreshed hourly. This is the number to reconcile deposits against.</div>
+      <div class="stotals" style="margin:10px 0 0">
+        <div><b>${money0(t.eb_gross)}</b><span>buyers paid</span></div>
+        <div><b>${money0(t.eb_fees)}</b><span>Eventbrite fees</span></div>
+        <div><b class="pos">${money0(t.eb_payout)}</b><span>paid out to us</span></div>
+        ${t.eb_refunded?`<div><b class="neg">${money0(t.eb_refunded)}</b><span>refunded</span></div>`:''}
+      </div></div>`:''}
     <div class="stotals">
       <div><b>${t.classes}</b><span>classes run</span></div>
       <div><b>${money0(t.revenue)}</b><span>revenue</span></div>
@@ -1492,7 +1500,9 @@ async function adminMoney(){
       <td><b>${esc(c.title)}</b><div class="meta">${esc(c.slot_date||'')} &middot; ${esc(c.instructor||'')}${
         c.status==='cancelled'?' &middot; cancelled':(c.actual?'':' &middot; upcoming')}</div></td>
       <td class="num">${c.enrolled}/${c.planned}</td>
-      <td class="num">${money0(c.revenue)}</td>
+      <td class="num">${c.eb_payout!=null
+        ? money0(c.eb_payout)+'<div class="meta">actual payout'+(c.eb_fees?'; '+money0(c.eb_fees)+' fees':'')+'</div>'
+        : money0(c.revenue)+'<div class="meta">estimate</div>'}</td>
       <td class="num">${money0(c.instructor_pay)}<div class="meta">${c.pay_model==='split'
         ? '60% of sales'
         : ('flat' + (c.formula_pay!==c.instructor_pay ? ', 60% would be '+money0(c.formula_pay) : ''))}</div></td>

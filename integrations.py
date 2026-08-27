@@ -621,6 +621,38 @@ def facebook_check(cfg):
             **({} if can_post else
                {"error": "The token can see the Page but cannot post to it. Regenerate it with the pages_manage_posts permission."})}
 
+def fetch_order_money(event_id, cfg):
+    """The REAL money for an event, straight from Eventbrite's orders: what
+    buyers paid (gross), what Eventbrite kept (fees), and what actually gets
+    paid out (gross - fees). Computed from orders rather than ticket_price x
+    enrolled, because fees, discounts, donations and refunds all live here.
+    Returns dollars, or None when there is nothing to read."""
+    if not cfg.get("eventbrite_token") or not event_id:
+        return None
+    gross = fees = refunded = 0
+    orders = 0
+    cont = ""
+    while True:
+        url = (f"https://www.eventbriteapi.com/v3/events/{event_id}/orders/"
+               + (f"?continuation={cont}" if cont else ""))
+        d = _req(url, method="GET", token=cfg["eventbrite_token"])
+        for o in d.get("orders", []):
+            c = o.get("costs") or {}
+            g = ((c.get("gross") or {}).get("value") or 0)
+            f = (((c.get("eventbrite_fee") or {}).get("value") or 0)
+                 + ((c.get("payment_fee") or {}).get("value") or 0))
+            if (o.get("status") or "") == "refunded":
+                refunded += g
+                continue
+            gross += g; fees += f; orders += 1
+        pag = d.get("pagination") or {}
+        cont = pag.get("continuation")
+        if not pag.get("has_more_items") or not cont:
+            break
+    return {"gross": gross / 100.0, "fees": fees / 100.0,
+            "payout": (gross - fees) / 100.0, "refunded": refunded / 100.0,
+            "orders": orders}
+
 def post_facebook(cls, cfg, link=None):
     """Post the class to the Gibby's Facebook Page. Meta removed Event creation
     from the Graph API (no outside app can make a real Page Event any more), so

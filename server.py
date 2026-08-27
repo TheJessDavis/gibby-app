@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.21.0-desc-40-75"
+VERSION = "10.22.0-real-money"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -147,6 +147,14 @@ def init_db():
     except sqlite3.OperationalError: pass
     # Which channel sold the ticket (Eventbrite aff= code: fb/site/descene/flyer).
     try: c.execute("ALTER TABLE registrations ADD COLUMN source TEXT DEFAULT ''")
+    except sqlite3.OperationalError: pass
+    # ACTUAL money from Eventbrite orders (dollars): what buyers paid, what
+    # Eventbrite kept, what gets paid out. The treasurer reconciles against
+    # these, not against ticket_price x enrolled.
+    for col in ("money_gross","money_fees","money_payout","money_refunded"):
+        try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} REAL")
+        except sqlite3.OperationalError: pass
+    try: c.execute("ALTER TABLE classes ADD COLUMN money_synced_at TEXT")
     except sqlite3.OperationalError: pass
     # Marketing: the notify-me interest list, opt-outs, and a one-value meta store
     # (holds the unsubscribe-link signing key).
@@ -296,6 +304,30 @@ def sync_registrations(class_id, _req_fn=None):
     c.commit(); c.close()
     print(f"[registrations] class #{class_id}: {added} added, {updated} updated, {total} attending")
     return {"added": added, "updated": updated, "attending": total, "fetched": len(people)}
+
+def sync_order_money(class_id):
+    """Refresh the class's actual Eventbrite money (gross / fees / payout /
+    refunded). Quietly does nothing when there is no event or no token."""
+    c = db()
+    row = c.execute("SELECT external_ids FROM classes WHERE id=? AND deleted_at IS NULL",(class_id,)).fetchone()
+    c.close()
+    if not row: return None
+    try: ext = json.loads(row["external_ids"] or "{}")
+    except Exception: ext = {}
+    eid = ext.get("eventbrite_id")
+    if not eid: return None
+    try:
+        m = integrations.fetch_order_money(eid, integrations.load_config())
+    except Exception as e:
+        print(f"[money] class #{class_id}: order sync failed: {e}")
+        return None
+    if m is None: return None
+    c = db()
+    c.execute("""UPDATE classes SET money_gross=?, money_fees=?, money_payout=?,
+                 money_refunded=?, money_synced_at=? WHERE id=?""",
+              (m["gross"], m["fees"], m["payout"], m["refunded"], now(), class_id))
+    c.commit(); c.close()
+    return m
 
 def money_str(n):
     return f"${float(n or 0):,.2f}".replace(".00", "")
@@ -1469,6 +1501,7 @@ def scheduler_loop():
                 c.close()
                 for cid in live:      # keeps enrolment honest for the low-enrollment rules
                     sync_registrations(cid)
+                    sync_order_money(cid) # and the treasurer's actuals with it
             except Exception as e:
                 print("[registrations] hourly sync error:", e)
         time.sleep(SYNC_EVERY)
@@ -1987,7 +2020,11 @@ class H(http.server.BaseHTTPRequestHandler):
                             "slot_date": r["slot_date"], "room": r["room"], "status": r["status"],
                             "is_series": bool(r["is_series"]), "sessions": r["session_count"] or 1,
                             # only a class that has happened can be reported as fact
-                            "actual": bool(end and end < today) or r["status"] == "cancelled"})
+                            "actual": bool(end and end < today) or r["status"] == "cancelled",
+                            # what Eventbrite actually collected and will pay out
+                            "eb_gross": r["money_gross"], "eb_fees": r["money_fees"],
+                            "eb_payout": r["money_payout"], "eb_refunded": r["money_refunded"],
+                            "eb_synced": (r["money_synced_at"] or "")[:16]})
                 out.append(fin)
             c.close()
 
@@ -2019,6 +2056,10 @@ class H(http.server.BaseHTTPRequestHandler):
                 "seats": sum(x["enrolled"] for x in done),
                 "planned": sum(x["planned"] for x in done),
             }
+            totals["eb_gross"] = round(sum(x["eb_gross"] or 0 for x in out), 2)
+            totals["eb_fees"] = round(sum(x["eb_fees"] or 0 for x in out), 2)
+            totals["eb_payout"] = round(sum(x["eb_payout"] or 0 for x in out), 2)
+            totals["eb_refunded"] = round(sum(x["eb_refunded"] or 0 for x in out), 2)
             totals["margin"] = (totals["net"] / totals["revenue"]) if totals["revenue"] else 0
             totals["fill"] = (totals["seats"] / totals["planned"]) if totals["planned"] else 0
             # Which channel sold the tickets (the aff= code Eventbrite hands back).
