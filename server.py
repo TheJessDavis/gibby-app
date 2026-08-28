@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.26.1-kids-badge"
+VERSION = "10.27.0-drive-links"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2332,7 +2332,15 @@ class H(http.server.BaseHTTPRequestHandler):
             c=db(); rows=[dict(r) for r in c.execute("SELECT * FROM integrations").fetchall()]; c.close()
             cfg = integrations.load_config(); conf = integrations.configured(cfg)
             for r in rows: r["configured"] = conf.get(r["id"], r["id"] == "website")
+            drive = {
+                "contracts": "https://drive.google.com/drive/folders/160ndo9VvkwwucROtJ6MUE00mun7GV1mI",
+                "backups": "https://drive.google.com/drive/folders/1Oofg1ZmevzEhDoaPDdzUiVQz34mNMKd4",
+                "master_sheet": "https://docs.google.com/spreadsheets/d/10VQ3GvoD91V18mfO6oJFWxJhjIWUI_0hK5B1wYaUc5M",
+                "treasurer_sheet": _meta_get("treasurer_sheet_link")
+                    or "https://docs.google.com/spreadsheets/d/1ahKCK6Sb0S2PHWSOoZPJqPxO1XoN2e6QoD3DvWAmhr4",
+            }
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
+                                   "drive": drive,
                                    "backup": backup_status(),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),

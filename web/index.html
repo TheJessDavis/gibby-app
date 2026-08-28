@@ -1352,13 +1352,15 @@ async function adminConnections(){
         : 'No backup has run yet.'}</div></div>${d.backup&&d.backup.ok?'<span class="pill appr">protected</span>':'<span class="pill inc">at risk</span>'}</div>
       <div class="meta" style="margin-top:8px">A full copy of the database (classes, registrations, accounts, contracts and signatures) is snapshotted every night into the <b>Gibby Backups</b> folder on Drive.</div>
       ${d.backup&&d.backup.link?`<a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.backup.link}" target="_blank">Open the latest backup on Drive</a>`:''}
+      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="${d.drive.backups}" target="_blank" rel="noopener">\u{1F4C1} Open the backups folder on Drive</a>
       <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button>
       <div class="meta" style="margin-top:10px">${d.compact&&d.compact.ok
         ? 'Compacted '+esc((d.compact.at||'').slice(0,10))+': '+Math.round(d.compact.before_bytes/1048576)+' MB \u2192 '+Math.round(d.compact.after_bytes/1048576)+' MB'
         : 'Old audit entries can hold large images. Compacting removes those blobs (never the history itself) and reclaims disk.'}</div>
       <button class="btn ghost" style="margin-top:6px" onclick="compactDb()">Compact database</button></div>
     <div class="card"><div class="row"><div><h3>Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div>
-      <button class="btn ghost" style="margin-top:10px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
+      <a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.drive.contracts}" target="_blank" rel="noopener">\u{1F4C1} Open the contracts folder on Drive</a>
+      <button class="btn ghost" style="margin-top:8px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
       <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
 }
@@ -1506,7 +1508,8 @@ async function markPaid(id, paid){
   renderAdmin('money');
 }
 async function adminMoney(){
-  const d = await api('/api/report/money');
+  const [d, integ] = await Promise.all([api('/api/report/money'), api('/api/integrations')]);
+  const DRIVE = integ.drive || {};
   const t = d.totals;
   const league = (rows, unit) => rows.length ? rows.map((r,i)=>`<div class="lg">
       <div class="rk">${i+1}</div>
@@ -1521,7 +1524,8 @@ async function adminMoney(){
        <div class="meta" style="margin-top:4px">Counted from the tracking tag on each Register link, reported back by Eventbrite.</div></div>`
     : '';
   $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
-    <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.</p>
+    <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.
+      ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>
     ${chanRow}
     ${(t.eb_gross||t.eb_fees)?`<div class="card"><h3 style="font-size:1rem">Actual money (from Eventbrite orders)</h3>
       <div class="meta" style="margin-top:6px">What buyers really paid and what lands in the bank, refreshed hourly. This is the number to reconcile deposits against.</div>
@@ -1910,6 +1914,8 @@ const ST_LABEL={pending:'Awaiting approval',graphic_review:'Poster review',appro
 async function adminAll(){
   const {classes} = await api('/api/classes/all'); window.__classes=classes;
   $('#tab').innerHTML = `<h2>All <em>classes</em></h2>
+    <p class="sub noprint">Every class ever submitted also lives in the
+      <a href="https://docs.google.com/spreadsheets/d/10VQ3GvoD91V18mfO6oJFWxJhjIWUI_0hK5B1wYaUc5M" target="_blank" rel="noopener"><b>Master Sheet on Drive \u2197</b></a> (rewritten hourly).</p>
     <div class="two noprint"><div><label style="margin-top:0">Search</label>
       <input id="q_all" placeholder="Title or instructor" oninput="filterAll()"></div>
     <div><label style="margin-top:0">Status</label>
