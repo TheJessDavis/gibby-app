@@ -964,7 +964,9 @@ async function loadNavBadges(){
   }catch(_){/* badges are decoration; the queues are the truth */}
 }
 async function adminDashboard(){
-  const d = await api('/api/dashboard');
+  const [d, all] = await Promise.all([api('/api/dashboard'), api('/api/classes/all')]);
+  const rr = rerunCandidates(all.classes||[]);
+  window.__rrc = rr;
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
     <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
@@ -982,6 +984,12 @@ async function adminDashboard(){
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review posters →</button></div>`:''}
     <div class="card"><div class="row"><div><h3>Automations</h3><div class="meta">Reminders, low-enroll alerts, auto-cancel &amp; follow-ups run daily on their own.</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="runScheduler()">Run scheduler now</button></div>
+    ${rr.length?`<div class="card"><div class="row"><div><h3>Worth running again</h3>
+      <div class="meta">Past classes that filled their seats. One tap copies everything into a fresh booking.</div></div></div>
+      ${rr.map((c,i)=>`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+        <div style="font-weight:800;font-size:13.5px">${esc(c.title)}</div>
+        <div class="meta" style="margin-top:2px">${esc(c.instructor_name)} · filled ${c.enrolled} of ${c.max_p} seats · last ran ${esc(c.slot_date||'')}</div>
+        <button class="btn dark" style="margin-top:8px" onclick="rerunClass(${i})">Run it again</button></div>`).join('')}</div>`:''}
     <label>Pending approval (${d.pending.length})</label>
     ${d.pending.map(c=>`<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill pend">pending</span></div>
       <div class="meta">${esc(c.instructor_name)}</div>
@@ -992,6 +1000,39 @@ async function adminDashboard(){
     <div class="card"><div class="row"><h3>Platform connections</h3></div>
       <div class="meta">Eventbrite, Website, Facebook, Descene, Canva</div>
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('connections')">Manage →</button></div>`;
+}
+function classLastDate(c){
+  const lbl=(c.sessions&&c.sessions.length)?c.sessions[c.sessions.length-1].date:c.slot_date;
+  const p=parseDate(lbl); return p?new Date(seasonYearFor(p.m),p.m,p.d):null;
+}
+function rerunCandidates(classes){
+  const today=new Date(); today.setHours(0,0,0,0);
+  const norm=t=>(t||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const upcoming=new Set(classes.filter(c=>c.status!=='cancelled')
+    .filter(c=>{const d=classLastDate(c); return d&&d>=today;}).map(c=>norm(c.title)));
+  return classes
+    .filter(c=>c.status==='approved'&&c.max_p>0)
+    .filter(c=>{const d=classLastDate(c); return d&&d<today;})
+    .filter(c=>c.enrolled>=c.max_p*0.85)
+    .filter(c=>!upcoming.has(norm(c.title)))
+    .sort((a,b)=>(b.enrolled/b.max_p)-(a.enrolled/a.max_p))
+    .slice(0,3);
+}
+function rerunClass(i){
+  const c=window.__rrc[i]; if(!c) return;
+  window.RERUN={payload:c, title:c.title};
+  RESUB_INSTR=c.instructor_id;
+  if(VIEWAS==='admin') switchMode();
+  const tryBanner=(n)=>{
+    const v=$('#view');
+    if(v && !$('#rerunnote')){
+      v.insertAdjacentHTML('afterbegin',
+        `<div id="rerunnote" class="bookbanner" style="margin-bottom:12px"><div class="bb-label">Run it again</div>
+         <div class="bb-main">${esc(c.title)}</div>
+         <div class="bb-sub">Pick a new date and time. The form fills itself from last time.</div></div>`);
+    } else if(n>0){ setTimeout(()=>tryBanner(n-1),400); }
+  };
+  setTimeout(()=>tryBanner(8),400);
 }
 function lowCard(c){
   return `<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill inc">${c.enrolled}/${c.min_p}</span></div>
@@ -1129,6 +1170,48 @@ async function daySheet(label){
     ${blocks.join('') || '<div class="muted">No classes on this day.</div>'}`;
 }
 function setCalView(v){ CAL_VIEW=v; CAL_VIEW==='season'?renderSeason():renderCal(CAL_M); }
+function seasonGaps(items, openByDate){
+  // Planning holes inside the next ~90 days: empty months, months with no
+  // kids' classes, and runs of bookable Saturdays where a room sits idle.
+  const out=[];
+  const today=new Date(); today.setHours(0,0,0,0);
+  const horizon=new Date(+today + 90*86400000);
+  const inWin=d=>d>=today&&d<=horizon;
+  const dOf=(m,d)=>new Date(seasonYearFor(m),m,d);
+  const act=items.filter(c=>c.status!=='cancelled');
+  const dates=[];
+  act.forEach(c=>{
+    const ds=(c.sessions&&c.sessions.length)?c.sessions.map(s=>s.date):[c.slot_date];
+    ds.forEach(lbl=>{const p=parseDate(lbl); if(p) dates.push({dt:dOf(p.m,p.d), room:c.room||'', kids:!!c.is_kids});});
+  });
+  const openDates=Object.keys(openByDate).map(k=>{const [m,d]=k.split('-').map(Number); return dOf(m,d);});
+  const fmt=d=>MONNAME[d.getMonth()]+' '+d.getDate();
+  // Saturday streaks first: the most concrete, bookable holes.
+  const inPlay=new Set();
+  openDates.forEach(dt=>{ if(inWin(dt)&&dt.getDay()===6) inPlay.add(+dt); });
+  dates.forEach(x=>{ if(inWin(x.dt)&&x.dt.getDay()===6) inPlay.add(+x.dt); });
+  const satList=[...inPlay].sort((a,b)=>a-b).map(t=>new Date(t));
+  const streaks=[];
+  [['','No classes at all'],['Large Room','The Large Room is empty'],['Studio','The Studio is empty']].forEach(([room,label])=>{
+    const busy=new Set(dates.filter(x=>!room||x.room===room).map(x=>+x.dt));
+    let run=[];
+    const flush=()=>{ if(run.length>=3&&!streaks.some(s=>!s.room&&s.start===+run[0]))
+      streaks.push({room,start:+run[0],line:'\ud83c\udfe0 '+label+' for '+run.length+' Saturdays in a row ('+fmt(run[0])+' to '+fmt(run[run.length-1])+').'}); run=[]; };
+    satList.forEach(d=>{ if(!busy.has(+d)) run.push(d); else flush(); });
+    flush();
+  });
+  streaks.slice(0,3).forEach(s=>out.push(s.line));
+  // Month-level holes, nearest three months only.
+  const monthsSet=new Set();
+  dates.forEach(x=>{ if(inWin(x.dt)) monthsSet.add(x.dt.getMonth()); });
+  openDates.forEach(dt=>{ if(inWin(dt)) monthsSet.add(dt.getMonth()); });
+  [...monthsSet].sort((a,b)=>mOrd(a)-mOrd(b)).slice(0,3).forEach(m=>{
+    const inM=dates.filter(x=>x.dt.getMonth()===m && inWin(x.dt));
+    if(!inM.length) out.push('\ud83d\uddd3 '+MONNAME[m]+' has no classes yet.');
+    else if(!inM.some(x=>x.kids)) out.push("\ud83e\uddd2 No kids' classes in "+MONNAME[m]+' yet.');
+  });
+  return out.slice(0,6);
+}
 function renderSeason(){
   const {items,openByDate}=window.__cal;
   const n = st => items.filter(c=>classState(c)[0]===st).length;
@@ -1168,6 +1251,9 @@ function renderSeason(){
       <div><b>${n('off')}</b><span>cancelled</span></div>
       <div><b>${n('back')}</b><span>sent back</span></div>
     </div>
+    ${(g=>g.length?`<div class="card" style="margin:12px 0"><div class="row"><div><h3>Planning gaps</h3>
+      <div class="meta">Holes in the season worth filling.</div></div></div>
+      ${g.map(x=>`<div class="meta" style="padding:6px 0;border-top:1px solid var(--line)">${x}</div>`).join('')}</div>`:'')(seasonGaps(items,openByDate))}
     <div class="legend">
       <span><i class="st-ok"></i>on track</span><span><i class="st-low"></i>below minimum</span>
       <span><i class="st-wait"></i>awaiting approval</span><span><i class="st-off"></i>cancelled</span>
@@ -2265,9 +2351,22 @@ async function emailClass(id,kind){
 function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
 async function rosterInner(id){
   const {registrations} = await api('/api/class/'+id+'/registrations');
-  $('#roster'+id).innerHTML = '<div style="margin-top:8px">'+(registrations.length?registrations.map(r=>
-    `<div class="meta" style="padding:7px 0;border-top:1px solid var(--line)">${esc(r.name)} · ${esc(r.email)} · ${esc(r.phone)}${r.refunded?' · refunded':''}</div>`).join('')
+  const live = registrations.filter(r=>!r.refunded);
+  const here = live.filter(r=>r.checked_in).length;
+  $('#roster'+id).innerHTML = '<div style="margin-top:8px">'
+    +(live.length?`<div class="meta" style="padding-bottom:6px"><b>Check-in:</b> tap a name as they arrive · ${here} of ${live.length} here</div>`:'')
+    +(registrations.length?registrations.map(r=>
+    r.refunded
+      ? `<div class="meta" style="padding:7px 0;border-top:1px solid var(--line);opacity:.55">${esc(r.name)} · ${esc(r.email)} · refunded</div>`
+      : `<div class="meta" style="padding:7px 0;border-top:1px solid var(--line);cursor:pointer;display:flex;align-items:center;gap:9px"
+           onclick="checkIn(${id},${r.id},${r.checked_in?0:1})">
+           <span style="width:20px;height:20px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:12px;${r.checked_in?'background:#3F7A32;color:#fff':'border:2px solid var(--line)'}">${r.checked_in?'✓':''}</span>
+           <span>${esc(r.name)} · ${esc(r.email)} · ${esc(r.phone||'')}</span></div>`).join('')
     :'<div class="meta" style="padding:8px 0">No registrations yet.</div>')+'</div>';
+}
+async function checkIn(cid, rid, val){
+  await api('/api/class/'+cid+'/registrations/'+rid+'/checkin','POST',{checked_in:val});
+  viewRoster(cid);
 }
 
 /* ---------------- instructor ---------------- */
@@ -2812,6 +2911,12 @@ function openForm(slot, draftPayload){
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   RESUB_INSTR = RESUB ? (RESUB.instructor_id||null) : null;
   calc(); descCount(); loadTplOptions(); loadPrevOptions(); loadInstrOptions();
+  if(!draftPayload && window.RERUN){
+    applyDraft(window.RERUN.payload);
+    const n=$('#draftnote');
+    if(n) n.textContent='Rerunning '+window.RERUN.title+'. Everything is copied from last time; the date and class times are fresh.';
+    window.RERUN=null;
+  }
   if(draftPayload) applyDraft(draftPayload);
   else if(RESUB){ applyDraft(RESUB); RESUB_OLD_ID=RESUB.id; RESUB=null;
     const n=$('#draftnote'); if(n) n.textContent='Resubmitting: fix what was flagged, then submit.'; }
