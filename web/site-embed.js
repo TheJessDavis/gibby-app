@@ -29,18 +29,33 @@ function rep(m){try{fetch('https://gibby-app-ddjo.onrender.com/api/client-error'
 var MM={january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
 function pdate(txt){var m=/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})/i.exec(txt||'');if(!m)return null;var mo=MM[m[1].toLowerCase()],dy=+m[2];return(mo>=8?2026:2027)*10000+mo*100+dy}
 
+function blockLines(host){
+  /* Build lines from the block's <p>/<br> structure, not innerText:
+     innerText loses line breaks once the block is hidden. */
+  var ps=host.querySelectorAll('p');
+  if(!ps.length)return (host.textContent||'').split('\n');
+  var lines=[];
+  for(var i=0;i<ps.length;i++){
+    var segs=ps[i].innerHTML.split(/<br\s*\/?\s*>/i);
+    for(var j=0;j<segs.length;j++){
+      var d=document.createElement('div');d.innerHTML=segs[j];
+      lines.push(d.textContent);
+    }
+  }
+  return lines;
+}
 function readOverrides(){
   var rules=[],host=null;
   var blocks=document.querySelectorAll('.sqs-block-html,.sqs-html-content');
   for(var i=0;i<blocks.length;i++){
-    var t=(blocks[i].innerText||'').trim();
+    var t=(blocks[i].textContent||'').trim();
     if(/^gibby overrides/i.test(t)){host=blocks[i];break}
   }
   if(!host)return rules;
   var wrap=host.closest?host.closest('.sqs-block')||host:host;
   wrap.style.display='none';
   var cur=null,lastField=null;
-  var lines=(host.innerText||'').split('\n');
+  var lines=blockLines(host);
   for(var j=1;j<lines.length;j++){
     var ln=lines[j].trim();
     if(!ln)continue;
