@@ -139,6 +139,9 @@ function ownCarousel(){
   car.querySelectorAll('img').forEach(function(im){
     if(!im.getAttribute('src')&&im.dataset.src){im.src=im.dataset.src+'?format=750w';im.style.objectFit='cover';im.style.width='100%';im.style.height='100%'}
   });
+  /* their CSS keeps the track at opacity 0 until the controller adds this class */
+  track.classList.add('user-items-list-carousel__slides--initialized');
+  track.style.opacity='1';
   var wrap=track.parentElement;
   wrap.style.overflow='hidden';
   track.style.display='flex';
