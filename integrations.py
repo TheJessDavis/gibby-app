@@ -396,8 +396,11 @@ def update_eventbrite_details(cls, cfg):
         return "skipped: never published to Eventbrite"
     if not cfg["live"]:
         return f"dry-run (would update event {eid})"
+    # description stays EMPTY: the page body comes from structured content, and
+    # filling this legacy field makes Eventbrite print the text twice on the
+    # listing (a truncated copy above the real one).
     ev_body = {"name": {"html": cls["title"]},
-               "description": {"html": _event_description(cls)},
+               "description": {"html": ""},
                "capacity": cls.get("max_p")}
     if cfg.get("eventbrite_venue_id"):   # heals older events that said 'Location TBD'
         ev_body["venue_id"] = cfg["eventbrite_venue_id"]
@@ -437,10 +440,11 @@ def post_eventbrite(cls, cfg, image_url=None):
     if image_url:                      # attach the Canva graphic; never let this block the event
         try: logo_id = _eventbrite_logo_id(image_url, cfg)
         except Exception as e: print("[eventbrite] logo upload failed (posting without it):", e)
-    desc = _event_description(cls)
+    # description stays EMPTY on create too: structured content is the page body,
+    # and this legacy field would render as a second, truncated copy above it.
     event = {
         "name": {"html": cls["title"]},
-        "description": {"html": desc},
+        "description": {"html": ""},
         "start": {"timezone": cfg["timezone"], "utc": start},
         "end":   {"timezone": cfg["timezone"], "utc": end},
         "currency": "USD", "capacity": cls.get("max_p")}

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.29.3-full-month"
+VERSION = "10.29.4-eb-single-description"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -298,7 +298,10 @@ def sync_registrations(class_id, _req_fn=None):
         existing = c.execute("SELECT id FROM registrations WHERE class_id=? AND external_id=?",
                              (class_id, ext)).fetchone() if ext else None
         if existing:
-            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=?,checked_in=?,source=?,
+            # checked_in is sticky: a tap on the app's roster survives resyncs
+            # (Eventbrite only overrides a local un-tap, never clears a check-in).
+            c.execute("""UPDATE registrations SET name=?,email=?,phone=?,refunded=?,
+                         checked_in=CASE WHEN checked_in=1 THEN 1 ELSE ? END,source=?,
                          emer_contact=?,photo_ok=? WHERE id=?""",
                       (a["name"], a["email"], a["phone"], 1 if a["refunded"] else 0,
                        1 if a.get("checked_in") else 0, a.get("source") or "",
@@ -2355,7 +2358,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             if u["role"]=="instructor" and row["instructor_id"]!=u["id"]:
                 c.close(); return self.send_json({"error":"forbidden"},403)
-            regs=[dict(r) for r in c.execute("SELECT name,email,phone,refunded FROM registrations WHERE class_id=? ORDER BY id",(cid,)).fetchall()]
+            regs=[dict(r) for r in c.execute("SELECT id,name,email,phone,refunded,checked_in FROM registrations WHERE class_id=? ORDER BY id",(cid,)).fetchall()]
             c.close()
             return self.send_json({"registrations":regs})
         self.send_json({"error":"not found"},404)
@@ -3729,6 +3732,25 @@ class H(http.server.BaseHTTPRequestHandler):
             c.commit(); c.close()
             return self.send_json({"ok":sent, "reason":why, "sent_to":len(recipients) if sent else 0,
                                    "attendance_known":attended})
+        mck = re.match(r"^/api/class/(\d+)/registrations/(\d+)/checkin$", p)
+        if mck:
+            # Roster check-in: the class's instructor or any admin taps a name at
+            # the door. Feeds followup_audience, so the after-class email goes to
+            # the people who actually came.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid, rid = int(mck.group(1)), int(mck.group(2))
+            val = 1 if self.read_json().get("checked_in") else 0
+            c = db()
+            row = c.execute("SELECT instructor_id FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"not allowed"},403)
+            c.execute("UPDATE registrations SET checked_in=? WHERE id=? AND class_id=?",(val, rid, cid))
+            here = c.execute("""SELECT COUNT(*) FROM registrations
+                                WHERE class_id=? AND refunded=0 AND checked_in=1""",(cid,)).fetchone()[0]
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "here":here})
         if p.startswith("/api/classes/") and p.endswith("/sync-registrations"):
             u = self.require("admin")
             if not u: return
