@@ -184,9 +184,10 @@ function renderCarousel(classes){
     li.style.transform='none';
     var title=li.querySelector('.list-item-content__title');
     if(title)title.textContent='Art Workshop: '+c.title;
-    var dm=/([A-Za-z]+ \d{1,2})/.exec(c.when||'');
+    var MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+    var dp=String(c.date||'').split('-');
     var series=/(\d+)-week/.exec(c.when||'');
-    var dateLabel=(dm?dm[1]:'')+(series?' · '+series[1]+'-week course':'');
+    var dateLabel=(dp.length===3?MN[(+dp[1])-1]+' '+(+dp[2]):'')+(series?' · '+series[1]+'-week course':'');
     var desc=li.querySelector('.list-item-content__description');
     if(desc){
       var h='<p style="white-space:pre-wrap">'+esc(dateLabel)+'</p>';
