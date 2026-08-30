@@ -242,7 +242,7 @@ def _eventbrite_logo_id(image_url, cfg):
 
 def ages_open_line(cls):
     """The ages phrase as a plain sentence for descriptions: 'Ages 15+' becomes
-    'Open to ages 15 to 110', 'Ages 5–14' becomes 'Open to ages 5 to 14'."""
+    'Open to ages 15 and up', 'Ages 5–14' becomes 'Open to ages 5 to 14'."""
     label = (cls.get("age_label") or cls.get("age_range") or "").strip()
     if not label:
         return ""
@@ -256,7 +256,7 @@ def ages_open_line(cls):
             outs.append(f"{m.group(1)} to {m.group(2)}"); continue
         m = re.match(r"^(\d+)\+$", part)
         if m:
-            outs.append(f"{m.group(1)} to 110"); continue
+            outs.append(f"{m.group(1)} and up"); continue
         outs.append(part)
     return "Open to ages " + " and ".join(outs)
 
