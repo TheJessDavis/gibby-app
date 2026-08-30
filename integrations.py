@@ -204,7 +204,10 @@ def render_canva(cls, cfg):
         "data": {
             "headline": {"type": "text", "text": cls.get("headline") or cls.get("title", "")},
             "subtitle": {"type": "text", "text": cls.get("subtitle", "")},
-            "date":     {"type": "text", "text": f"{cls.get('slot_date','')} {cls.get('slot_time','')}".strip()},
+            # The poster advertises when the CLASS runs. slot_time is the wider
+            # room booking (setup + cleanup) and must never reach the public.
+            "date":     {"type": "text",
+                         "text": f"{cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time','')}".strip()},
             "ages":     {"type": "text", "text": cls.get("age_label") or cls.get("age_range", "")},
         }})
     af_id = (af.get("job") or {}).get("id")
