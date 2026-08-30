@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.30.3-poster-times"
+VERSION = "10.31.0-no-auto-posting"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1379,23 +1379,24 @@ def run_scheduler(asof=None):
                     today, cfg)
                 if sent: actions.append(f"under-minimum decision nudge: {cls['title']}")
             if days == 7 and enrolled < (cls["max_p"] or 0):
-                # A week out and not full: one automatic 'spots still open' post
-                # on the Facebook Page. Not a student email, so no approval gate;
-                # the email_log claim keeps it once-only.
+                # A week out and not full. NOTHING is posted automatically: the
+                # app never publishes anything a person did not approve. The
+                # admins get one nudge and the dashboard's Promote button does
+                # the posting. The email_log claim keeps the nudge once-only.
                 try:
                     c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(?,?,?,0)",
                               (cls["id"], "fb_week_boost", now()))
-                    boosted = True
+                    nudged = True
                 except sqlite3.IntegrityError:
-                    boosted = False
-                if boosted:
-                    res = integrations.promote_facebook({**cls, "_enrolled": enrolled},
-                                                        integrations.load_config())
-                    if res.get("ok") and res.get("id") and not str(res["id"]).startswith("fb-dryrun"):
-                        merge_external(cls["id"], {"facebook_boost_id": res["id"]})
-                        actions.append(f"week-out Facebook booster: {cls['title']}")
-                    elif not res.get("ok") and not str(res.get("status","")).startswith("skipped"):
-                        print(f"[scheduler] week-out booster failed for {cls['title']}: {res.get('error') or res.get('status')}")
+                    nudged = False
+                if nudged:
+                    mailer.send(emails_for(c, "WHERE role='admin'"),
+                        f"A week out and not full: {cls['title']}",
+                        f"\"{cls['title']}\" on {cls['slot_date']} has {enrolled}/{cls['max_p']} "
+                        f"seats taken with a week to go.\n\nNothing has been posted. Open the app "
+                        f"and tap Promote if you want a \"spots still open\" post on the Gibby's "
+                        f"Facebook Page.")
+                    actions.append(f"week-out promote nudge: {cls['title']}")
             close_days = int(cls.get("close_days") or 0)
             if close_days and days == close_days:
                 # Registration has just closed. This number will not move now, which
