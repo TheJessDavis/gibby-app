@@ -2404,6 +2404,26 @@ async function renderInstr(tab){
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
 let DAYSLOTS=[], SEL=[];
 function tmin(t){ const m=(t||'').trim().match(/(\d+):(\d+)\s*(AM|PM)/i); if(!m)return 0; let h=+m[1]%12; if(/pm/i.test(m[3]))h+=12; return h*60 + +m[2]; }
+/* The class length is never typed: it IS the gap between the class start and end
+   the instructor picked, so the two can never contradict each other. Phrasing
+   matches what the old picker produced: "30 minutes", "1 hour", "1.5 hours". */
+function lengthPhrase(mins){
+  if(mins<=0) return '';
+  if(mins<60) return mins+' minutes';
+  if(mins===60) return '1 hour';
+  const h=mins/60;
+  return (Number.isInteger(h)?h:h.toFixed(1).replace(/\.0$/,''))+' hours';
+}
+function classTimeChanged(){
+  const cs=$('#f_cstart'), ce=$('#f_cend'), out=$('#f_lenout'), len=$('#f_len');
+  if(!cs||!ce||!len) return;
+  const mins=tmin(ce.value)-tmin(cs.value);
+  len.value = mins>0 ? lengthPhrase(mins) : '';
+  if(out) out.textContent = mins>0
+    ? len.value + ', worked out from the class times above.'
+    : 'The end time needs to be after the start time.';
+  if(typeof updateTodo==='function') updateTodo();
+}
 let ROOM_PICK=null;          // chosen before anything else: which room to browse
 function setRoomPick(r){ ROOM_PICK=r; SEL=[]; SLOTDAY=null; CAL_PAGE=null; SERIES_PREVIEW=null; instrOpen(); }
 let CLASSKIND='single';      // 'single' = one-day class, 'series' = multi-week course
@@ -2690,7 +2710,7 @@ async function deleteDraft(id){
 function applyDraft(p){
   if(!p) return;
   const set=(id,v)=>{ const el=$(id); if(el && v!=null) el.value=v; };
-  set('#f_title',p.title); set('#f_desc',p.description); set('#f_len',p.length);
+  set('#f_title',p.title); set('#f_desc',p.description);
   set('#f_pre',p.pre_class); set('#f_links',p.links);
   VIDEO_URL=(p.video||''); videoStatus();
   try{ const fl=$('#faqlist'); if(fl){ fl.innerHTML='';
@@ -2709,7 +2729,7 @@ function applyDraft(p){
   pick('#f_paym', p.pay_model||'flat');
   pick('#f_vol', p.needs_volunteer?'yes':'no');
   if(p.photo){ PHOTO=p.photo; $('#f_photo').innerHTML='<img src="'+p.photo+'">'; }
-  ageChanged(); descCount(); calc();
+  ageChanged(); descCount(); calc(); classTimeChanged();
   // restore the instructor's own prices last, so calc() does not overwrite them
   if(p.ticket_price){ $('#f_ticket').value=p.ticket_price; $('#f_ticket').dataset.t=1; }
   if(p.instructor_pay){ $('#f_pay').value=p.instructor_pay; $('#f_pay').dataset.t=1; }
@@ -2779,8 +2799,8 @@ function openForm(slot, draftPayload){
     <div class="fsec"><span>1</span><b>The class</b></div>
     <label style="margin-top:0">When does the class itself run?</label>
     <div class="two">
-      <div><select id="f_cstart">${timeOpts(slot.start, slot.end, 'start')}</select></div>
-      <div><select id="f_cend">${timeOpts(slot.start, slot.end, 'end')}</select></div></div>
+      <div><select id="f_cstart" onchange="classTimeChanged()">${timeOpts(slot.start, slot.end, 'start')}</select></div>
+      <div><select id="f_cend" onchange="classTimeChanged()">${timeOpts(slot.start, slot.end, 'end')}</select></div></div>
     <div class="hint">This is what students are told and what goes on Eventbrite. The time either side
       of it is yours for setting up and clearing away.</div>
     ${slot.series?`<div class="card" style="margin-bottom:14px"><h3 style="font-size:.95rem">${slot.weeks} sessions</h3>
@@ -2818,9 +2838,10 @@ function openForm(slot, draftPayload){
          <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>`}
 
     <label>Class length</label>
-    <select id="f_len"><option value="">Select length…</option>
-      <option>30 minutes</option><option>1 hour</option><option>1.5 hours</option><option>2 hours</option>
-      <option>2.5 hours</option><option>3 hours</option><option>3.5 hours</option><option>4 hours</option></select>
+    <!-- Derived from the class start/end above so the two can never disagree.
+         Kept as a hidden input so everything that reads #f_len still works. -->
+    <input type="hidden" id="f_len">
+    <div class="hint" id="f_lenout" style="margin-top:0">Set your class start and end times above.</div>
 
     <div class="fsec"><span>2</span><b>Who it&rsquo;s for</b></div>
     <label style="margin-top:0">Age range (choose all that apply)</label>
@@ -2911,6 +2932,7 @@ function openForm(slot, draftPayload){
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   RESUB_INSTR = RESUB ? (RESUB.instructor_id||null) : null;
   calc(); descCount(); loadTplOptions(); loadPrevOptions(); loadInstrOptions();
+  classTimeChanged();
   if(!draftPayload && window.RERUN){
     applyDraft(window.RERUN.payload);
     const n=$('#draftnote');
@@ -3031,7 +3053,7 @@ function validateForm(){
   const dw=wordCount($('#f_desc').value);
   if(dw<40) add('#f_desc','Description (at least 40 words'+(dw?', currently '+dw:'')+')','description');
   else if(dw>75) add('#f_desc','Description (75 words maximum, currently '+dw+')','description');
-  if(!$('#f_len').value) add('#f_len','Class length','length');
+  if(!$('#f_len').value) add('#f_cend','Class start and end times','class times');
   const cs2=$('#f_cstart'), ce2=$('#f_cend');
   if(cs2 && ce2 && tmin(cs2.value) >= tmin(ce2.value))
     add('#f_cend','Class end time must be after it starts','class times');
