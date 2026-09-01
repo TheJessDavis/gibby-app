@@ -2271,6 +2271,8 @@ async function openEditForm(id){
     <div class="err" id="eerr"></div>
     <label>Class title</label><input id="e_title" value="${esc(c.title)}">
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
+    <label>One-line teaser</label><input id="e_summary" maxlength="140" value="${esc(c.summary||'')}"
+      placeholder="The single line Eventbrite shows above the description">
     <label>Age range</label><select id="e_age">${AGES.map(a=>`<option ${a===c.age_range?'selected':''}>${a}</option>`).join('')}</select>
     <label>Alcohol available for purchase?</label>
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
@@ -2298,6 +2300,8 @@ function openLiveEdit(id){
     <div class="err" id="eerr"></div>
     <label>Class title</label><input id="e_title" value="${esc(c.title)}">
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
+    <label>One-line teaser</label><input id="e_summary" maxlength="140" value="${esc(c.summary||'')}"
+      placeholder="The single line Eventbrite shows above the description">
     <label>Age range</label><select id="e_age">${AGES.map(a=>`<option ${a===c.age_range?'selected':''}>${a}</option>`).join('')}</select>
     <label>Alcohol available for purchase?</label>
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
@@ -2317,6 +2321,7 @@ function openLiveEdit(id){
 async function submitLiveEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
+    summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
     close_days:+$('#e_close').value, headline:$('#e_head').value, subtitle:$('#e_sub').value,
@@ -2330,6 +2335,7 @@ async function submitLiveEdit(id){
 async function submitEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
+    summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
     headline:$('#e_head').value, subtitle:$('#e_sub').value, note:$('#e_note').value};
@@ -2714,7 +2720,7 @@ async function deleteDraft(id){
 function applyDraft(p){
   if(!p) return;
   const set=(id,v)=>{ const el=$(id); if(el && v!=null) el.value=v; };
-  set('#f_title',p.title); set('#f_desc',p.description);
+  set('#f_title',p.title); set('#f_desc',p.description); set('#f_summary',p.summary);
   set('#f_pre',p.pre_class); set('#f_links',p.links);
   VIDEO_URL=(p.video||''); videoStatus();
   try{ const fl=$('#faqlist'); if(fl){ fl.innerHTML='';
@@ -2825,6 +2831,11 @@ function openForm(slot, draftPayload){
     </div>
     <div class="hint">Submitting for someone else? Pick them here and the class, contract and emails all go to them.</div>`:''}
     <label>Class title</label><input id="f_title">
+
+    <label>One-line teaser</label>
+    <input id="f_summary" maxlength="140" oninput="teaseCount()"
+           placeholder="e.g. A tiny glass world you can keep, built in an afternoon.">
+    <div class="hint" id="f_teasecount">This is the single line Eventbrite shows above your description. Keep it short and inviting.</div>
     <label>Description <span style="color:var(--ink-soft);font-weight:600">(40 to 75 words)</span></label>
     <textarea id="f_desc" oninput="descCount()"></textarea><div class="hint" id="f_desccount">0 words (aim for 40 to 75)</div>
     <details class="eg"><summary>Stuck? See an example of the right length</summary>
@@ -3041,6 +3052,14 @@ function calc(dir){
   if($('#f_pay') && !$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
 }
 function wordCount(s){ return (s||'').trim().split(/\s+/).filter(Boolean).length; }
+function teaseCount(){
+  const el=$('#f_summary'), out=$('#f_teasecount'); if(!el||!out) return;
+  const n=el.value.trim().length;
+  out.textContent = n
+    ? n+' of 140 characters. This is the line Eventbrite shows above your description.'
+    : 'This is the single line Eventbrite shows above your description. Keep it short and inviting.';
+  if(typeof updateTodo==='function') updateTodo();
+}
 function descCount(){ const n=wordCount($('#f_desc').value); const el=$('#f_desccount');
   if(!el) return;
   const ok = n>=40 && n<=75;
@@ -3054,6 +3073,7 @@ function validateForm(){
   const num=id=>{ const v=$('#'+id).value; return v.trim()===''?null:+v; };
   const add=(sel,label,short)=>miss.push({sel,label,short});
   if(!$('#f_title').value.trim()) add('#f_title','Class title','title');
+  if($('#f_summary') && !$('#f_summary').value.trim()) add('#f_summary','A one-line teaser','teaser');
   const dw=wordCount($('#f_desc').value);
   if(dw<40) add('#f_desc','Description (at least 40 words'+(dw?', currently '+dw:'')+')','description');
   else if(dw>75) add('#f_desc','Description (75 words maximum, currently '+dw+')','description');
@@ -3137,6 +3157,7 @@ function collectForm(){
   return {
     title:$('#f_title').value, description:$('#f_desc').value,
     age_range: ages.join(', '), length:$('#f_len').value, pre_class:$('#f_pre').value,
+    summary:$('#f_summary')?$('#f_summary').value.trim():'',
     needs_volunteer: kid && seg('#f_vol')==='yes',
     own_materials: $('#f_own').checked, material_cost:+$('#c_mat').value,
     alcohol: seg('#f_alc')==='yes', max_p:+$('#f_max').value, min_p:+$('#f_min').value,

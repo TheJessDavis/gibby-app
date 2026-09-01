@@ -312,8 +312,12 @@ DDOA_STATEMENT = ("This organization is supported, in part, by a grant from the 
 
 def event_summary(cls):
     """Eventbrite's short teaser under the title. Left empty it shows their
-    placeholder ('a short and sweet sentence about your event'), so we always
-    send the first sentence of the class description, trimmed to fit."""
+    placeholder ('a short and sweet sentence about your event'), so this is
+    always filled: the instructor's own one-line teaser where they wrote one,
+    otherwise the first sentence of the description as a fallback."""
+    own = " ".join((cls.get("summary") or "").split())
+    if own:
+        return own[:140]
     text = " ".join((cls.get("description") or "").split())
     if not text:
         return (cls.get("title") or "")[:140]
@@ -382,7 +386,8 @@ def _structured_html(cls):
     #    we drop it here rather than show it to the reader twice.
     body = (cls.get("description") or "").strip()
     summary = event_summary(cls)
-    if summary and body.startswith(summary):
+    borrowed = not (cls.get("summary") or "").strip()   # teaser came from the description
+    if borrowed and summary and body.startswith(summary):
         rest = body[len(summary):].strip()
         if len(rest.split()) >= 12:      # never leave the listing with a stub
             body = rest

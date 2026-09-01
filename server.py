@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.33.1-summary-dedupe"
+VERSION = "10.34.0-teaser"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -160,6 +160,9 @@ def init_db():
     for col, typ in (("emer_contact","TEXT"), ("photo_ok","INTEGER")):
         try: c.execute(f"ALTER TABLE registrations ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
+    # The one-line teaser Eventbrite prints above the description.
+    try: c.execute("ALTER TABLE classes ADD COLUMN summary TEXT")
+    except sqlite3.OperationalError: pass
     # Payables ledger: when an instructor was actually paid, by whom, how much.
     for col, typ in (("paid_at","TEXT"), ("paid_by","INTEGER"), ("paid_amount","REAL")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
@@ -3177,13 +3180,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 proto = self.headers.get("X-Forwarded-Proto","http")
                 host = self.headers.get("Host","localhost:8000")
                 teacher_id, on_behalf = invite_instructor(c, b.get("instructor_name"), email, proto, host)
-            c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,age_range,
+            c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,summary,age_range,
                 alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
                 length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
                 is_series,session_count,session_dates,age_label,close_days,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),teacher_id,slot_date,slot_time,room,
-                 b.get("description"),b.get("age_range"),1 if b.get("alcohol") else 0,
+                 b.get("description"),(b.get("summary") or "").strip()[:140],
+                 b.get("age_range"),1 if b.get("alcohol") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
@@ -3406,7 +3410,7 @@ class H(http.server.BaseHTTPRequestHandler):
             # reached Eventbrite or the calendar the change is pushed there in
             # place; where it has not, this simply updates what will publish.
             sets, vals = [], []
-            for k in ("title","description","age_range","headline","subtitle"):
+            for k in ("title","description","summary","age_range","headline","subtitle"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
             if "age_range" in b:
                 sets.append("age_label=?"); vals.append(age_label(b["age_range"]))
@@ -3856,7 +3860,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db(); row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             sets, vals = [], []
-            for k in ("title","description","age_range","headline","subtitle"):
+            for k in ("title","description","summary","age_range","headline","subtitle"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])
             if "age_range" in b:                       # keep the published phrase in sync
                 sets.append("age_label=?"); vals.append(age_label(b["age_range"]))
