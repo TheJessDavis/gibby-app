@@ -377,8 +377,16 @@ def _structured_html(cls):
     Division of the Arts statement."""
     import html as _h
     parts = []
-    # 1. The description itself, paragraphs intact.
-    for para in (cls.get("description") or "").split("\n\n"):
+    # 1. The description itself, paragraphs intact. Eventbrite prints the summary
+    #    directly above this, so if the description opens with that same sentence
+    #    we drop it here rather than show it to the reader twice.
+    body = (cls.get("description") or "").strip()
+    summary = event_summary(cls)
+    if summary and body.startswith(summary):
+        rest = body[len(summary):].strip()
+        if len(rest.split()) >= 12:      # never leave the listing with a stub
+            body = rest
+    for para in body.split("\n\n"):
         para = para.strip()
         if para:
             parts.append("<p>" + _h.escape(para).replace("\n", "<br>") + "</p>")
@@ -534,7 +542,10 @@ def post_eventbrite(cls, cfg, image_url=None):
         # to name their amount.
         ticket = {"name": "Donation", "donation": True, "quantity_total": cls.get("max_p")}
     else:
-        ticket = {"name": "Registration", "quantity_total": cls.get("max_p"),
+        # The Gibby names tickets "<Class> Registration" on their own listings;
+        # match that rather than a generic label.
+        ticket = {"name": (str(cls.get("title") or "").strip() + " Registration").strip(),
+                  "quantity_total": cls.get("max_p"),
                   "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}
     # Registration cutoff. sales_end is a writable field on the ticket class, so
     # Eventbrite itself stops selling - the instructor gets a headcount that cannot
