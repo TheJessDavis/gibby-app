@@ -2496,7 +2496,9 @@ function calendarPickerHTML(slots){
 }
 
 async function instrOpen(){
-  let {slots, notice} = await api('/api/slots');
+  // When moving an existing class, ask for its own times as well: without them a
+  // 30-minute shift is unpickable, because the window you already hold is missing.
+  let {slots, notice} = await api('/api/slots' + (RESCHED ? '?for_class='+RESCHED.id : ''));
   // The view can change while that request is in flight (tap a slot, then hit
   // Continue before the list redraws). If our target is gone, drop the render.
   if(!$('#tab')) return;
@@ -2546,7 +2548,7 @@ async function instrOpen(){
     <div class="tip">🕒 <span>Tap your <b>start</b> time, then your <b>end</b> time: everything between fills in. Book an extra 30 minutes before <b>and</b> after for setup and cleanup.</span></div>
     <div class="slotgrid">${DAYSLOTS.map((s,i)=>{const on=SEL.includes(s.id);return `<button class="slotcard ${SLOTCOLS[i%SLOTCOLS.length]} ${on?'sel':''}" onclick="toggleSlot(${s.id})">
       <span class="sg">${on?'✓':SLOTGLYPHS[i%SLOTGLYPHS.length]}</span>
-      <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${esc(s.room)}</div></button>`;}).join('')}</div>
+      <div class="st">${esc(s.start)} – ${esc(s.end)}</div><div class="sr">${s.mine?'your current time':esc(s.room)}</div></button>`;}).join('')}</div>
 
     ${series && SEL.length ? `<div class="card" style="margin-top:14px">
       <h3 style="font-size:1rem">Your course dates</h3>

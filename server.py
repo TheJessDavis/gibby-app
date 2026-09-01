@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.35.0-edit-anytime"
+VERSION = "10.36.0-shift-times"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2026,7 +2026,30 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/slots":
             u = self.require()
             if not u: return
-            c = db(); rows=[dict(r) for r in c.execute("SELECT * FROM slots WHERE status='available' AND deleted_at IS NULL ORDER BY id").fetchall()]; c.close()
+            c = db()
+            rows = [dict(r) for r in c.execute(
+                "SELECT * FROM slots WHERE status='available' AND deleted_at IS NULL ORDER BY id").fetchall()]
+            # Rescheduling a class: its OWN times must be pickable too, otherwise a
+            # 30-minute shift is impossible - the half hour you already occupy would
+            # be missing from the picker. The reschedule endpoint releases these
+            # first, so an overlapping move is safe.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            if q.get("for_class"):
+                try:
+                    own = c.execute("SELECT slot_ids FROM classes WHERE id=? AND deleted_at IS NULL",
+                                    (int(q["for_class"][0]),)).fetchone()
+                    ids = [int(x) for x in json.loads((own["slot_ids"] if own else "") or "[]")]
+                except Exception:
+                    ids = []
+                if ids:
+                    have = {r["id"] for r in rows}
+                    ph = ",".join("?" * len(ids))
+                    for r in c.execute(f"SELECT * FROM slots WHERE id IN ({ph}) AND deleted_at IS NULL", ids):
+                        if r["id"] not in have:
+                            d = dict(r); d["mine"] = True      # the picker marks these "your current time"
+                            rows.append(d)
+                    rows.sort(key=lambda r: r["id"])
+            c.close()
             notice = None
             if u["role"] == "instructor":
                 # Months unlock one at a time; hide the rest and say when the next opens.
