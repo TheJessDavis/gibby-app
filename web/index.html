@@ -2140,7 +2140,12 @@ function cardCls(c){
       ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="syncRegistrations(${c.id})">Sync registrations from Eventbrite</button>`:''}
       <div id="roster${c.id}"></div>`:''}
     ${actingRole()==='admin' && c.status!=='approved' && c.status!=='pending' ? `
-      <button class="btn ghost" style="margin-top:10px" onclick="openLiveEdit(${c.id})">Edit details</button>`:''}
+      <div class="two" style="margin-top:10px">
+        <button class="btn ghost" onclick="openLiveEdit(${c.id})">Edit details</button>
+        ${c.status==='graphic_review' ? `<button class="btn ghost" onclick="startReschedule(${c.id})">Change date or time</button>`:''}
+      </div>
+      ${c.status!=='graphic_review' && c.status!=='cancelled' ? `
+        <button class="btn warn" style="margin-top:8px" onclick="markIncomplete(${c.id})">Send back to instructor</button>`:''}`:''}
     ${actingRole()==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>
@@ -2312,7 +2317,7 @@ function openLiveEdit(id){
     <label>Registration closes</label><select id="e_close">${[0,1,2,3,5,7,14].map(d=>`<option value="${d}" ${d===(c.close_days||0)?'selected':''}>${d===0?'Never (sell until start)':d+' day'+(d===1?'':'s')+' before'}</option>`).join('')}</select>
     <label>Graphic headline</label><input id="e_head" value="${esc(c.headline||'')}">
     <label>Script subtitle</label><input id="e_sub" value="${esc(c.subtitle||'')}">
-    <div class="hint" style="margin-top:8px">Need a different date or time? Use <b>Change date or time</b> on the class card instead.</div>
+    <div class="hint" style="margin-top:8px">Need a different date or time? Use <b>Change date or time</b> on the class card.</div>
     <div style="height:80px"></div>
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.34.0-teaser"
+VERSION = "10.35.0-edit-anytime"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3996,16 +3996,22 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "not found"}, 404)
             cls = dict(row)
 
-            # Guard 1: is it still pending? Guard 2 (the CAS below): did we win?
-            if cls["status"] != "pending":
-                msg = lost_race_message(c, cls)
+            # Approving is only ever a decision on a pending submission. Sending
+            # BACK can happen at any point before the class is public: an admin
+            # who spots a problem after approving should not have to cancel it.
+            from_ok = ("pending",) if approve else ("pending", "graphic_review", "instructor_review")
+            if cls["status"] not in from_ok:
+                msg = (lost_race_message(c, cls) if cls["status"] != "approved" else
+                       "This class is already published. Use Cancel & refund, or edit it in place.")
                 c.execute("ROLLBACK"); c.close()
-                print(f"[decision race] class #{cid}: {u['name']} was too late. {msg}")
+                print(f"[decision] class #{cid}: {u['name']} could not act from {cls['status']}. {msg}")
                 return self.send_json({"error": msg, "status": cls["status"]}, 409)
+            from_status = cls["status"]
 
-            # Compare-and-swap. Only one caller can turn 'pending' into the target.
-            if c.execute("UPDATE classes SET status=? WHERE id=? AND status='pending'",
-                         (target, cid)).rowcount != 1:
+            # Compare-and-swap against the status we actually read, so two admins
+            # acting at once still cannot both win.
+            if c.execute("UPDATE classes SET status=? WHERE id=? AND status=?",
+                         (target, cid, from_status)).rowcount != 1:
                 fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
                 msg = lost_race_message(c, fresh)
                 c.execute("ROLLBACK"); c.close()
@@ -4023,7 +4029,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 after_commit = ("render", prepared, instr, cls, ctext)
             else:
                 c.execute("UPDATE classes SET admin_note=? WHERE id=?", (b.get("note",""), cid))
-                audit(c, cid, "pending", "incomplete", u["id"])
+                audit(c, cid, from_status, "incomplete", u["id"])
+                # Undo what approving had set up. A contract the instructor already
+                # SIGNED is never thrown away; only an unsent/unsigned one is cleared.
+                if cls.get("contract_status") == "sent":
+                    c.execute("UPDATE classes SET contract_status='', contract_text='' WHERE id=?", (cid,))
                 sids = json.loads(cls.get("slot_ids") or "[]")     # release the claimed slots
                 if sids:
                     c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(sids))})", sids)
