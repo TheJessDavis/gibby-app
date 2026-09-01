@@ -2139,6 +2139,8 @@ function cardCls(c){
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="syncRegistrations(${c.id})">Sync registrations from Eventbrite</button>`:''}
       <div id="roster${c.id}"></div>`:''}
+    ${actingRole()==='admin' && c.status!=='approved' && c.status!=='pending' ? `
+      <button class="btn ghost" style="margin-top:10px" onclick="openLiveEdit(${c.id})">Edit details</button>`:''}
     ${actingRole()==='admin' && c.status==='approved' ? `<div class="two" style="margin-top:10px">
       <button class="btn ghost" onclick="emailClass(${c.id},'remind')">Send reminder</button>
       <button class="btn ghost" onclick="emailClass(${c.id},'followup')">Send follow-up</button></div>
@@ -2289,8 +2291,10 @@ async function openEditForm(id){
 function openLiveEdit(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
   $('#view').innerHTML=`
-    <h2>Edit a <em>live class</em></h2>
-    <p class="sub">This class is published. Saving updates Eventbrite, the calendar and the website in place - same listing, same links. Students are not emailed.</p>
+    <h2>Edit <em>this class</em></h2>
+    <p class="sub">${c.status==='approved'
+      ? 'This class is published. Saving updates Eventbrite, the calendar and the website in place - same listing, same links. Students are not emailed.'
+      : 'This class is not public yet, so saving just updates it here. Whatever it says when it publishes is what goes out.'}</p>
     <div class="err" id="eerr"></div>
     <label>Class title</label><input id="e_title" value="${esc(c.title)}">
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>

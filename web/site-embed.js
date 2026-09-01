@@ -123,14 +123,18 @@ function renderList(list,classes){
   });
 }
 
-/* ---------------- what's next carousel (homepage) ---------------- */
-var wnState=null; /* {car, track, offset, wired} once we own the carousel */
-function ownCarousel(){
-  if(wnState&&document.contains(wnState.car))return wnState;
-  var carOld=null;
-  var secs=document.querySelectorAll('section.user-items-list-section [data-controller="UserItemsListCarousel"]');
-  if(secs.length)carOld=secs[0];
-  if(!carOld)return null;
+/* ---------------- homepage carousels ----------------
+   The homepage has several of these sections. App classes belong in two of
+   them, exactly like the hand-made entries: "What's Next" (everything coming
+   up, titled "Art Workshop: X") and "Art Workshops" (the workshop catalogue,
+   bare title). Squarespace's carousel controller cannot adopt slides added
+   after load, so each carousel is cloned (which drops their listeners) and
+   driven by this script instead. */
+var carStates = [];
+function ownCarousel(carOld){
+  for(var i=0;i<carStates.length;i++){
+    if(carStates[i].src===carOld && document.contains(carStates[i].car)) return carStates[i];
+  }
   var car=carOld.cloneNode(true);
   carOld.replaceWith(car);
   var track=car.querySelector('.user-items-list-carousel__slides');
@@ -147,24 +151,26 @@ function ownCarousel(){
   track.style.display='flex';
   track.style.gap='20px';
   track.style.transition='transform .35s ease';
-  wnState={car:car,track:track,offset:0,wired:false};
-  return wnState;
+  var st={src:car,car:car,track:track,offset:0,wired:false};
+  carStates.push(st);
+  return st;
 }
-function wnLayout(){
-  if(!wnState)return null;
-  var track=wnState.track,wrap=track.parentElement;
+function layoutCar(st){
+  if(!st||!document.contains(st.track))return null;
+  var track=st.track,wrap=track.parentElement;
   var w=wrap.getBoundingClientRect().width;
   var cols=Math.max(1,Math.min(4,Math.floor(w/290)));
   var sw=Math.round((w-20*cols-20)/cols);
   var slides=Array.from(track.children);
   slides.forEach(function(li){li.style.transform='none';li.style.flex='0 0 '+sw+'px';li.style.maxWidth=sw+'px'});
   var maxOff=Math.max(0,slides.length-cols);
-  if(wnState.offset>maxOff)wnState.offset=maxOff;
-  track.style.transform='translateX('+(-wnState.offset*(sw+20))+'px)';
+  if(st.offset>maxOff)st.offset=maxOff;
+  track.style.transform='translateX('+(-st.offset*(sw+20))+'px)';
   return {cols:cols,maxOff:maxOff};
 }
-function renderCarousel(classes){
-  var st=ownCarousel();
+function layoutAll(){ carStates.forEach(layoutCar); }
+function renderCarousel(classes, carOld, prefix){
+  var st=ownCarousel(carOld);
   if(!st)return 0;
   var track=st.track;
   track.querySelectorAll('.gibby-item').forEach(function(x){x.remove()});
@@ -174,17 +180,18 @@ function renderCarousel(classes){
     var t=li.querySelector('.list-item-content__title');
     return norm(t?t.textContent:'');
   });
+  var MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
   var added=0;
   classes.forEach(function(c){
     var n=norm(c.title);
     if(!n)return;
+    /* never duplicate something a person already added by hand */
     if(existing.some(function(e){return e&&(e.indexOf(n)!==-1||n.indexOf(e)!==-1)}))return;
     var li=tpl.cloneNode(true);
     li.classList.add('gibby-item');
     li.style.transform='none';
     var title=li.querySelector('.list-item-content__title');
-    if(title)title.textContent='Art Workshop: '+c.title;
-    var MN=['January','February','March','April','May','June','July','August','September','October','November','December'];
+    if(title)title.textContent=(prefix||'')+c.title;
     var dp=String(c.date||'').split('-');
     var series=/(\d+)-week/.exec(c.when||'');
     var dateLabel=(dp.length===3?MN[(+dp[1])-1]+' '+(+dp[2]):'')+(series?' · '+series[1]+'-week course':'');
@@ -203,6 +210,7 @@ function renderCarousel(classes){
     }
     var a=li.querySelector('a.list-item-content__button');
     if(a){a.href=c.url;a.target='_blank';a.rel='noopener';a.textContent='Register'}
+    /* slot it in by date where the neighbours have parseable dates; otherwise append */
     var k=dateKey(c),before=null;
     var kids=Array.from(track.children);
     for(var j=0;j<kids.length;j++){
@@ -219,15 +227,33 @@ function renderCarousel(classes){
       var left=/--l\b|--left/.test(b.className);
       b.addEventListener('click',function(e){
         e.preventDefault();
-        var g=wnLayout();if(!g)return;
+        var g=layoutCar(st);if(!g)return;
         st.offset=Math.max(0,Math.min(st.offset+(left?-1:1),g.maxOff));
-        wnLayout();
+        layoutCar(st);
       });
     });
-    window.addEventListener('resize',wnLayout);
+    window.addEventListener('resize',layoutAll);
   }
-  wnLayout();
+  layoutCar(st);
   return added;
+}
+function renderHomeCarousels(classes){
+  /* Identify each carousel by its own section heading, so re-ordering the page
+     cannot send classes into the Films or Live Stage rows. */
+  var total=0;
+  var secs=document.querySelectorAll('section.user-items-list-section');
+  for(var i=0;i<secs.length;i++){
+    var sec=secs[i];
+    var carOld=sec.querySelector('[data-controller="UserItemsListCarousel"]');
+    if(!carOld)continue;
+    var head=(sec.textContent||'').slice(0,400);
+    var prefix=null;
+    if(/what.?s next/i.test(head)) prefix='Art Workshop: ';
+    else if(/art workshops/i.test(head)) prefix='';
+    if(prefix===null)continue;
+    total+=renderCarousel(classes, carOld, prefix);
+  }
+  return total;
 }
 
 /* ---------------- boot ---------------- */
@@ -252,7 +278,7 @@ function ginit(){
         }else{msg+=' list-missing'}
       }
       if(onHome){
-        msg+=' carousel+'+renderCarousel(classes);
+        msg+=' carousels+'+renderHomeCarousels(classes);
       }
       rep(msg+' (rules='+rules.length+')');
     }).catch(function(e){rep('fetch failed try '+tries+': '+e);if(++tries<6)setTimeout(load,2000*tries)})

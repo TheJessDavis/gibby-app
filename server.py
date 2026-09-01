@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.32.0-auto-length"
+VERSION = "10.33.0-michelle-fixes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -812,7 +812,12 @@ def process_due_jobs():
         claimed = c.execute("UPDATE job_queue SET status='running', updated=? WHERE id=? AND status='queued'",
                             (now(), job["id"])).rowcount
         if claimed == 1:
-            row = c.execute("SELECT * FROM classes WHERE id=?", (job["class_id"],)).fetchone()
+            # instructor_name travels with the class: the Eventbrite details
+            # block credits the instructor, so every platform gets it here
+            # rather than each caller remembering to pass it.
+            row = c.execute("""SELECT cl.*, u.name AS instructor_name FROM classes cl
+                               LEFT JOIN users u ON u.id=cl.instructor_id
+                               WHERE cl.id=?""", (job["class_id"],)).fetchone()
             cls = dict(row) if row else None
         c.commit(); c.close()
         if claimed != 1: continue
@@ -1933,7 +1938,10 @@ class H(http.server.BaseHTTPRequestHandler):
             d = _class_date(cls)
             end = _class_end_date(cls) or d
             if not d or (end and end < today): continue
-            when = day_label(d) + " · " + (cls.get("class_time") or cls.get("slot_time") or "")
+            # The site's own cards read "September 10", not "Thu, Sep 10", so the
+            # app's cards match that rather than standing out (Michelle, Aug 2026).
+            when = (f"{_MON_FULL[d.month-1]} {d.day} · "
+                    + (cls.get("class_time") or cls.get("slot_time") or "")).strip(" ·")
             if cls.get("is_series"):
                 try: n = len(json.loads(cls.get("session_dates") or "[]"))
                 except Exception: n = 0
@@ -3394,8 +3402,9 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
-            if row["status"] not in ("approved","graphic_review"):
-                c.close(); return self.send_json({"error":"Use the normal review flow for classes that are not published yet."},400)
+            # An admin can edit a class at ANY stage. Where the class has already
+            # reached Eventbrite or the calendar the change is pushed there in
+            # place; where it has not, this simply updates what will publish.
             sets, vals = [], []
             for k in ("title","description","age_range","headline","subtitle"):
                 if k in b: sets.append(f"{k}=?"); vals.append(b[k])

@@ -305,33 +305,99 @@ def eventbrite_event_status(eid, cfg):
     except Exception:
         return None
 
-def _structured_html(cls):
-    """Real HTML for the Eventbrite page body via structured content (the legacy
-    description field escapes tags AND collapses newlines). Ages as a heading,
-    then the description with its paragraphs intact, then the FAQ."""
+DDOA_STATEMENT = ("This organization is supported, in part, by a grant from the Delaware "
+                  "Division of the Arts, a state agency, in partnership with the National "
+                  "Endowment for the Arts. The Division promotes Delaware arts events on "
+                  "DelawareScene.com")
+
+def event_summary(cls):
+    """Eventbrite's short teaser under the title. Left empty it shows their
+    placeholder ('a short and sweet sentence about your event'), so we always
+    send the first sentence of the class description, trimmed to fit."""
+    text = " ".join((cls.get("description") or "").split())
+    if not text:
+        return (cls.get("title") or "")[:140]
+    m = re.match(r"^(.+?[.!?])(\s|$)", text)
+    first = (m.group(1) if m else text).strip()
+    if len(first) > 140:
+        first = first[:137].rsplit(" ", 1)[0] + "..."
+    return first
+
+_DOW_FULL = {"Mon":"Monday","Tue":"Tuesday","Wed":"Wednesday","Thu":"Thursday",
+             "Fri":"Friday","Sat":"Saturday","Sun":"Sunday"}
+_MON_FULL = {"Jan":"January","Feb":"February","Mar":"March","Apr":"April","May":"May",
+             "Jun":"June","Jul":"July","Aug":"August","Sep":"September","Oct":"October",
+             "Nov":"November","Dec":"December"}
+
+def pretty_date(label):
+    """'Sat, Oct 24' -> 'Saturday, October 24' for anything the public reads."""
+    m = re.match(r"^\s*(?:(\w{3}),\s*)?(\w{3})\s+(\d{1,2})\s*$", label or "")
+    if not m:
+        return label or ""
+    dow, mon, day = m.groups()
+    out = f"{_MON_FULL.get(mon, mon)} {int(day)}"
+    return f"{_DOW_FULL.get(dow, dow)}, {out}" if dow else out
+
+def _details_block(cls):
+    """The standard detail lines every listing carries, in the order the Gibby
+    asked for: Date, Time, Ages, Instructor, Cost, Registration Deadline."""
     import html as _h
-    parts = []
-    ages = ages_open_line(cls)
-    if ages:
-        parts.append(f"<h2>{_h.escape(ages)}</h2>")
-    if cls.get("donation_based"):
-        parts.append("<p><strong>Donation-based entry: pay what you want.</strong></p>")
-    v = (cls.get("video") or "").strip()
-    if v and "/media/" in v:
-        parts.append(f'<p><a href="{_h.escape(v)}">\U0001F3AC Watch a video preview of this class</a></p>')
+    rows = []
+    def row(label, value):
+        if value: rows.append(f"<p><strong>{label}:</strong> {_h.escape(str(value))}</p>")
     try:
         sessions = json.loads(cls.get("session_dates") or "[]")
     except Exception:
         sessions = []
     if cls.get("is_series") and sessions:
-        lis = "".join(f"<li>{_h.escape(s['date'])} · {_h.escape(s['start'])} – {_h.escape(s['end'])}</li>"
-                      for s in sessions)
-        parts.append(f"<p><strong>A {len(sessions)}-week course.</strong> One ticket covers all "
-                     f"{len(sessions)} sessions:</p><ul>{lis}</ul>")
+        row("Dates", f"{len(sessions)} weekly sessions, "
+                     f"{pretty_date(sessions[0]['date'])} to {pretty_date(sessions[-1]['date'])}")
+    else:
+        row("Date", pretty_date(cls.get("slot_date")))
+    row("Time", cls.get("class_time") or cls.get("slot_time"))
+    row("Ages", cls.get("age_label") or cls.get("age_range"))
+    row("Instructor", cls.get("instructor_name"))
+    if cls.get("donation_based"):
+        row("Cost", "Donation-based: pay what you want")
+    elif cls.get("ticket_price"):
+        price = float(cls["ticket_price"])
+        row("Cost", f"${price:,.2f}".replace(".00", "") + (" for the whole course" if cls.get("is_series") else ""))
+    close_days = int(cls.get("close_days") or 0)
+    if close_days > 0:
+        row("Registration deadline", f"{close_days} day{'s' if close_days != 1 else ''} before the class")
+    return "".join(rows)
+
+def _structured_html(cls):
+    """Real HTML for the Eventbrite page body via structured content (the legacy
+    description field escapes tags AND collapses newlines).
+
+    Order matters and was set by the Gibby: the class description leads, then the
+    standard details block (Date, Time, Ages, Instructor, Cost, Registration
+    deadline), then anything extra, and every listing ends with the Delaware
+    Division of the Arts statement."""
+    import html as _h
+    parts = []
+    # 1. The description itself, paragraphs intact.
     for para in (cls.get("description") or "").split("\n\n"):
         para = para.strip()
         if para:
             parts.append("<p>" + _h.escape(para).replace("\n", "<br>") + "</p>")
+    # 2. The standard details.
+    details = _details_block(cls)
+    if details:
+        parts.append("<h3>Class details</h3>" + details)
+    # 3. Series schedule, video, FAQ.
+    try:
+        sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception:
+        sessions = []
+    if cls.get("is_series") and sessions:
+        lis = "".join(f"<li>{_h.escape(s['date'])} \u00b7 {_h.escape(s['start'])} \u2013 {_h.escape(s['end'])}</li>"
+                      for s in sessions)
+        parts.append(f"<p><strong>One ticket covers all {len(sessions)} sessions:</strong></p><ul>{lis}</ul>")
+    v = (cls.get("video") or "").strip()
+    if v and "/media/" in v:
+        parts.append(f'<p><a href="{_h.escape(v)}">\U0001F3AC Watch a video preview of this class</a></p>')
     try:
         faq = json.loads(cls.get("faq") or "[]")
     except Exception:
@@ -340,6 +406,8 @@ def _structured_html(cls):
                    for x in faq if x.get("q") and x.get("a"))
     if rows:
         parts.append(f"<h3>Good to know</h3>{rows}")
+    # 4. The grant statement closes every listing.
+    parts.append(f"<p><em>{_h.escape(DDOA_STATEMENT)}</em></p>")
     return "".join(parts)
 
 def _push_structured_content(eid, cls, cfg):
@@ -404,6 +472,7 @@ def update_eventbrite_details(cls, cfg):
     # listing (a truncated copy above the real one).
     ev_body = {"name": {"html": cls["title"]},
                "description": {"html": ""},
+               "summary": event_summary(cls),
                "capacity": cls.get("max_p")}
     if cfg.get("eventbrite_venue_id"):   # heals older events that said 'Location TBD'
         ev_body["venue_id"] = cfg["eventbrite_venue_id"]
@@ -448,6 +517,7 @@ def post_eventbrite(cls, cfg, image_url=None):
     event = {
         "name": {"html": cls["title"]},
         "description": {"html": ""},
+        "summary": event_summary(cls),
         "start": {"timezone": cfg["timezone"], "utc": start},
         "end":   {"timezone": cfg["timezone"], "utc": end},
         "currency": "USD", "capacity": cls.get("max_p")}
@@ -464,7 +534,7 @@ def post_eventbrite(cls, cfg, image_url=None):
         # to name their amount.
         ticket = {"name": "Donation", "donation": True, "quantity_total": cls.get("max_p")}
     else:
-        ticket = {"name": "Admission", "quantity_total": cls.get("max_p"),
+        ticket = {"name": "Registration", "quantity_total": cls.get("max_p"),
                   "cost": f"USD,{int(round((cls.get('ticket_price') or 0) * 100))}"}
     # Registration cutoff. sales_end is a writable field on the ticket class, so
     # Eventbrite itself stops selling - the instructor gets a headcount that cannot
