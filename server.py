@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.38.1-tour-pointers"
+VERSION = "10.39.0-learn-all"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -581,9 +581,9 @@ def prune_sessions():
 # everything else: it survives the restart that happens on every deploy, which an
 # in-process dict would not.
 RATE_LIMITS = {                 # name: (max requests, window seconds)
-    "submit":  (5,  3600),      # class form submissions, per instructor
+    "submit":  (12, 3600),      # class form submissions, per instructor (Jess: up to 12 at once)
     "approve": (20, 3600),      # approval decisions, per admin
-    "claim":   (10, 3600),      # slot claim attempts, per instructor
+    "claim":   (24, 3600),      # slot claim attempts, per instructor (a claim precedes every submission)
 }
 RATE_LABEL = {"submit": "class submissions", "approve": "approval decisions",
               "claim": "slot claims"}
@@ -2301,8 +2301,6 @@ class H(http.server.BaseHTTPRequestHandler):
             today = datetime.date.today()
             out = []
             for cl in rows:
-                if cl.get("instructor_id") == u["id"]:
-                    continue
                 end = _class_end_date(cl) or _class_date(cl)
                 if end and end < today:
                     continue
@@ -2316,6 +2314,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 item["coming_count"] = c2.execute("SELECT COUNT(*) FROM audit_rsvps WHERE class_id=?",
                                                   (cl["id"],)).fetchone()[0]
                 c2.close()
+                item["mine"] = (cl.get("instructor_id") == u["id"])
                 out.append(item)
             out.sort(key=lambda x: (_class_date(x) or datetime.date.max))
             return self.send_json({"classes": out})
@@ -2914,7 +2913,10 @@ class H(http.server.BaseHTTPRequestHandler):
             delivered = mailer.send(to, "Gibby Class Manager test email",
                 "This is a test from your Gibby Class Manager. If you received this, email is working.", cfg)
             return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
-                "live": bool(cfg["email_live"] and cfg["smtp_host"]), "delivered": bool(delivered)})
+                "live": bool(cfg["email_live"] and cfg["smtp_host"]), "delivered": bool(delivered),
+                "smtp_host": cfg.get("smtp_host"), "smtp_port": cfg.get("smtp_port"),
+                "smtp_user": cfg.get("smtp_user"),
+                "error": ("" if delivered else mailer.LAST_ERROR)})
         if p == "/api/test-eventbrite":
             u = self.require("admin")
             if not u: return

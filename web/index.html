@@ -2548,13 +2548,16 @@ async function instrAudit(){
   if(!$('#tab')) return;
   $('#tab').innerHTML = `<h2>Learn from a <em>colleague</em></h2>
     <p class="sub">Classes the Gibby's other teaching artists have opened up. Resident teaching artists take them free, as full participants, without using a paying seat. Let the instructor know you are coming.</p>
+
     ${classes.length ? classes.map(c=>`<div class="card">
       <div class="row"><div><h3>${esc(c.title)}</h3>
         <div class="meta">${esc(c.instructor_name||'')}</div></div></div>
       <div class="meta" style="margin-top:6px">${esc(c.slot_date||'')}${c.class_time?' · '+esc(c.class_time):''}${c.room?' · '+esc(c.room):''}${c.is_series?` · ${c.session_count}-week course`:''}</div>
       ${c.age_label||c.age_range?`<div class="meta">${esc(c.age_label||c.age_range)}</div>`:''}
       ${c.description?`<div class="meta" style="margin-top:8px">${esc(c.description)}</div>`:''}
-      ${c.coming
+      ${c.mine
+        ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">\u{1F393} Your class. ${c.coming_count?`${c.coming_count} teaching artist${c.coming_count===1?'':'s'} coming.`:'Listed here for the other teaching artists.'}</div>`
+        : c.coming
         ? `<div class="ok-note" style="margin-top:10px">\u2713 You're coming. ${esc(c.instructor_name||'The instructor')} has been emailed.${c.coming_count>1?` ${c.coming_count-1} other${c.coming_count>2?'s are':' is'} coming too.`:''}</div>`
         : `<button class="btn dark" style="margin-top:10px" onclick="sayComing(${c.id})">I'm coming</button>
            ${c.coming_count?`<div class="meta" style="margin-top:6px">${c.coming_count} teaching artist${c.coming_count===1?'':'s'} coming so far</div>`:''}`}

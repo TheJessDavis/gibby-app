@@ -38,6 +38,8 @@ def load_email_config():
 
 APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
 
+LAST_ERROR = ""   # the most recent SMTP failure, so the app can show it
+
 def send(to, subject, body, cfg=None, attachments=None):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
@@ -68,6 +70,8 @@ def send(to, subject, body, cfg=None, attachments=None):
         print(f"[email] SENT to={recips} subject={subject!r}")
         return True
     except Exception as e:
+        global LAST_ERROR
+        LAST_ERROR = f"{type(e).__name__}: {e}"
         print(f"[email] FAILED to={recips} subject={subject!r} error={e}")
         return False
 
