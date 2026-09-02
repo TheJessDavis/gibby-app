@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.36.0-shift-times"
+VERSION = "10.37.0-sit-in"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -160,6 +160,10 @@ def init_db():
     for col, typ in (("emer_contact","TEXT"), ("photo_ok","INTEGER")):
         try: c.execute(f"ALTER TABLE registrations ADD COLUMN {col} {typ}")
         except sqlite3.OperationalError: pass
+    # "Can other resident teaching artists audit this class?" - instructors may
+    # sit in free on a colleague's class when the instructor says yes.
+    try: c.execute("ALTER TABLE classes ADD COLUMN audit_ok INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
     # The one-line teaser Eventbrite prints above the description.
     try: c.execute("ALTER TABLE classes ADD COLUMN summary TEXT")
     except sqlite3.OperationalError: pass
@@ -2283,6 +2287,26 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json({"classes": self._classes("WHERE c.status='graphic_review' ")})
+        if p == "/api/classes/auditable":
+            # Classes whose instructor said other resident teaching artists may
+            # sit in free. Upcoming and approved only, and never your own.
+            u = self.require()
+            if not u: return
+            rows = self._classes("WHERE c.status='approved' AND c.audit_ok=1 ")
+            today = datetime.date.today()
+            out = []
+            for cl in rows:
+                if cl.get("instructor_id") == u["id"]:
+                    continue
+                end = _class_end_date(cl) or _class_date(cl)
+                if end and end < today:
+                    continue
+                out.append({k: cl.get(k) for k in
+                            ("id","title","slot_date","class_time","slot_time","room",
+                             "description","age_label","age_range","instructor_name",
+                             "is_series","session_count","photo")})
+            out.sort(key=lambda x: (_class_date(x) or datetime.date.max))
+            return self.send_json({"classes": out})
         if p == "/api/classes/mine":
             u = self.require("instructor")
             if not u: return
@@ -2429,6 +2453,7 @@ class H(http.server.BaseHTTPRequestHandler):
             d["sessions"]=json.loads(d.get("session_dates") or "[]")
             d["is_series"]=bool(d.get("is_series"))
             d["alcohol"]=bool(d["alcohol"]); d["promoted"]=bool(d.get("promoted"))
+            d["audit_ok"]=bool(d.get("audit_ok"))
             d["is_kids"]=is_kids_class(d)
             d["enrolled"]=enrollment(c, d["id"])
             out.append(d)
@@ -3204,13 +3229,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 host = self.headers.get("Host","localhost:8000")
                 teacher_id, on_behalf = invite_instructor(c, b.get("instructor_name"), email, proto, host)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,summary,age_range,
-                alcohol,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
+                alcohol,audit_ok,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
                 length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
                 is_series,session_count,session_dates,age_label,close_days,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),teacher_id,slot_date,slot_time,room,
                  b.get("description"),(b.get("summary") or "").strip()[:140],
                  b.get("age_range"),1 if b.get("alcohol") else 0,
+                 1 if b.get("audit_ok") else 0,
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
@@ -3442,6 +3468,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("pay_model") in ("flat","split"):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
             if not sets: c.close(); return self.send_json({"error":"Nothing to change."},400)
             vals.append(cid)
@@ -3892,6 +3919,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("pay_model") in ("flat", "split"):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             sets += ["status=?","admin_note=?"]; vals += ["instructor_review", b.get("note","")]
             vals.append(cid)
             c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
