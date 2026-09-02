@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.37.0-sit-in"
+VERSION = "10.38.0-learn"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -164,6 +164,11 @@ def init_db():
     # sit in free on a colleague's class when the instructor says yes.
     try: c.execute("ALTER TABLE classes ADD COLUMN audit_ok INTEGER DEFAULT 0")
     except sqlite3.OperationalError: pass
+    # Teaching artists who said "I'm coming" to a colleague's Learn class. One row
+    # per person per class, so a second tap can never send a second email.
+    c.execute("""CREATE TABLE IF NOT EXISTS audit_rsvps(
+        id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, created TEXT,
+        UNIQUE(class_id, user_id))""")
     # The one-line teaser Eventbrite prints above the description.
     try: c.execute("ALTER TABLE classes ADD COLUMN summary TEXT")
     except sqlite3.OperationalError: pass
@@ -2301,10 +2306,17 @@ class H(http.server.BaseHTTPRequestHandler):
                 end = _class_end_date(cl) or _class_date(cl)
                 if end and end < today:
                     continue
-                out.append({k: cl.get(k) for k in
-                            ("id","title","slot_date","class_time","slot_time","room",
-                             "description","age_label","age_range","instructor_name",
-                             "is_series","session_count","photo")})
+                item = {k: cl.get(k) for k in
+                        ("id","title","slot_date","class_time","slot_time","room",
+                         "description","age_label","age_range","instructor_name",
+                         "is_series","session_count","photo")}
+                c2 = db()
+                item["coming"] = bool(c2.execute("SELECT 1 FROM audit_rsvps WHERE class_id=? AND user_id=?",
+                                                 (cl["id"], u["id"])).fetchone())
+                item["coming_count"] = c2.execute("SELECT COUNT(*) FROM audit_rsvps WHERE class_id=?",
+                                                  (cl["id"],)).fetchone()[0]
+                c2.close()
+                out.append(item)
             out.sort(key=lambda x: (_class_date(x) or datetime.date.max))
             return self.send_json({"classes": out})
         if p == "/api/classes/mine":
@@ -2454,6 +2466,7 @@ class H(http.server.BaseHTTPRequestHandler):
             d["is_series"]=bool(d.get("is_series"))
             d["alcohol"]=bool(d["alcohol"]); d["promoted"]=bool(d.get("promoted"))
             d["audit_ok"]=bool(d.get("audit_ok"))
+            d["learners"]=c.execute("SELECT COUNT(*) FROM audit_rsvps WHERE class_id=?",(d["id"],)).fetchone()[0]
             d["is_kids"]=is_kids_class(d)
             d["enrolled"]=enrollment(c, d["id"])
             out.append(d)
@@ -3815,6 +3828,57 @@ class H(http.server.BaseHTTPRequestHandler):
                                 WHERE class_id=? AND refunded=0 AND checked_in=1""",(cid,)).fetchone()[0]
             c.commit(); c.close()
             return self.send_json({"ok":True, "here":here})
+        mcome = re.match(r"^/api/classes/(\d+)/attend$", p)
+        if mcome:
+            # "I'm coming": a resident teaching artist signs up to take a colleague's
+            # open class. Recorded once per person, and the instructor gets ONE email.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(mcome.group(1))
+            c = db()
+            row = c.execute("""SELECT cl.*, us.name AS instr_name, us.email AS instr_email FROM classes cl
+                               JOIN users us ON us.id=cl.instructor_id
+                               WHERE cl.id=? AND cl.deleted_at IS NULL""",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            row = dict(row)
+            if row["instructor_id"] == u["id"]:
+                c.close(); return self.send_json({"error":"That is your own class."},400)
+            if not row["audit_ok"] or row["status"] != "approved":
+                c.close(); return self.send_json({"error":"That class is not open to other teaching artists."},400)
+            try:
+                c.execute("INSERT INTO audit_rsvps(class_id,user_id,created) VALUES(?,?,?)",(cid,u["id"],now()))
+                fresh = True
+            except sqlite3.IntegrityError:
+                fresh = False
+            n = c.execute("SELECT COUNT(*) FROM audit_rsvps WHERE class_id=?",(cid,)).fetchone()[0]
+            c.commit(); c.close()
+            if fresh:
+                when = f"{row['slot_date']} {row.get('class_time') or row.get('slot_time') or ''}".strip()
+                mailer.send([row["instr_email"]],
+                    f"{u['name']} is coming to {row['title']}",
+                    f"{u['name']} ({u.get('email','')}) is planning to take your class "
+                    f"\"{row['title']}\" on {when} as a resident teaching artist, free.\n\n"
+                    f"That makes {n} teaching artist{'s' if n != 1 else ''} coming. "
+                    f"They do not use a paying seat.\n\nReply to this email to reach them directly.")
+            return self.send_json({"ok":True, "coming":True, "coming_count":n, "emailed":fresh})
+        maud = re.match(r"^/api/classes/(\d+)/audit$", p)
+        if maud:
+            # An instructor can open or close their OWN class to auditing at any
+            # time, including long after it was approved. Admins can do it for
+            # any class. Nothing public changes: this only affects the Sit in tab.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(maud.group(1))
+            val = 1 if self.read_json().get("audit_ok") else 0
+            c = db()
+            row = c.execute("SELECT instructor_id, status FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            c.execute("UPDATE classes SET audit_ok=? WHERE id=?", (val, cid))
+            audit(c, cid, row["status"], row["status"], u["id"])
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "audit_ok":bool(val)})
         if p.startswith("/api/classes/") and p.endswith("/sync-registrations"):
             u = self.require("admin")
             if not u: return
@@ -3848,7 +3912,9 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/tour-done":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
-            c = db(); c.execute("UPDATE users SET tour_seen=1 WHERE id=?",(u["id"],)); c.commit(); c.close()
+            try: ver = max(1, int(self.read_json().get("version") or 1))
+            except Exception: ver = 1
+            c = db(); c.execute("UPDATE users SET tour_seen=? WHERE id=?",(ver, u["id"])); c.commit(); c.close()
             return self.send_json({"ok": True})
         if p.startswith("/api/classes/") and p.endswith("/promote"):
             u = self.require("admin")

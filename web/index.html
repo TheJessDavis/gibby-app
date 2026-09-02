@@ -455,7 +455,9 @@ async function bootInner(){
   else sb.style.display='none';
   // The tour runs on every sign-in (the Gibby's choice) so nobody misses a
   // section; Skip is always one tap away.
-  if(user && !user.must_change_pw) setTimeout(startTour, 600);
+  // The tour runs ONCE per person per tour version: new people see it on their
+  // first login, everyone else sees it once more when the tour changes.
+  if(user && !user.must_change_pw && (user.tour_seen||0) < TOUR_VERSION) setTimeout(startTour, 600);
   const mrev=/^#review-(\d+)$/.exec(location.hash||'');
   if(mrev){ REVIEW_FOCUS=+mrev[1]; history.replaceState(null,'',location.pathname+location.search); }
   if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('open');
@@ -578,7 +580,7 @@ function buildBnav(role, active){
     const nSign=(ME&&ME.contracts_to_sign)||0;
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
       + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
-      + item('audit','\u{1F393}','Sit in',"renderInstr('audit')")
+      + item('audit','\u{1F393}','Learn',"renderInstr('audit')")
       + (nSign?`<span style="position:relative">${''}</span>`:'')
       + item('profile','\u{1F464}','Profile',"renderProfile()");
     if(nSign){ const btn=b.querySelector('[data-tab="mine"]');
@@ -787,6 +789,8 @@ function pfPickPhoto(ev){
   r.readAsDataURL(f);
 }
 /* ---------------- first-login guided tour ---------------- */
+// Bump this whenever the tour content changes; everyone then sees it once more.
+const TOUR_VERSION = 2;
 const TOUR_INSTRUCTOR = [
   ['\u{1F44B}','Welcome to the Gibby Class Manager','This is where you propose classes, sign your contract, and watch sign-ups roll in. Here is the one-minute lay of the land.'],
   ['\u{1F5D3}\uFE0F','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. The time either side of your class is yours for setup and cleanup.'],
@@ -794,7 +798,7 @@ const TOUR_INSTRUCTOR = [
   ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Nothing for you to post.'],
   ['\u{1F58A}\uFE0F','Sign your contract in the app','After approval, My classes shows a Read-and-sign button. Sign with your finger and a PDF copy lands in your email.'],
   ['\u{1F3A8}','My classes is your home base','Sign-ups appear there as people register (synced from Eventbrite hourly). You will get your roster by email the evening before class.'],
-  ['\u{1F393}','Sit in: learn from each other','The Sit in tab lists classes other teaching artists have opened up for auditing. Free for resident teaching artists, no paying seat used. When you submit a class, the form asks whether yours can be audited too.'],
+  ['\u{1F393}','Learn: take a colleague\'s class free','The Learn tab lists classes other teaching artists have opened up. Resident teaching artists take them free, as full participants, with no paying seat used. Your own classes can be opened up too, when you submit or later from My classes.'],
   ['\u{1F464}','One tip: fill in your profile','Your photo and skills show on your classes, and your address pre-fills every contract so you never type it twice. That is the tour!'],
 ];
 const TOUR_ADMIN = [
@@ -803,7 +807,7 @@ const TOUR_ADMIN = [
   ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes: the dashboard surfaces them. Emails to students are never sent without a person pressing the button.'],
   ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted) and an instructor payouts ledger with mark-as-paid.'],
   ['\u22EF','Everything else lives under More','Slots, templates, marketing announcements, connections, backups, the audit trail. The Connections tab also has Back up now and health checks.'],
-  ['\u{1F393}','Sit in classes','Instructors can mark a class as open for other teaching artists to audit. Those show on the instructors\' Sit in tab, and a card in Approvals says when a class allows it.'],
+  ['\u{1F393}','The Learn tab','Instructors can open a class to other teaching artists, who then take it free. Those classes show on the instructors\' Learn tab, and a class card in Approvals says when one allows it.'],
   ['\u2B50','Handy tricks','Any class card: save it as a template, print a flyer with a QR code, or download the signed contract PDF. Submitting for another instructor? The form has a picker. That is the tour!'],
 ];
 let TOUR_I = 0, TOUR_STEPS_CUR = null;
@@ -832,8 +836,8 @@ function renderTourStep(){
 }
 async function endTour(){
   const m = document.getElementById('tourmodal'); if(m) m.remove();
-  if(ME && !ME.tour_seen){ try{ await api('/api/tour-done','POST',{}); }catch(_){}
-    ME.tour_seen = 1; }
+  if(ME && (ME.tour_seen||0) < TOUR_VERSION){ try{ await api('/api/tour-done','POST',{version:TOUR_VERSION}); }catch(_){}
+    ME.tour_seen = TOUR_VERSION; }
 }
 
 async function saveProfile(){
@@ -2059,7 +2063,11 @@ function cardCls(c){
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='instructor' ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Volunteer requested</div>`:''}
-    ${c.audit_ok ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 Other teaching artists may sit in on this class</div>`:''}
+    ${actingRole()==='admin' && c.audit_ok ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 Open to other teaching artists to take free${c.learners?` · ${c.learners} coming`:''}</div>`:''}
+    ${actingRole()==='instructor' && c.audit_ok && c.learners ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 ${c.learners} teaching artist${c.learners===1?'':'s'} coming to take this class</div>`:''}
+    ${actingRole()==='instructor' && c.status!=='cancelled' ? `
+      <div class="meta" style="margin-top:8px"><b>Open to other teaching artists to take free?</b></div>
+      <div class="seg" style="margin-top:4px"><button class="${!c.audit_ok?'on':''}" onclick="setAudit(${c.id},false)">No</button><button class="${c.audit_ok?'on':''}" onclick="setAudit(${c.id},true)">Yes</button></div>`:''}
     ${c.status==='pending' && actingRole()==='admin' && c.reviewing_admin_name && (!ME||c.reviewing_admin_id!==ME.id) ? `
       <div class="meta" style="margin-top:10px;color:#B45309;font-weight:800">👀 ${esc(c.reviewing_admin_name)} is reviewing this (since ${esc(c.review_started_at||'')})</div>`:''}
     ${c.status==='pending' && actingRole()==='admin' ? `
@@ -2391,6 +2399,17 @@ async function rosterInner(id){
            <span>${esc(r.name)} · ${esc(r.email)} · ${esc(r.phone||'')}</span></div>`).join('')
     :'<div class="meta" style="padding:8px 0">No registrations yet.</div>')+'</div>';
 }
+async function sayComing(id){
+  try{ const r=await api('/api/classes/'+id+'/attend','POST',{});
+       if(r.emailed) alert("You're on the list. The instructor has been emailed that you're coming."); }
+  catch(e){ alert(e.message); return; }
+  renderInstr('audit');
+}
+async function setAudit(id, val){
+  try{ await api('/api/classes/'+id+'/audit','POST',{audit_ok:val}); }
+  catch(e){ alert(e.message); return; }
+  renderInstr('mine');
+}
 async function checkIn(cid, rid, val){
   await api('/api/class/'+cid+'/registrations/'+rid+'/checkin','POST',{checked_in:val});
   viewRoster(cid);
@@ -2508,21 +2527,25 @@ function calendarPickerHTML(slots){
   </div>`;
 }
 
-/* Classes other teaching artists have opened up for auditing: free to sit in on,
+/* Classes other teaching artists have opened up: resident teaching artists take them free,
    no paying seat used. Populated by the yes/no question on the class form. */
 async function instrAudit(){
   const {classes} = await api('/api/classes/auditable');
   if(!$('#tab')) return;
-  $('#tab').innerHTML = `<h2>Sit in on a <em>class</em></h2>
-    <p class="sub">Classes the Gibby's other teaching artists have opened up. Free for resident teaching artists, and it does not take a paying seat. Ask the instructor before you turn up.</p>
+  $('#tab').innerHTML = `<h2>Learn from a <em>colleague</em></h2>
+    <p class="sub">Classes the Gibby's other teaching artists have opened up. Resident teaching artists take them free, as full participants, without using a paying seat. Let the instructor know you are coming.</p>
     ${classes.length ? classes.map(c=>`<div class="card">
       <div class="row"><div><h3>${esc(c.title)}</h3>
         <div class="meta">${esc(c.instructor_name||'')}</div></div></div>
       <div class="meta" style="margin-top:6px">${esc(c.slot_date||'')}${c.class_time?' · '+esc(c.class_time):''}${c.room?' · '+esc(c.room):''}${c.is_series?` · ${c.session_count}-week course`:''}</div>
       ${c.age_label||c.age_range?`<div class="meta">${esc(c.age_label||c.age_range)}</div>`:''}
       ${c.description?`<div class="meta" style="margin-top:8px">${esc(c.description)}</div>`:''}
+      ${c.coming
+        ? `<div class="ok-note" style="margin-top:10px">\u2713 You're coming. ${esc(c.instructor_name||'The instructor')} has been emailed.${c.coming_count>1?` ${c.coming_count-1} other${c.coming_count>2?'s are':' is'} coming too.`:''}</div>`
+        : `<button class="btn dark" style="margin-top:10px" onclick="sayComing(${c.id})">I'm coming</button>
+           ${c.coming_count?`<div class="meta" style="margin-top:6px">${c.coming_count} teaching artist${c.coming_count===1?'':'s'} coming so far</div>`:''}`}
     </div>`).join('')
-      : `<div class="muted">No classes are open for auditing yet. When an instructor answers yes to &ldquo;can other resident teaching artists audit this class?&rdquo;, it shows up here.</div>`}`;
+      : `<div class="muted">Nothing is open yet. When an instructor answers yes to &ldquo;can other resident teaching artists audit this class?&rdquo;, it shows up here.</div>`}`;
 }
 
 async function instrOpen(){
@@ -2913,7 +2936,7 @@ function openForm(slot, draftPayload){
     <label>Can other resident teaching artists &ldquo;audit&rdquo; this class?</label>
     <div class="seg" id="f_audit"><button class="on" data-v="no" onclick="segPick(this)">No</button>
       <button data-v="yes" onclick="segPick(this)">Yes</button></div>
-    <div class="hint">Say yes and your class is listed for the Gibby's other teaching artists to sit in on, free. It does not use a paying seat.</div>
+    <div class="hint">Say yes and your class is listed on the Learn tab for the Gibby's other teaching artists to take free, as full participants. It does not use a paying seat. You can change this any time from My classes.</div>
 
     <label>Anything students need to bring or do before class? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <textarea id="f_pre" placeholder="e.g. Email a photo of your pet at least 3 days before class."></textarea>
