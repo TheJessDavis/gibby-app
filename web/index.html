@@ -36,6 +36,9 @@
   .bnav{position:fixed;bottom:12px;left:12px;right:12px;max-width:420px;margin:0 auto;background:var(--ink);border-radius:22px;display:flex;gap:2px;padding:7px;z-index:45;box-shadow:0 14px 30px rgba(0,0,0,.28)}
   .bnav button{position:relative;flex:1;border:none;background:none;color:rgba(255,255,255,.55);font-family:inherit;font-weight:800;cursor:pointer;padding:7px 2px 6px;border-radius:15px;display:flex;flex-direction:column;align-items:center;gap:2px}
   .bnav button .bi{font-size:17px;line-height:1}
+  .bnav:has(.tour-spot){z-index:90}
+  .tour-spot{position:relative;z-index:91;background:#FCD34D !important;color:#1E160A !important;border-radius:15px;box-shadow:0 0 0 4px #FFFDF8,0 0 0 8px #FCD34D;animation:tourpulse 1.1s ease-in-out infinite}
+  @keyframes tourpulse{0%,100%{box-shadow:0 0 0 4px #FFFDF8,0 0 0 8px #FCD34D}50%{box-shadow:0 0 0 4px #FFFDF8,0 0 0 13px #FCD34D}}
   .bnav button .bl{font-size:9px;letter-spacing:.04em;text-transform:uppercase}
   .bnav button.on{background:rgba(255,255,255,.16);color:#fff}
   .bnav .navbadge{position:absolute;top:2px;right:14px}
@@ -575,7 +578,7 @@ function buildBnav(role, active){
       + item('approvals','\u2705','Approvals',"renderAdmin('approvals')")
       + item('calendar','\u{1F5D3}\uFE0F','Calendar',"renderAdmin('calendar')")
       + item('people','\u{1F465}','People',"renderAdmin('people')")
-      + `<button class="${inMore?'on':''}" onclick="openMore()"><span class="bi">\u22EF</span><span class="bl">More</span></button>`;
+      + `<button data-tab="more" class="${inMore?'on':''}" onclick="openMore()"><span class="bi">\u22EF</span><span class="bl">More</span></button>`;
   } else {
     const nSign=(ME&&ME.contracts_to_sign)||0;
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
@@ -792,23 +795,23 @@ function pfPickPhoto(ev){
 // Bump this whenever the tour content changes; everyone then sees it once more.
 const TOUR_VERSION = 2;
 const TOUR_INSTRUCTOR = [
-  ['\u{1F44B}','Welcome to the Gibby Class Manager','This is where you propose classes, sign your contract, and watch sign-ups roll in. Here is the one-minute lay of the land.'],
-  ['\u{1F5D3}\uFE0F','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. The time either side of your class is yours for setup and cleanup.'],
-  ['\u{1F4DD}','One form, then we take it from here','Describe your class once: photo, price, ages, description (40 to 75 words). Start from a template or copy a past class so repeats take thirty seconds. When you submit, The Gibby reviews it.'],
-  ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Nothing for you to post.'],
-  ['\u{1F58A}\uFE0F','Sign your contract in the app','After approval, My classes shows a Read-and-sign button. Sign with your finger and a PDF copy lands in your email.'],
-  ['\u{1F3A8}','My classes is your home base','Sign-ups appear there as people register (synced from Eventbrite hourly). You will get your roster by email the evening before class.'],
-  ['\u{1F393}','Learn: take a colleague\'s class free','The Learn tab lists classes other teaching artists have opened up. Resident teaching artists take them free, as full participants, with no paying seat used. Your own classes can be opened up too, when you submit or later from My classes.'],
-  ['\u{1F464}','One tip: fill in your profile','Your photo and skills show on your classes, and your address pre-fills every contract so you never type it twice. That is the tour!'],
+  ['\u{1F44B}','Welcome to the Gibby Class Manager','This is where you propose classes, sign your contract, and watch sign-ups roll in. Here is the one-minute lay of the land.', null, ''],
+  ['\u{1F5D3}\uFE0F','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. The time either side of your class is yours for setup and cleanup.', '#bnav [data-tab="open"]', 'The Book tab, bottom left'],
+  ['\u{1F4DD}','One form, then we take it from here','Describe your class once: photo, price, ages, description (40 to 75 words). Start from a template or copy a past class so repeats take thirty seconds. When you submit, The Gibby reviews it.', '#bnav [data-tab="open"]', 'The form opens after you pick a time in Book'],
+  ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Nothing for you to post.', '#bnav [data-tab="mine"]', 'Watch its status in My classes'],
+  ['\u{1F58A}\uFE0F','Sign your contract in the app','After approval, My classes shows a Read-and-sign button. Sign with your finger and a PDF copy lands in your email.', '#bnav [data-tab="mine"]', 'My classes, on the class card'],
+  ['\u{1F3A8}','My classes is your home base','Sign-ups appear there as people register (synced from Eventbrite hourly). You will get your roster by email the evening before class.', '#bnav [data-tab="mine"]', 'The My classes tab'],
+  ['\u{1F393}','Learn: take a colleague\'s class free','The Learn tab lists classes other teaching artists have opened up. Resident teaching artists take them free, as full participants, with no paying seat used. Your own classes can be opened up too, when you submit or later from My classes.', '#bnav [data-tab="audit"]', 'The Learn tab, bottom bar'],
+  ['\u{1F464}','One tip: fill in your profile','Your photo and skills show on your classes, and your address pre-fills every contract so you never type it twice. That is the tour!', '#bnav [data-tab="profile"]', 'The Profile tab, bottom right'],
 ];
 const TOUR_ADMIN = [
-  ['\u{1F44B}','Welcome, admin','You approve classes and the app does the posting. Here is the one-minute tour.'],
-  ['\u2705','Approvals is the engine room','New submissions wait there. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the instructor their contract.'],
-  ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes: the dashboard surfaces them. Emails to students are never sent without a person pressing the button.'],
-  ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted) and an instructor payouts ledger with mark-as-paid.'],
-  ['\u22EF','Everything else lives under More','Slots, templates, marketing announcements, connections, backups, the audit trail. The Connections tab also has Back up now and health checks.'],
-  ['\u{1F393}','The Learn tab','Instructors can open a class to other teaching artists, who then take it free. Those classes show on the instructors\' Learn tab, and a class card in Approvals says when one allows it.'],
-  ['\u2B50','Handy tricks','Any class card: save it as a template, print a flyer with a QR code, or download the signed contract PDF. Submitting for another instructor? The form has a picker. That is the tour!'],
+  ['\u{1F44B}','Welcome, admin','You approve classes and the app does the posting. Here is the one-minute tour.', null, ''],
+  ['\u2705','Approvals is the engine room','New submissions wait there. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the instructor their contract.', '#bnav [data-tab="approvals"]', 'The Approvals tab, bottom bar'],
+  ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes: the dashboard surfaces them. Emails to students are never sent without a person pressing the button.', '#bnav [data-tab="dashboard"]', 'The Home tab, bottom left'],
+  ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted) and an instructor payouts ledger with mark-as-paid.', '#bnav [data-tab="more"]', 'Under More, then Money'],
+  ['\u{1F393}','The Learn tab','Instructors can open a class to other teaching artists, who then take it free. Those classes show on the instructors\' Learn tab, and a class card in Approvals says when one allows it.', '#bnav [data-tab="approvals"]', 'On class cards in Approvals'],
+  ['\u22EF','Everything else lives under More','Slots, templates, marketing announcements, connections, backups, the audit trail. The Connections tab also has Back up now and health checks.', '#bnav [data-tab="more"]', 'The More tab, bottom right'],
+  ['\u2B50','Handy tricks','Any class card: save it as a template, print a flyer with a QR code, or download the signed contract PDF. Submitting for another instructor? The form has a picker. That is the tour!', '#bnav [data-tab="approvals"]', 'Any class card, e.g. in Approvals'],
 ];
 let TOUR_I = 0, TOUR_STEPS_CUR = null;
 function startTour(){
@@ -822,19 +825,30 @@ function renderTourStep(){
     m.style.cssText = 'position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:80;display:flex;align-items:center;justify-content:center;padding:18px';
     document.body.appendChild(m);
   }
-  const [icon, title, body] = TOUR_STEPS_CUR[TOUR_I];
+  const [icon, title, body, target, where] = TOUR_STEPS_CUR[TOUR_I];
   const last = TOUR_I === TOUR_STEPS_CUR.length - 1;
+  tourSpot(target);
   m.innerHTML = `<div style="background:#FFFDF8;border-radius:20px;max-width:400px;width:100%;padding:24px 22px;text-align:center">
     <div style="font-size:44px">${icon}</div>
     <h2 style="margin:10px 0 6px;font-size:22px">${title}</h2>
-    <p class="sub" style="margin:0 0 14px">${body}</p>
+    <p class="sub" style="margin:0 0 ${where?'8px':'14px'}">${body}</p>
+    ${where?`<div style="margin:0 0 14px;font-weight:800;font-size:13px;color:#B45309">\u{1F447} Find it: ${where}</div>`:''}
     <div style="display:flex;gap:5px;justify-content:center;margin-bottom:14px">
       ${TOUR_STEPS_CUR.map((_,i)=>`<span style="width:8px;height:8px;border-radius:50%;background:${i===TOUR_I?'var(--ink)':'var(--line)'}"></span>`).join('')}</div>
     <div class="two">
       ${TOUR_I>0?`<button class="btn ghost" onclick="TOUR_I--;renderTourStep()">Back</button>`:`<button class="btn ghost" onclick="endTour()">Skip</button>`}
       <button class="btn dark" onclick="${last?'endTour()':'TOUR_I++;renderTourStep()'}">${last?'Let\u2019s go!':'Next'}</button></div></div>`;
 }
+/* Lift the element a tour card talks about above the dimmed overlay and ring it,
+   so "find it" is literal: the tab or button is lit while the card is open. */
+function tourSpot(sel){
+  document.querySelectorAll('.tour-spot').forEach(e=>e.classList.remove('tour-spot'));
+  if(!sel) return;
+  const el=document.querySelector(sel);
+  if(el){ el.classList.add('tour-spot'); try{ el.scrollIntoView({block:'nearest'}); }catch(_){} }
+}
 async function endTour(){
+  tourSpot(null);
   const m = document.getElementById('tourmodal'); if(m) m.remove();
   if(ME && (ME.tour_seen||0) < TOUR_VERSION){ try{ await api('/api/tour-done','POST',{version:TOUR_VERSION}); }catch(_){}
     ME.tour_seen = TOUR_VERSION; }
