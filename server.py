@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.47.1-my-classes-hotfix"
+VERSION = "10.48.0-series-import-learn-full"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1484,7 +1484,8 @@ def suggest_instructor(ev, people):
     ev_date = (ev.get("start") or "")[:10]
     nt = _norm_title(ev.get("name")); nt_words = set(nt.split())
     best, best_score, best_kind = None, 0.0, ""
-    for title, who, date in rows:
+    for row in rows:
+        title, who, date = row[0], row[1], row[2]
         nr = _norm_title(title)
         score = difflib.SequenceMatcher(None, nt, nr).ratio()
         shared = bool(nt_words & set(nr.split()))
@@ -1495,16 +1496,17 @@ def suggest_instructor(ev, people):
         else:
             continue
         if cand[0] > best_score:
-            best, best_score, best_kind = (title, who, date), cand[0], cand[1]
+            best, best_score, best_kind = (title, who, date, (row[3] if len(row) > 3 else None)), cand[0], cand[1]
     if not best:
         # Craft keywords the Gibby always pairs with one person (stained glass, etc.).
         for kw, email in (ws.get("keywords") or {}).items():
             if kw in (ev.get("name") or "").lower() and email.lower() in by_email:
-                return by_email[email.lower()]["id"], f"keyword '{kw}' usually means {by_email[email.lower()]['name']}"
-        return None, ""
+                return by_email[email.lower()]["id"], f"keyword '{kw}' usually means {by_email[email.lower()]['name']}", None
+        return None, "", None
     p = person_for(best[1])
-    if not p: return None, f"worksheet says {best[1]} ({best[0]}, {best[2] or 'no date'}) but there is no account with that name"
-    return p["id"], f"worksheet: {best[0]} on {best[2] or '?'} by {best[1]} ({best_kind})"
+    sessions = best[3] if best_kind == "date and title" else None
+    if not p: return None, f"worksheet says {best[1]} ({best[0]}, {best[2] or 'no date'}) but there is no account with that name", sessions
+    return p["id"], f"worksheet: {best[0]} on {best[2] or '?'} by {best[1]} ({best_kind})", sessions
 
 def linked_eventbrite_ids(c):
     ids = set()
@@ -1516,7 +1518,21 @@ def linked_eventbrite_ids(c):
             pass
     return ids
 
-def import_eventbrite_event(c, ev, instructor_id, admin_id):
+def _series_plan(ev, people):
+    """Session dates for an imported class: the worksheet's notes when the event
+    matched a series row, else N weekly sessions when the title says 'N-Week'."""
+    _, _, sessions = suggest_instructor(ev, people)
+    if sessions: return sessions
+    m = re.search(r"(\d+)[- ]week", (ev.get("name") or "").lower())
+    if m:
+        try:
+            d0 = datetime.datetime.fromisoformat(ev["start"]).date()
+            return [(d0 + datetime.timedelta(weeks=i)).isoformat() for i in range(int(m.group(1)))]
+        except Exception:
+            pass
+    return None
+
+def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
     """Adopt an Eventbrite event that was created by hand as an approved class in
     the app. Nothing is posted anywhere: the event already exists on Eventbrite,
     so the class carries its id and skips the poster, contract and publishing
@@ -1528,13 +1544,21 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id):
     span = f"{_fmt_clock(start)} – {_fmt_clock(end)}" if start and end else _fmt_clock(start)
     ext = {"eventbrite_id": str(ev["id"]), "eventbrite_url": ev.get("url"), "imported": True}
     desc = (ev.get("description") or "").strip() or (ev.get("summary") or "").strip()
+    sess_json, is_series, n_sess = "[]", 0, 1
+    if sessions and len(sessions) > 1:
+        sess = []
+        for iso in sessions:
+            try: sess.append({"date": day_label(datetime.date.fromisoformat(iso)), "start": _fmt_clock(start), "end": _fmt_clock(end), "slot_ids": []})
+            except Exception: pass
+        if len(sess) > 1:
+            sess_json, is_series, n_sess = json.dumps(sess), 1, len(sess)
     c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,class_time,length,room,description,summary,
                  max_p,min_p,ticket_price,photo,poster,slot_ids,is_series,session_count,session_dates,
                  status,external_ids,imported,created)
                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'approved',?,1,?)""",
               (ev.get("name") or "Untitled class", instructor_id, slot_date, span, span,
                _length_phrase(start, end), "Studio", desc, (ev.get("summary") or "")[:140],
-               ev.get("capacity") or 0, 0, ev.get("price") or 0, None, ev.get("logo"), "[]", 0, 1, "[]",
+               ev.get("capacity") or 0, 0, ev.get("price") or 0, None, ev.get("logo"), "[]", is_series, n_sess, sess_json,
                json.dumps(ext), now()))
     cid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
     return cid
@@ -2600,10 +2624,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 hay = f"{ev.get('name','')} {ev.get('summary','')} {ev.get('description','')}".lower()
                 sug = next((pp["id"] for pp in people if pp["name"] and pp["name"].lower() in hay), None)
                 why = "named in the listing" if sug else ""
+                sessions = None
                 if not sug:
-                    sug, why = suggest_instructor(ev, people)
+                    sug, why, sessions = suggest_instructor(ev, people)
                 ev["suggested_instructor_id"] = sug
-                ev["why"] = why
+                ev["why"] = why + (f"; {len(sessions)}-session series" if sessions else "")
+                ev["sessions"] = sessions
                 out.append(ev)
             return self.send_json({"events": out, "people": people, "linked": len(linked)})
         if p == "/api/classes/followup-review":
@@ -2656,6 +2682,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                                   (cl["id"],)).fetchone()[0]
                 c2.close()
                 item["mine"] = (cl.get("instructor_id") == u["id"])
+                item["enrolled"] = cl.get("enrolled") or 0; item["max_p"] = cl.get("max_p") or 0
+                item["full"] = bool(item["max_p"]) and (item["enrolled"] + item["coming_count"]) >= item["max_p"]
                 out.append(item)
             out.sort(key=lambda x: (_class_date(x) or datetime.date.max))
             return self.send_json({"classes": out})
@@ -3279,6 +3307,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": f"Eventbrite did not answer: {e}"}, 502)
             c = db()
             linked = linked_eventbrite_ids(c)
+            people = [dict(r) for r in c.execute("SELECT id,name,email FROM users WHERE deleted_at IS NULL ORDER BY name")]
             done, skipped = [], []
             for it in items:
                 eid = str(it.get("event_id") or "")
@@ -3288,7 +3317,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 if eid in linked: skipped.append(f"{ev['name']}: already in the app"); continue
                 if not iid or not c.execute("SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL", (iid,)).fetchone():
                     skipped.append(f"{ev['name']}: pick an instructor"); continue
-                cid = import_eventbrite_event(c, ev, int(iid), u["id"])
+                cid = import_eventbrite_event(c, ev, int(iid), u["id"], _series_plan(ev, people))
                 linked.add(eid); done.append({"id": cid, "title": ev["name"]})
             c.commit(); c.close()
             for d in done:      # pull the real roster straight away
@@ -4282,6 +4311,12 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"That is your own class."},400)
             if not row["audit_ok"] or row["status"] != "approved":
                 c.close(); return self.send_json({"error":"That class is not open to other teaching artists."},400)
+            # A full class (paying students plus teaching artists already coming)
+            # takes no more Learn sign-ups; someone already on the list stays on it.
+            already = c.execute("SELECT 1 FROM audit_rsvps WHERE class_id=? AND user_id=?",(cid,u["id"])).fetchone()
+            taken = enrollment(c, cid) + c.execute("SELECT COUNT(*) FROM audit_rsvps WHERE class_id=?",(cid,)).fetchone()[0]
+            if not already and row.get("max_p") and taken >= row["max_p"]:
+                c.close(); return self.send_json({"error":"This class is full, so it is closed to teaching artists."},409)
             try:
                 c.execute("INSERT INTO audit_rsvps(class_id,user_id,created) VALUES(?,?,?)",(cid,u["id"],now()))
                 fresh = True

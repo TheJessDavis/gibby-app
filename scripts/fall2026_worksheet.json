@@ -11,12 +11,24 @@
   [
    "Creators' Club",
    "Allison Medley",
-   "2026-11-03"
+   "2026-11-03",
+   [
+    "2026-11-03",
+    "2026-11-10",
+    "2026-11-17",
+    "2026-11-24"
+   ]
   ],
   [
    "September Creators Club",
    "Christin Smiertka",
-   "2026-09-08"
+   "2026-09-08",
+   [
+    "2026-09-08",
+    "2026-09-15",
+    "2026-09-22",
+    "2026-09-29"
+   ]
   ],
   [
    "Paint Your Pet",
@@ -86,7 +98,13 @@
   [
    "Creators' Club",
    "Dawn Hunter",
-   "2026-10-06"
+   "2026-10-06",
+   [
+    "2026-10-06",
+    "2026-10-13",
+    "2026-10-20",
+    "2026-10-27"
+   ]
   ],
   [
    "Painted Gourd Bowl",
@@ -136,12 +154,25 @@
   [
    "Basics of Hand Embroidery Series",
    "Harlee Light",
-   "2026-09-24"
+   "2026-09-24",
+   [
+    "2026-09-24",
+    "2026-10-01",
+    "2026-10-08"
+   ]
   ],
   [
    "Motor Skills Through Art",
    "Harlee Light",
-   "2026-09-18"
+   "2026-09-18",
+   [
+    "2026-09-18",
+    "2026-09-25",
+    "2026-10-02",
+    "2026-10-09",
+    "2026-10-16",
+    "2026-10-23"
+   ]
   ],
   [
    "Crushed Glass & Resin Art: Fall Themes",
@@ -161,12 +192,25 @@
   [
    "Introduction to Classical Realist Still Life Painting",
    "Jason Weaver",
-   "2026-10-13"
+   "2026-10-13",
+   [
+    "2026-10-13",
+    "2026-10-14",
+    "2026-10-15"
+   ]
   ],
   [
    "Stained Glass Series",
    "Jess Davis",
-   "2026-09-03"
+   "2026-09-03",
+   [
+    "2026-09-03",
+    "2026-09-10",
+    "2026-09-17",
+    "2026-09-24",
+    "2026-10-01",
+    "2026-10-08"
+   ]
   ],
   [
    "Mom & Me Workshop: Fairy Wings",
@@ -176,12 +220,25 @@
   [
    "Rug Tufting Series",
    "Jess Davis",
-   "2026-10-03"
+   "2026-10-03",
+   [
+    "2026-10-03",
+    "2026-10-10",
+    "2026-10-17"
+   ]
   ],
   [
    "Stained Glass Series",
    "Jess Davis",
-   "2026-10-15"
+   "2026-10-15",
+   [
+    "2026-10-15",
+    "2026-10-22",
+    "2026-10-29",
+    "2026-11-05",
+    "2026-11-12",
+    "2026-11-19"
+   ]
   ],
   [
    "Stained Glass: Create a Stained Glass Mini Terrarium",
@@ -201,7 +258,12 @@
   [
    "Rug Tufting Series",
    "Jess Davis",
-   "2026-12-03"
+   "2026-12-03",
+   [
+    "2026-12-03",
+    "2026-12-10",
+    "2026-12-17"
+   ]
   ],
   [
    "Stained Glass: Create an Ornament Workshop",
@@ -281,7 +343,11 @@
   [
    "Watercolor Florals Series",
    "Katie Gorman",
-   "2026-10-14"
+   "2026-10-14",
+   [
+    "2026-10-14",
+    "2026-10-21"
+   ]
   ],
   [
    "Halloween Handlettering",
@@ -336,7 +402,12 @@
   [
    "Creators' Club",
    "Paige Davis",
-   "2026-12-01"
+   "2026-12-01",
+   [
+    "2026-12-01",
+    "2026-12-08",
+    "2026-12-15"
+   ]
   ],
   [
    "Needlefelting workshop",
@@ -354,6 +425,8 @@
   "rug tufting": "jdavis@theeverett.org",
   "watercolor": "kgorman@theeverett.org",
   "needlefelting": "farmgirlfelts@gmail.com",
-  "needle felting": "farmgirlfelts@gmail.com"
+  "needle felting": "farmgirlfelts@gmail.com",
+  "arts & craft social club": "jdavis@theeverett.org",
+  "social club": "jdavis@theeverett.org"
  }
 }

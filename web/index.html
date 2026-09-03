@@ -2635,6 +2635,7 @@ async function instrAudit(){
         ? `<div class="meta" style="margin-top:10px;color:#2c5b8a;font-weight:800">\u{1F393} Your class. ${c.coming_count?`${c.coming_count} teaching artist${c.coming_count===1?'':'s'} coming.`:'Listed here for the other teaching artists.'}</div>`
         : c.coming
         ? `<div class="ok-note" style="margin-top:10px">\u2713 You're coming. ${esc(c.instructor_name||'The instructor')} has been emailed.${c.coming_count>1?` ${c.coming_count-1} other${c.coming_count>2?'s are':' is'} coming too.`:''}</div>`
+        : c.full ? `<div class="meta" style="margin-top:10px;font-weight:800;color:#B45309">Full: every seat is taken, so this one is closed to teaching artists.</div>`
         : `<button class="btn dark" style="margin-top:10px" onclick="sayComing(${c.id})">I'm coming</button>
            ${c.coming_count?`<div class="meta" style="margin-top:6px">${c.coming_count} teaching artist${c.coming_count===1?'':'s'} coming so far</div>`:''}`}
     </div>`).join('')
