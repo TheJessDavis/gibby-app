@@ -1452,6 +1452,7 @@ async function adminEbImport(){
         <div class="meta">${esc(e.start.slice(0,10))} ${esc(e.start.slice(11,16))}–${esc(e.end.slice(11,16))} · ${e.price?'$'+e.price:'free'} · ${e.sold} of ${e.capacity||'?'} sold</div></div>
         <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" class="ebpick" data-id="${e.id}" ${e.suggested_instructor_id?'checked':''}> bring in</label></div>
       <select id="ebi${e.id}" style="margin-top:8px">${opts(e.suggested_instructor_id)}</select>
+      <div class="hint">${e.why?esc(e.why):'No match on the class worksheet. Pick by hand or leave unticked.'}</div>
     </div>`).join('') || '<div class="muted">Everything live on Eventbrite is already in the app.</div>'}
     ${d.events.length?`<button class="btn dark" style="margin-top:12px" onclick="doEbImport()">Bring in the checked classes</button>`:''}
     <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Back to Connections</button>`;

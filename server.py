@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.46.0-eventbrite-import"
+VERSION = "10.47.0-worksheet-matching"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1444,6 +1444,68 @@ def _length_phrase(start_iso, end_iso):
     if h: return f"{h} hour{'s' if h != 1 else ''}"
     return f"{m} minutes"
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+_WORKSHEET = None
+def worksheet_rows():
+    """The Fall 2026 class worksheet (title, instructor, date) the Gibby plans
+    from, snapshotted into scripts/fall2026_worksheet.json. Used only to SUGGEST
+    the instructor for an Eventbrite event; an admin confirms every one."""
+    global _WORKSHEET
+    if _WORKSHEET is None:
+        try:
+            _WORKSHEET = json.load(open(os.path.join(HERE, "scripts", "fall2026_worksheet.json")))
+        except Exception as e:
+            print("[import] worksheet not readable:", e); _WORKSHEET = {"rows": [], "aliases": {}}
+    return _WORKSHEET
+
+_STOP = {"workshop","workshops","series","class","classes","the","a","an","and","of","for","night","fall","2026","basics","basic"}
+def _norm_title(t):
+    import string
+    t = (t or "").lower().translate(str.maketrans("", "", string.punctuation))
+    return " ".join(w for w in t.split() if w not in _STOP)
+
+def suggest_instructor(ev, people):
+    """(user_id, reason) for an Eventbrite event, from the worksheet: same date
+    and a similar title is a strong match; a very similar title alone is weak."""
+    import difflib
+    ws = worksheet_rows(); rows = ws.get("rows", []); aliases = ws.get("aliases", {})
+    by_email = {p["email"].lower(): p for p in people if p.get("email")}
+    by_name = {p["name"].lower(): p for p in people if p.get("name")}
+    def person_for(name):
+        n = (name or "").strip().lower()
+        if n in aliases and aliases[n] in by_email: return by_email[aliases[n]]
+        if n in by_name: return by_name[n]
+        parts = n.split()
+        if len(parts) >= 2:
+            for p in people:
+                pp = (p.get("name") or "").lower().split()
+                if pp and pp[0] == parts[0] and pp[-1] == parts[-1]: return p
+        return None
+    ev_date = (ev.get("start") or "")[:10]
+    nt = _norm_title(ev.get("name")); nt_words = set(nt.split())
+    best, best_score, best_kind = None, 0.0, ""
+    for title, who, date in rows:
+        nr = _norm_title(title)
+        score = difflib.SequenceMatcher(None, nt, nr).ratio()
+        shared = bool(nt_words & set(nr.split()))
+        if date and date == ev_date and score >= 0.45 and shared:
+            cand = (score + 1.0, "date and title")
+        elif score >= 0.75:
+            cand = (score, "title only")
+        else:
+            continue
+        if cand[0] > best_score:
+            best, best_score, best_kind = (title, who, date), cand[0], cand[1]
+    if not best:
+        # Craft keywords the Gibby always pairs with one person (stained glass, etc.).
+        for kw, email in (ws.get("keywords") or {}).items():
+            if kw in (ev.get("name") or "").lower() and email.lower() in by_email:
+                return by_email[email.lower()]["id"], f"keyword '{kw}' usually means {by_email[email.lower()]['name']}"
+        return None, ""
+    p = person_for(best[1])
+    if not p: return None, f"worksheet says {best[1]} ({best[0]}, {best[2] or 'no date'}) but there is no account with that name"
+    return p["id"], f"worksheet: {best[0]} on {best[2] or '?'} by {best[1]} ({best_kind})"
+
 def linked_eventbrite_ids(c):
     ids = set()
     for r in c.execute("SELECT external_ids FROM classes WHERE deleted_at IS NULL").fetchall():
@@ -2537,9 +2599,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 if str(ev["id"]) in linked: continue
                 hay = f"{ev.get('name','')} {ev.get('summary','')} {ev.get('description','')}".lower()
                 sug = next((pp["id"] for pp in people if pp["name"] and pp["name"].lower() in hay), None)
+                why = "named in the listing" if sug else ""
                 if not sug:
-                    sug = next((pp["id"] for pp in people if pp["name"] and pp["name"].split(" ")[0].lower() in hay.split()), None)
+                    sug, why = suggest_instructor(ev, people)
                 ev["suggested_instructor_id"] = sug
+                ev["why"] = why
                 out.append(ev)
             return self.send_json({"events": out, "people": people, "linked": len(linked)})
         if p == "/api/classes/followup-review":
