@@ -124,6 +124,22 @@ function doPost(e) {
     return reply({ ok: true, id: f.getId(), link: f.getUrl() });
   }
 
+  if (body.action === 'photo') {
+    // After-class photos: Gibby Class Photos / <class title> / <file>.
+    var root;
+    var rit = DriveApp.getFoldersByName('Gibby Class Photos');
+    root = rit.hasNext() ? rit.next() : DriveApp.createFolder('Gibby Class Photos');
+    var sub = root, subName = String(body.folder || '').trim();
+    if (subName) {
+      var sit = root.getFoldersByName(subName);
+      sub = sit.hasNext() ? sit.next() : root.createFolder(subName);
+    }
+    var blob = Utilities.newBlob(Utilities.base64Decode(String(body.b64 || '')),
+      String(body.mime || 'image/jpeg'), String(body.filename || 'photo.jpg'));
+    var pf = sub.createFile(blob);
+    return reply({ ok: true, id: pf.getId(), link: pf.getUrl(), folder: sub.getUrl() });
+  }
+
   if (body.action === 'email') {
     // Send app email as the mailbox that deployed this script, or as one of its
     // Send-mail-as aliases (gibby@everetttheatre.com). No app password needed.

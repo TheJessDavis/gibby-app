@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.48.0-series-import-learn-full"
+VERSION = "10.49.0-photos-calendar-fix"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,9 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    c.execute("""CREATE TABLE IF NOT EXISTS class_photos(
+        id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, drive_id TEXT, drive_link TEXT,
+        folder_link TEXT, filename TEXT, thumb TEXT, created TEXT)""")
     for col in ("promoted","reminded","followed_up","low_alerted"):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
@@ -1173,6 +1176,31 @@ def resend_unsigned_contract_emails():
         else:
             failed.append(f"{cls['title']} ({instr['email']})")
     return {"sent": sent, "failed": failed, "error": ("" if not failed else mailer.LAST_ERROR)}
+
+def push_photo_to_drive(cls, filename, b64, mime="image/jpeg"):
+    """File one after-class photo under Gibby Class Photos/<class title> on Drive
+    through the calendar bridge. Returns {id, link, folder} or raises."""
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"):
+        raise RuntimeError("the Google bridge is not configured")
+    folder = re.sub(r"[\\/:*?\"<>|]+", " ", cls.get("title") or "class").strip()[:80]
+    if cls.get("slot_date"): folder = f"{folder} ({cls['slot_date']})"
+    payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "photo",
+                          "folder": folder, "filename": filename, "b64": b64, "mime": mime}).encode()
+    req = urllib.request.Request(cfg["webhook_url"], data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        raw = r.read().decode("utf-8", "replace")
+    try:
+        res = json.loads(raw)
+    except ValueError:
+        raise RuntimeError("the bridge answered with an error page; it may need the photo action (Version 16)")
+    if not res.get("ok"):
+        err = str(res.get("error") or res)
+        if err == "unknown action":
+            err = "the Google bridge script is older than Version 16 and has no photo action"
+        raise RuntimeError(err)
+    return res
 
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
@@ -2622,7 +2650,10 @@ class H(http.server.BaseHTTPRequestHandler):
             for ev in events:
                 if str(ev["id"]) in linked: continue
                 hay = f"{ev.get('name','')} {ev.get('summary','')} {ev.get('description','')}".lower()
-                sug = next((pp["id"] for pp in people if pp["name"] and pp["name"].lower() in hay), None)
+                # A full name in the listing text is a strong hint, but only a real
+                # two-word name: the shared 'Gibby' admin account matches everything.
+                sug = next((pp["id"] for pp in people
+                            if pp["name"] and len(pp["name"].split()) >= 2 and pp["name"].lower() in hay), None)
                 why = "named in the listing" if sug else ""
                 sessions = None
                 if not sug:
@@ -2789,6 +2820,29 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
                                    "compact": json.loads(_meta_get("last_compact") or "{}")})
+        mph = re.match(r"^/api/classes/(\d+)/photos$", p)
+        if mph:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(mph.group(1)); c = db()
+            row = c.execute("SELECT instructor_id FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            rows = [dict(r) for r in c.execute("""SELECT p.id, p.drive_link, p.folder_link, p.filename, p.thumb, p.created,
+                u.name AS by FROM class_photos p LEFT JOIN users u ON u.id=p.user_id
+                WHERE p.class_id=? ORDER BY p.id""",(cid,)).fetchall()]
+            c.close()
+            return self.send_json({"photos": rows, "folder": (rows[-1]["folder_link"] if rows else None)})
+        if p == "/api/photos/recent":
+            # Admin/marketing: the latest class photos across every class.
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT p.id, p.class_id, p.drive_link, p.folder_link, p.thumb, p.created,
+                cl.title, cl.slot_date, u.name AS by FROM class_photos p
+                JOIN classes cl ON cl.id=p.class_id LEFT JOIN users u ON u.id=p.user_id
+                ORDER BY p.id DESC LIMIT 60""").fetchall()]
+            c.close()
+            return self.send_json({"photos": rows})
         if p.startswith("/api/class/") and p.endswith("/registrations"):
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3294,6 +3348,41 @@ class H(http.server.BaseHTTPRequestHandler):
                 "bridge": mailer.bridge_available(), "route": (mailer.LAST_ROUTE if delivered else ""),
                 "bridge_dedicated": mailer.bridge_config()["dedicated"],
                 "error": ("" if delivered else mailer.LAST_ERROR)})
+        mup = re.match(r"^/api/classes/(\d+)/photos$", p)
+        if mup:
+            # Instructor (their own class) or admin uploads after-class photos.
+            # Each goes to Drive through the bridge; a small thumbnail stays here.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(mup.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            cls = dict(row); c.close()
+            photos = b.get("photos") or []
+            if not photos: return self.send_json({"error":"No photos were attached."},400)
+            if len(photos) > 12: return self.send_json({"error":"Up to 12 photos at a time, please."},400)
+            saved, failed = [], []
+            for i, ph in enumerate(photos):
+                b64 = (ph.get("b64") or "")
+                if "," in b64[:40]: b64 = b64.split(",",1)[1]
+                if not b64 or len(b64) > 3_000_000:
+                    failed.append(f"photo {i+1}: missing or too large"); continue
+                name = re.sub(r"[^A-Za-z0-9._-]+", "-", (ph.get("name") or f"photo-{i+1}.jpg"))[:80] or f"photo-{i+1}.jpg"
+                if not name.lower().endswith((".jpg",".jpeg",".png",".webp")): name += ".jpg"
+                try:
+                    res = push_photo_to_drive(cls, name, b64, ph.get("mime") or "image/jpeg")
+                except Exception as e:
+                    failed.append(f"{name}: {e}"); continue
+                thumb = (ph.get("thumb") or "")[:60000]
+                c = db()
+                c.execute("""INSERT INTO class_photos(class_id,user_id,drive_id,drive_link,folder_link,filename,thumb,created)
+                             VALUES(?,?,?,?,?,?,?,?)""", (cid, u["id"], res.get("id"), res.get("link"), res.get("folder"), name, thumb, now()))
+                c.commit(); c.close()
+                saved.append({"name": name, "link": res.get("link")})
+            return self.send_json({"ok": bool(saved), "saved": saved, "failed": failed,
+                                   "folder": (res.get("folder") if saved else None)})
         if p == "/api/eventbrite/import":
             u = self.require("admin")
             if not u: return

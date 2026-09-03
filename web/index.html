@@ -2238,6 +2238,8 @@ function cardCls(c){
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
+      <div id="photos${c.id}"></div>
       ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="syncRegistrations(${c.id})">Sync registrations from Eventbrite</button>`:''}
       <div id="roster${c.id}"></div>`:''}
     ${actingRole()==='admin' && c.status!=='approved' && c.status!=='pending' ? `
@@ -2471,6 +2473,43 @@ async function emailClass(id,kind){
 // Registration view: its own boundary, scoped to this class's roster container, so a
 // bad registration record cannot take down the class card or the list around it.
 function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
+function viewPhotos(id){ return boundary('photos', '#photos'+id, ()=>photosInner(id), false); }
+async function photosInner(id){
+  const d = await api('/api/classes/'+id+'/photos');
+  const ph = d.photos||[];
+  $('#photos'+id).innerHTML = `<div style="margin-top:8px">
+    ${ph.length?`<div style="display:flex;flex-wrap:wrap;gap:6px">${ph.map(p=>`<a href="${p.drive_link}" target="_blank" rel="noopener" title="${esc(p.filename||'')}">
+        ${p.thumb?`<img src="${p.thumb}" alt="" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`:`<span style="display:inline-block;width:84px;height:84px;border-radius:8px;border:1px solid var(--line);text-align:center;line-height:84px">\u{1F5BC}</span>`}</a>`).join('')}</div>
+      <div class="meta" style="margin-top:6px">${ph.length} photo${ph.length===1?'':'s'} on Drive${d.folder?` · <a href="${d.folder}" target="_blank" rel="noopener">open the folder</a>`:''}</div>`
+      :'<div class="meta">No photos yet.</div>'}
+    <input type="file" id="pf${id}" accept="image/*" multiple style="margin-top:8px" onchange="uploadPhotos(${id})">
+    <div class="hint">Pick up to 12 photos from the class. They are resized on your phone and filed in the Gibby Class Photos folder on Drive.</div>
+    <div id="pfstat${id}" class="meta"></div></div>`;
+}
+function shrinkImage(file, maxSide, quality){
+  return new Promise((res,rej)=>{
+    const img=new Image(); const url=URL.createObjectURL(file);
+    img.onload=()=>{ const s=Math.min(1, maxSide/Math.max(img.width,img.height));
+      const cv=document.createElement('canvas'); cv.width=Math.round(img.width*s); cv.height=Math.round(img.height*s);
+      cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height); URL.revokeObjectURL(url);
+      res(cv.toDataURL('image/jpeg', quality)); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error('That file is not an image the browser can read.')); };
+    img.src=url; });
+}
+async function uploadPhotos(id){
+  const inp=$('#pf'+id), st=$('#pfstat'+id); const files=[...inp.files].slice(0,12);
+  if(!files.length) return;
+  const photos=[];
+  for(let i=0;i<files.length;i++){
+    st.textContent='Preparing photo '+(i+1)+' of '+files.length+'…';
+    try{ photos.push({name:files[i].name, mime:'image/jpeg', b64:await shrinkImage(files[i],1600,0.85), thumb:await shrinkImage(files[i],320,0.7)}); }
+    catch(e){ st.textContent=e.message; return; }
+  }
+  st.textContent='Sending '+photos.length+' photo'+(photos.length===1?'':'s')+' to Drive…';
+  let r; try{ r=await api('/api/classes/'+id+'/photos','POST',{photos}); }catch(e){ st.textContent='Upload failed: '+e.message; return; }
+  st.textContent=(r.saved||[]).length+' saved.'+((r.failed||[]).length?' Could not save: '+r.failed.join('; '):'');
+  viewPhotos(id);
+}
 async function rosterInner(id){
   const {registrations, auditors} = await api('/api/class/'+id+'/registrations');
   const live = registrations.filter(r=>!r.refunded);
@@ -2664,7 +2703,11 @@ async function instrOpen(){
   if(!slots.length){ $('#tab').innerHTML=`<h2>Grab an <em>open slot</em></h2>
     <div class="roombar">\u{1F4CD} <b>${esc(ROOM_PICK)}</b> <a href="#" onclick="setRoomPick(null);return false">change room</a></div>
     <div class="muted">No open times in the ${esc(ROOM_PICK)} right now.</div>`; return; }
-  const days=[...new Set(slots.map(s=>s.date))];
+  // Season order, earliest first: the API lists hand-made slots before the
+  // calendar's, and a January row at the top used to open the picker on January.
+  const days=[...new Set(slots.map(s=>s.date))].sort((a,b)=>{
+    const pa=parseDate(a)||{m:0,d:0}, pb=parseDate(b)||{m:0,d:0};
+    return (mOrd(pa.m)-mOrd(pb.m)) || (pa.d-pb.d); });
   if(!days.includes(SLOTDAY)){ SLOTDAY=days[0]; SEL=[]; }
   DAYSLOTS = slots.filter(s=>s.date===SLOTDAY).sort((a,b)=>tmin(a.start)-tmin(b.start));
   const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).filter(Boolean).sort((a,b)=>tmin(a.start)-tmin(b.start));
