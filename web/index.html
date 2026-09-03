@@ -1463,6 +1463,12 @@ async function adminConnections(){
       <input id="mb_url" placeholder="https://script.google.com/macros/s/.../exec" style="margin-top:6px">
       <input id="mb_key" placeholder="Shared key" style="margin-top:6px">
       <button class="btn ghost" style="margin-top:8px" onclick="saveMailBridge()">Save mail bridge</button>
+      <div class="meta" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)"><b>After-class thank-you</b> (sent two mornings after every class):</div>
+      <input id="th_google" placeholder="Google review link" value="${esc((d.thanks||{}).google_url||'')}" style="margin-top:6px">
+      <input id="th_fb" placeholder="Facebook page or review link" value="${esc((d.thanks||{}).facebook_url||'')}" style="margin-top:6px">
+      <div class="two" style="margin-top:6px"><input id="th_code" placeholder="Promo code" value="${esc((d.thanks||{}).promo_code||'')}"><input id="th_pct" placeholder="% off" value="${esc((d.thanks||{}).promo_pct||'')}"></div>
+      <input id="th_up" placeholder="Upcoming classes link" value="${esc((d.thanks||{}).upcoming_url||'')}" style="margin-top:6px">
+      <button class="btn ghost" style="margin-top:8px" onclick="saveThanks()">Save thank-you settings</button>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
       <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
       <button class="btn ghost" style="margin-top:8px" onclick="resendContracts()">Re-send unsigned contract emails</button>
@@ -1530,6 +1536,11 @@ async function refileContracts(){
   if(!confirm('Re-file every signed contract to Google Drive as a PDF?')) return;
   const r=await api('/api/admin/refile-contracts','POST',{});
   alert('Re-filing '+r.refiling+' contract'+(r.refiling===1?'':'s')+' as PDFs. They appear in the Gibby Contracts folder within a minute or two.\n\nThe old .html copies stay put; delete them from Drive whenever you like.');
+}
+async function saveThanks(){
+  const r=await api('/api/admin/thanks-settings','POST',{google_url:$('#th_google').value, facebook_url:$('#th_fb').value,
+    promo_code:$('#th_code').value, promo_pct:$('#th_pct').value, upcoming_url:$('#th_up').value});
+  alert(r.error||'Saved. Every after-class thank-you from now on uses these.');
 }
 async function saveMailBridge(){
   const url=$('#mb_url').value.trim(), key=$('#mb_key').value.trim();
@@ -1768,7 +1779,7 @@ const ETYPE={reminder:'48h reminder',followup:'day-after follow-up',cancel:'canc
   cancel_instructor:'cancellation (instructor)',low_alert:'low-enrollment alert',
   roster:'day-before roster to instructor',headcount:'confirmed headcount',
   reminder_nudge:'reminder nudge to staff',cancel_decision:'under-minimum decision nudge',
-  followup_request:'follow-up writing request',
+  followup_request:'follow-up writing request', followup_reminder:'follow-up writing reminder', followup_late:'late instructor note',
   fb_token_warn_14:'Facebook key expiry warning (14-day)',fb_token_warn_2:'Facebook key expiry warning (2-day)'};
 async function renderEmailLog(){
   const {entries}=await api('/api/email-log');
@@ -1910,22 +1921,20 @@ async function adminApprovals(){
     <label style="margin-top:20px">Poster review (${gfx.classes.length})</label>
     <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes public.</p>
     ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}
-    <label style="margin-top:20px">Follow-up notes (${fu.classes.length})</label>
-    <p class="sub" style="margin-top:2px">Written by the instructor after the class. Nothing is sent until you approve it.</p>
+    <label style="margin-top:20px">After-class emails (${fu.classes.length})</label>
+    <p class="sub" style="margin-top:2px">Classes that finished in the last 45 days. The thank-you goes out on its own two mornings after the last session; the instructor's note rides on top when they wrote one.</p>
     ${fu.classes.map(c=>`<div class="card">
       <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
-        <div class="meta">${esc(c.instructor_name)} &middot; ${esc(c.slot_date||'')}</div></div></div>
-      <div class="${c.attendance_known?'ok-note':'volbox'}" style="margin-top:10px">
-        ${c.attendance_known
-          ? `Eventbrite check-in was used, so this goes only to the <b>${c.followup_recipients}</b> who actually attended, and can thank them for coming.`
-          : `No one was checked in on Eventbrite, so we cannot tell who attended. This goes to all <b>${c.followup_recipients}</b> ticket holders and the wording will <b>not</b> assume they were there.`}
+        <div class="meta">${esc(c.instructor_name)} &middot; ended ${esc(c.end_date||'')}</div></div>
+        ${c.note_written?'<span class="pill appr">note written</span>':'<span class="pill inc">no note</span>'}</div>
+      <div class="meta" style="margin-top:8px">
+        ${c.thanks_sent_at
+          ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}.`
+          : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
       </div>
-      <label style="margin-top:10px">The instructor's note (edit if you need to)</label>
-      <textarea id="fa${c.id}">${esc(c.followup_note||'')}</textarea>
-      <div class="two" style="margin-top:10px">
-        <button class="btn warn" onclick="returnFollowup(${c.id})">Send back</button>
-        <button class="btn green" onclick="sendFollowup(${c.id})">Approve &amp; send</button></div>
-    </div>`).join('') || '<div class="muted">No follow-up notes waiting.</div>'}`;
+      ${c.note_written?`<div class="meta" style="margin-top:8px;white-space:pre-wrap;border-left:3px solid var(--line);padding-left:10px">${esc(c.followup_note||'')}</div>`:''}
+      ${!c.thanks_sent_at?`<button class="btn ghost" style="margin-top:10px" onclick="sendFollowup(${c.id})">Send now</button>`:''}
+    </div>`).join('') || '<div class="muted">No classes have finished recently.</div>'}`;
   // If a publish is already running (e.g. after a reload, or another admin started
   // it), pick the live status back up instead of showing a stale idle card.
   window.__classes.filter(c=>c.publishing_in_progress).forEach(c=>startPublishPolling(c.id));
@@ -1948,12 +1957,17 @@ async function sendFeedback(id){
 }
 async function saveFollowup(id, save){
   const note = $('#fu'+id).value;
-  const r = await api('/api/classes/'+id+'/followup-note','POST',{note, save});
-  alert(save ? 'Draft saved. Come back when you are ready.' : 'Sent to The Gibby for review.');
+  let r;
+  try{ r = await api('/api/classes/'+id+'/followup-note','POST',{note, save}); }
+  catch(e){ alert(e.message); return; }
+  if(r.error){ alert(r.error); return; }
+  alert(save ? 'Draft saved. Come back when you are ready.'
+      : r.late ? (r.ok ? 'Sent to your students now, from you.' : 'Not sent: '+r.reason)
+      : 'Saved. It goes to your students tomorrow morning, in your name.');
   instrMine();
 }
 async function sendFollowup(id){
-  const r = await api('/api/classes/'+id+'/followup-send','POST',{note:$('#fa'+id).value});
+  const r = await api('/api/classes/'+id+'/followup-send','POST',{});
   if(!r.ok){ alert('Not sent.\n\n'+r.reason); return; }
   alert(`Sent to ${r.sent_to} student${r.sent_to===1?'':'s'}.\n\n`
       + (r.attendance_known ? 'Only people who checked in received it.'
@@ -2429,7 +2443,7 @@ async function emailClass(id,kind){
 // bad registration record cannot take down the class card or the list around it.
 function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
 async function rosterInner(id){
-  const {registrations} = await api('/api/class/'+id+'/registrations');
+  const {registrations, auditors} = await api('/api/class/'+id+'/registrations');
   const live = registrations.filter(r=>!r.refunded);
   const here = live.filter(r=>r.checked_in).length;
   $('#roster'+id).innerHTML = '<div style="margin-top:8px">'
@@ -2441,7 +2455,10 @@ async function rosterInner(id){
            onclick="checkIn(${id},${r.id},${r.checked_in?0:1})">
            <span style="width:20px;height:20px;border-radius:50%;flex:none;display:inline-flex;align-items:center;justify-content:center;font-size:12px;${r.checked_in?'background:#3F7A32;color:#fff':'border:2px solid var(--line)'}">${r.checked_in?'✓':''}</span>
            <span>${esc(r.name)} · ${esc(r.email)} · ${esc(r.phone||'')}</span></div>`).join('')
-    :'<div class="meta" style="padding:8px 0">No registrations yet.</div>')+'</div>';
+    :'<div class="meta" style="padding:8px 0">No registrations yet.</div>')
+    +((auditors||[]).length?`<div class="meta" style="margin-top:10px;padding-top:8px;border-top:2px solid var(--line)"><b>\u{1F393} Teaching artists taking this class (Learn):</b> free seats, not counted in sales</div>`
+      +auditors.map(a=>`<div class="meta" style="padding:7px 0;border-top:1px solid var(--line)">${esc(a.name)} \u00b7 ${esc(a.email)}</div>`).join(''):'')
+    +'</div>';
 }
 async function sayComing(id){
   try{ const r=await api('/api/classes/'+id+'/attend','POST',{});
@@ -2733,22 +2750,27 @@ async function instrMine(){
   const [mine, dr] = await Promise.all([api('/api/classes/mine'), api('/api/drafts')]);
   const classes = mine.classes; window.__classes=classes;
   const drafts = dr.drafts || [];
-  const todo = classes.filter(c=>c.followup_status==='awaiting_instructor');
-  const waiting = classes.filter(c=>c.followup_status==='pending_admin');
+  const todo = classes.filter(c=>c.followup_status==='awaiting_instructor'||c.followup_status==='ready'
+                              ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
   // asked once the class has finished, and only until they answer
   const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
-      <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. An admin checks it before it goes out.</p>
+      <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. It goes out in your name, and replies come straight to you.</p>
       ${todo.map(c=>`<div class="card">
         <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
-          <div class="meta">${esc(c.slot_date||'')} ${esc(c.slot_time||'')}</div></div></div>
+          <div class="meta">${esc(c.slot_date||'')} ${esc(c.slot_time||'')}</div></div>
+          ${c.followup_status==='ready'?'<span class="pill appr">written</span>':c.followup_status==='sent_generic'?'<span class="pill pend">thank-you sent</span>':'<span class="pill inc">waiting on you</span>'}</div>
         <label style="margin-top:10px">Your note to students</label>
         <textarea id="fu${c.id}" placeholder="e.g. Thank you for a lovely afternoon. Your glaze will be ready to collect from the studio after the 14th, and I have popped a firing schedule on the noticeboard.">${esc(c.followup_note||'')}</textarea>
-        <div class="hint">The Gibby adds the greeting, the review link and the sign-off. Just write the part that is yours.</div>
+        <div class="hint">${c.followup_status==='sent_generic'
+          ? "The Gibby's thank-you already went to your students. Add your note and it goes to them right away, from you."
+          : c.followup_status==='ready'
+            ? "Written. It goes to your students tomorrow morning with The Gibby's thank-you underneath. You can still change it until then."
+            : "Goes out tomorrow morning with The Gibby's thank-you (review links and a discount) underneath. Skip it and The Gibby's thank-you goes alone."}</div>
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
-          <button class="btn dark" onclick="saveFollowup(${c.id},false)">Send for approval</button></div>
+          <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
       </div>`).join('')}`:''}
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
       <p class="sub" style="margin-top:2px">Three quick questions, just for The Gibby. Students never see these.</p>

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.43.0-contract-reminders"
+VERSION = "10.45.0-after-class-flow"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -192,7 +192,7 @@ def init_db():
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
-                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),
+                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),("followup_reminded_at","TEXT"),
                      ("donation_based","INTEGER DEFAULT 0"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
@@ -1363,6 +1363,8 @@ EMAIL_RULES = {
     "cancel_instructor": {"statuses": ("cancelled",), "future_only": False, "label": "instructor cancellation notice"},
     "low_alert":         {"statuses": ("approved",),  "future_only": True,  "label": "low-enrollment alert"},
     "followup_request":  {"statuses": ("approved",),  "future_only": False, "label": "follow-up writing request"},
+    "followup_reminder": {"statuses": ("approved",),  "future_only": False, "label": "follow-up writing reminder"},
+    "followup_late":     {"statuses": ("approved",),  "future_only": False, "label": "late instructor note to students"},
     "headcount":         {"statuses": ("approved",),  "future_only": True,  "label": "confirmed headcount"},
     # Nudges go to STAFF, never students. Policy: nothing reaches ticket holders
     # without a person (instructor or admin) pressing the button.
@@ -1422,6 +1424,99 @@ def send_class_email(c, cls, email_type, recipients, subject, body, asof=None, c
     c.execute("UPDATE email_log SET delivered=? WHERE class_id=? AND email_type=?",
               (1 if delivered else 0, cid, email_type))
     return True, f"{rule['label']} sent to {len(recips)}"
+
+THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
+                   "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933"}
+
+def thanks_settings():
+    """The after-class thank-you's links and discount, editable under Connections."""
+    return {k: (_meta_get("thanks_" + k) or v) for k, v in THANKS_DEFAULTS.items()}
+
+def thanks_block(ts=None):
+    ts = ts or thanks_settings()
+    lines = ["If you enjoyed the class, we would love to hear about it. A quick review helps other people find us:", ""]
+    if ts["google_url"]:   lines.append(f"Leave a Google review: {ts['google_url']}")
+    if ts["facebook_url"]: lines.append(f"Leave a Facebook review: {ts['facebook_url']}")
+    if not (ts["google_url"] or ts["facebook_url"]):
+        lines.append("Tell us on Google or Facebook, or just reply to this email.")
+    lines += ["", f"And here's a little thank-you: take {ts['promo_pct']}% off your next class with us. "
+                  f"Use code {ts['promo_code']} at checkout.", "",
+              f"See what's coming up: {ts['upcoming_url']}"]
+    return "\n".join(lines)
+
+def after_class_email(cls, first, attended, note="", instructor_name=""):
+    """The email students get after a class. With a note it opens in the
+    instructor's voice (sent 'via The Gibby', replies go to them); without one
+    it is The Gibby's own thank-you. Attendance wording is careful: a no-show
+    must never be thanked for coming."""
+    title = cls.get("title", "")
+    block = thanks_block()
+    ifirst = (instructor_name or "").split(" ")[0]
+    if attended:
+        subject = f"Thank you for taking {title}!"
+        opening = (f"Thank you for joining us for {title} at The Gibby! We hope you had a great time "
+                   f"and left with something you're proud of.")
+    else:
+        subject = f"Thank you from The Gibby: {title}"
+        opening = (f"{title} has wrapped up. Thank you for being part of it, and we hope to see you "
+                   f"at The Gibby again soon.")
+    if note.strip():
+        body = (f"Hi {first},\n\n{note.strip()}\n\n{ifirst or 'Your instructor'}\n\n"
+                f"----\n\nA note from The Gibby:\n\n{opening}\n\n{block}\n\n"
+                f"See you at The Gibby,\nThe Gibby Center for the Arts")
+    else:
+        body = (f"Hi {first},\n\n{opening}\n\n{block}\n\n"
+                f"See you at The Gibby,\nThe Gibby Center for the Arts")
+    return subject, body
+
+def followup_people(c, class_id):
+    """Like followup_audience, but with names so each email can be personal."""
+    rows = [dict(r) for r in c.execute(
+        "SELECT name, email, checked_in FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'",
+        (class_id,))]
+    attended = [r for r in rows if r["checked_in"]]
+    if attended:
+        return attended, True
+    return rows, False
+
+def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=None):
+    """The gated, per-student after-class send. Returns (sent, reason)."""
+    rule = EMAIL_RULES[email_type]
+    cid, title = cls["id"], cls.get("title", "")
+    if cls.get("status") not in rule["statuses"]:
+        return False, f"class status is {cls.get('status')!r}"
+    if email_sent_at(c, cid, email_type):
+        return False, "already sent"
+    people, attended = followup_people(c, cid)
+    if not people:
+        return False, "no valid recipients"
+    instr = c.execute("SELECT name,email FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
+    iname = (instr["name"] if instr else "") or ""
+    note = (cls.get("followup_note") or "") if note is None else note
+    if email_type == "followup" and cls.get("followup_status") not in ("ready", "sent", "sent_late"):
+        note = ""            # only a note the instructor actually submitted rides along
+    try:
+        c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(?,?,?,?)",
+                  (cid, email_type, now(), len(people)))
+    except sqlite3.IntegrityError:
+        return False, "already sent (another job claimed it first)"
+    cfg = cfg or mailer.load_email_config()
+    ok = 0
+    for p in people:
+        first = (p.get("name") or "").split(" ")[0] or "there"
+        if email_type == "followup_late":
+            subj = f"A note from {iname.split(' ')[0] or 'your instructor'} about {title}"
+            body = (f"Hi {first},\n\n{note.strip()}\n\n{iname.split(' ')[0] or 'Your instructor'}\n\n"
+                    f"----\nSent through The Gibby Class Manager. Reply to reach your instructor directly.")
+        else:
+            subj, body = after_class_email(cls, first, attended, note, iname)
+        kw = {"reply_to": instr["email"], "from_name": f"{iname} via The Gibby"} if (note.strip() and instr and instr["email"]) else {}
+        if mailer.send(p["email"], subj, body, cfg, **kw): ok += 1
+    c.execute("UPDATE email_log SET delivered=? WHERE class_id=? AND email_type=?",
+              (1 if ok else 0, cid, email_type))
+    new_status = ("sent_late" if email_type == "followup_late" else ("sent" if note.strip() else "sent_generic"))
+    c.execute("UPDATE classes SET followup_status=?, followed_up=1 WHERE id=?", (new_status, cid))
+    return True, f"{rule['label']} sent to {ok} of {len(people)}" + (" (with the instructor's note)" if note.strip() else "")
 
 def run_scheduler(asof=None):
     """One daily tick. Fires the brief's lifecycle automations. Every send goes
@@ -1529,35 +1624,63 @@ def run_scheduler(asof=None):
                         + (f"\n     emergency contact: {rr['emer_contact']}" if rr["emer_contact"] else "")
                         + ("\n     ** NO PHOTOS of this participant **" if rr["photo_ok"] == 0 else "")
                         for i, rr in enumerate(regs)) or "  (nobody registered)"
+                    # Teaching artists coming through the Learn tab: free seats, listed
+                    # separately so the instructor can plan materials for them too.
+                    auds = c.execute("""SELECT u.name, u.email FROM audit_rsvps a JOIN users u ON u.id=a.user_id
+                                        WHERE a.class_id=? AND u.deleted_at IS NULL ORDER BY u.name""",(cls["id"],)).fetchall()
+                    aud_block = ("\n\nTeaching artists taking your class through Learn ({}), free seats not counted above:\n{}".format(
+                        len(auds), "\n".join(f"  - {a['name']}  |  {a['email']}" for a in auds))) if auds else ""
                     span = cls.get("class_time") or cls.get("slot_time") or ""
                     sent, why = send_class_email(c, cls, "roster", [instr_row["email"]],
                         f"Tomorrow's roster for {cls['title']}: {enrolled} registered",
                         f"Hi {first},\n\n\"{cls['title']}\" runs tomorrow, {cls.get('slot_date','')}"
                         f"{' ' + span if span else ''} in the {cls.get('room','') or 'studio'}.\n\n"
-                        f"Your roster ({enrolled}):\n{lines}\n\n"
+                        f"Your roster ({enrolled}):\n{lines}{aud_block}\n\n"
                         f"This list is just for you; students are not copied on it.\n\n"
                         f"Have a great class,\nThe Gibby", today, cfg)
                     if sent: actions.append(f"day-before roster to {instr_row['name']}: {cls['title']}")
         if end_days == -1:      # the day after the LAST session, not the first
-            # The follow-up is written by the instructor, approved by an admin and
-            # only then sent. The scheduler just opens the task and nudges them.
+            # Ask the instructor for their note. It goes to students tomorrow
+            # morning in their name (no admin approval), or The Gibby's own
+            # thank-you goes alone if they skip it.
             if not cls.get("followup_status"):
                 c.execute("""UPDATE classes SET followup_status='awaiting_instructor',
                              followup_requested_at=? WHERE id=?""", (now(), cls["id"]))
+                cls["followup_status"] = "awaiting_instructor"
             instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
             if instr_row:
                 first = (instr_row["name"] or "").split(" ")[0] or "there"
                 sent, why = send_class_email(c, {**cls, "followup_status": "awaiting_instructor"},
                     "followup_request", [instr_row["email"]],
                     f"Write your note to students: {cls['title']}",
-                    f"Hi {first},\n\n\"{cls['title']}\" has finished. When you have a moment, please "
-                    f"write a short note to your students.\n\nOpen the app, go to My classes, and you "
-                    f"will find it waiting under Follow-up notes. An admin reviews it before it goes "
-                    f"out.\n\nWhile you are there, there are three quick questions about how the class "
-                    f"went. Those are just for us, they are never sent to students, and they help us "
-                    f"plan next season.\n\nThank you,\nThe Gibby", today, cfg)
+                    f"Hi {first},\n\n\"{cls['title']}\" has finished. Please write a short note to your "
+                    f"students today.\n\nOpen the app, go to My classes, and it is waiting under "
+                    f"Follow-up notes: {mailer.APP_URL}\n\nTomorrow morning it goes to everyone who came, "
+                    f"in your name, with The Gibby's thank-you underneath (review links and a discount on "
+                    f"their next class). Replies come straight to you. If you skip it, The Gibby's "
+                    f"thank-you goes out on its own.\n\nWhile you are there, there are three quick "
+                    f"questions about how the class went. Those are just for us and help us plan next "
+                    f"season.\n\nThank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} to write the follow-up: {cls['title']}"
                                if sent else f"follow-up request suppressed for {cls['title']}: {why}")
+                # One nudge that evening if the note is still unwritten.
+                evening = (asof is None and datetime.datetime.now().hour >= 17)
+                if evening and cls.get("followup_status") == "awaiting_instructor" and not cls.get("followup_reminded_at"):
+                    sent, why = send_class_email(c, cls, "followup_reminder", [instr_row["email"]],
+                        f"Reminder: your note to students for {cls['title']}",
+                        f"Hi {first},\n\nJust a reminder that your note to the students of \"{cls['title']}\" "
+                        f"goes out tomorrow morning if you write it today: {mailer.APP_URL}\n\n"
+                        f"No pressure if you would rather not; The Gibby's thank-you will go on its own.\n\n"
+                        f"Thanks,\nThe Gibby", today, cfg)
+                    if sent:
+                        c.execute("UPDATE classes SET followup_reminded_at=? WHERE id=?", (now(), cls["id"]))
+                        actions.append(f"follow-up reminder to {instr_row['name']}: {cls['title']}")
+        if -4 <= end_days <= -2 and not email_sent_at(c, cls["id"], "followup"):
+            # Two mornings after the last session: the students' thank-you, with
+            # the instructor's note on top when they wrote one.
+            sent, why = send_after_class(c, cls, "followup", today, cfg)
+            actions.append(f"after-class email for {cls['title']}: {why}" if sent
+                           else f"after-class email suppressed for {cls['title']}: {why}")
     # Facebook's posting key has a hard expiry date; warn the admins at 14 days
     # and again at 2, instead of letting posts start failing silently. Uses
     # email_log's (class_id,type) uniqueness with class_id=0 for once-only.
@@ -2339,20 +2462,32 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             c = db()
             q = lambda w: c.execute(f"SELECT COUNT(*) FROM classes WHERE deleted_at IS NULL AND {w}").fetchone()[0]
-            needs = q("status='pending'") + q("status='graphic_review'") + q("followup_status='pending_admin'")
+            needs = q("status='pending'") + q("status='graphic_review'")
             failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
             c.close()
             return self.send_json({"needs_you": needs, "failed": failed})
         if p == "/api/classes/followup-review":
+            # Admin visibility: every class that finished in the last 45 days,
+            # who wrote their note, and what the students were sent.
             u = self.require("admin")
             if not u: return
-            out = self._classes("WHERE c.followup_status='pending_admin' ")
+            today = datetime.date.today()
+            out = []
             c = db()
-            for cl in out:      # tell the admin exactly who this will reach, and why
-                who, known = followup_audience(c, cl["id"])
+            for cl in self._classes("WHERE c.status='approved' "):
+                end = _class_end_date(cl) or _class_date(cl)
+                if not end or end >= today or (today - end).days > 45:
+                    continue
+                who, known = followup_people(c, cl["id"])
                 cl["followup_recipients"] = len(who)
                 cl["attendance_known"] = known
+                cl["thanks_sent_at"] = email_sent_at(c, cl["id"], "followup")
+                cl["late_sent_at"] = email_sent_at(c, cl["id"], "followup_late")
+                cl["note_written"] = bool((cl.get("followup_note") or "").strip()) and cl.get("followup_status") in ("ready","sent","sent_late")
+                cl["end_date"] = end.isoformat()
+                out.append(cl)
             c.close()
+            out.sort(key=lambda x: x["end_date"], reverse=True)
             return self.send_json({"classes": out})
         if p == "/api/classes/graphic-review":
             u = self.require("admin")
@@ -2480,7 +2615,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     or "https://docs.google.com/spreadsheets/d/1ahKCK6Sb0S2PHWSOoZPJqPxO1XoN2e6QoD3DvWAmhr4",
             }
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
-                                   "drive": drive,
+                                   "drive": drive, "thanks": thanks_settings(),
                                    "backup": backup_status(),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
@@ -2496,8 +2631,13 @@ class H(http.server.BaseHTTPRequestHandler):
             if u["role"]=="instructor" and row["instructor_id"]!=u["id"]:
                 c.close(); return self.send_json({"error":"forbidden"},403)
             regs=[dict(r) for r in c.execute("SELECT id,name,email,phone,refunded,checked_in FROM registrations WHERE class_id=? ORDER BY id",(cid,)).fetchall()]
+            # Resident teaching artists who pressed "I'm coming" on the Learn tab.
+            # They take the class free, so they are listed but never counted as sales.
+            auditors=[dict(r) for r in c.execute("""SELECT u.id AS user_id, u.name, u.email
+                FROM audit_rsvps a JOIN users u ON u.id=a.user_id
+                WHERE a.class_id=? AND u.deleted_at IS NULL ORDER BY u.name""",(cid,)).fetchall()]
             c.close()
-            return self.send_json({"registrations":regs})
+            return self.send_json({"registrations":regs, "auditors":auditors})
         self.send_json({"error":"not found"},404)
 
     def _publish_failures(self):
@@ -2986,6 +3126,13 @@ class H(http.server.BaseHTTPRequestHandler):
                 "bridge": mailer.bridge_available(), "route": (mailer.LAST_ROUTE if delivered else ""),
                 "bridge_dedicated": mailer.bridge_config()["dedicated"],
                 "error": ("" if delivered else mailer.LAST_ERROR)})
+        if p == "/api/admin/thanks-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            for k in THANKS_DEFAULTS:
+                if k in b: _meta_set("thanks_" + k, (str(b.get(k) or "")).strip())
+            return self.send_json({"ok": True, "thanks": thanks_settings()})
         if p == "/api/admin/mail-bridge":
             # Save the Gibby Mail Bridge (Apps Script on the gibby@ mailbox) the app sends through.
             u = self.require("admin")
@@ -3871,8 +4018,9 @@ class H(http.server.BaseHTTPRequestHandler):
                   f"materials={answers['materials']} again={answers['teach_again']}")
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/followup-note"):
-            # Instructor writes (or re-writes) the note. save=true keeps a draft;
-            # otherwise it goes to an admin for approval.
+            # Instructor writes (or re-writes) their note. save=true keeps a draft.
+            # Submitting marks it ready for tomorrow morning's send; if The Gibby's
+            # thank-you already went out without it, the note goes now on its own.
             u = self.require("instructor")
             if not u: return
             cid = int(p.split("/")[3]); b = self.read_json(); c = db()
@@ -3881,18 +4029,25 @@ class H(http.server.BaseHTTPRequestHandler):
             if u["role"] != "admin" and row["instructor_id"] != u["id"]:
                 c.close(); return self.send_json({"error":"That is not your class."},403)
             note = (b.get("note") or "").strip()
-            if not b.get("save") and len(note) < 20:
-                c.close(); return self.send_json({"error":"Please write a little more before sending it for approval."},400)
-            status = "awaiting_instructor" if b.get("save") else "pending_admin"
-            c.execute("""UPDATE classes SET followup_note=?, followup_status=?, followup_submitted_at=?
-                         WHERE id=?""", (note, status, None if b.get("save") else now(), cid))
-            admins = emails_for(c, "WHERE role='admin'") if not b.get("save") else []
+            cur = row["followup_status"] or ""
+            if b.get("save"):
+                c.execute("UPDATE classes SET followup_note=? WHERE id=?", (note, cid))
+                c.commit(); c.close()
+                return self.send_json({"ok":True, "status":cur})
+            if len(note) < 20:
+                c.close(); return self.send_json({"error":"Please write a little more before sending it."},400)
+            if cur in ("sent_generic",):
+                cls = dict(row); cls["followup_note"] = note
+                c.execute("UPDATE classes SET followup_note=?, followup_submitted_at=? WHERE id=?", (note, now(), cid))
+                sent, why = send_after_class(c, cls, "followup_late", None, None, note)
+                c.commit(); c.close()
+                return self.send_json({"ok":sent, "status":("sent_late" if sent else cur), "reason":why, "late":True})
+            if cur in ("sent", "sent_late"):
+                c.close(); return self.send_json({"error":"This note already went to your students."},409)
+            c.execute("""UPDATE classes SET followup_note=?, followup_status='ready', followup_submitted_at=?
+                         WHERE id=?""", (note, now(), cid))
             c.commit(); c.close()
-            if admins:
-                mailer.send(admins, f"Follow-up note to review: {row['title']}",
-                    f"{u['name']} has written the after-class note for \"{row['title']}\".\n\n"
-                    f"Review and send it from Approvals.")
-            return self.send_json({"ok":True, "status":status})
+            return self.send_json({"ok":True, "status":"ready"})
         if p.startswith("/api/classes/") and p.endswith("/followup-return"):
             u = self.require("admin")
             if not u: return
@@ -3909,25 +4064,18 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"{('Their note: ' + b.get('note')) if b.get('note') else ''}\n\nThanks,\nThe Gibby")
             return self.send_json({"ok":True})
         if p.startswith("/api/classes/") and p.endswith("/followup-send"):
-            # Admin approves. THIS is the only place students are mailed.
+            # Admin sends the after-class email now instead of waiting for the
+            # scheduled morning. Same gate, so it can only ever go once.
             u = self.require("admin")
             if not u: return
-            cid = int(p.split("/")[3]); b = self.read_json(); c = db()
+            cid = int(p.split("/")[3]); c = db()
             row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             cls = dict(row)
-            note = (b.get("note") or cls.get("followup_note") or "").strip()
-            recipients, attended = followup_audience(c, cid)
-            instr = c.execute("SELECT name FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
-            cfg = mailer.load_email_config()
-            subj, body = mailer.tmpl_followup(cls, cfg, attended=attended, note=note,
-                                              instructor_name=(instr["name"] if instr else ""))
-            sent, why = send_class_email(c, cls, "followup", recipients, subj, body, None, cfg)
-            if sent:
-                c.execute("""UPDATE classes SET followup_note=?, followup_status='sent', followed_up=1
-                             WHERE id=?""", (note, cid))
+            people, attended = followup_people(c, cid)
+            sent, why = send_after_class(c, cls, "followup", None, None)
             c.commit(); c.close()
-            return self.send_json({"ok":sent, "reason":why, "sent_to":len(recipients) if sent else 0,
+            return self.send_json({"ok":sent, "reason":why, "sent_to":len(people) if sent else 0,
                                    "attendance_known":attended})
         mck = re.match(r"^/api/class/(\d+)/registrations/(\d+)/checkin$", p)
         if mck:

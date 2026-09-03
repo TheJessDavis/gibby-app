@@ -63,19 +63,26 @@ def bridge_available():
     b = bridge_config()
     return bool(b["enabled"] and b["url"])
 
-def send_via_bridge(recips, subject, body, cfg, attachments):
+def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from_name=None):
     """Returns True when the bridge accepted the message; raises with the
     bridge's own reason otherwise (old script version, alias missing, quota)."""
     b = bridge_config()
-    payload = {"key": b["key"], "action": "email", "to": recips, "subject": subject,
-               "body": body, "from": cfg["mail_from"], "name": "The Gibby",
-               "attachments": [{"filename": fn, "mime": mime or "application/octet-stream",
-                                "b64": base64.b64encode(data).decode()}
-                               for fn, data, mime in (attachments or [])]}
-    req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        raw = r.read().decode("utf-8", "replace")
+    atts = [{"filename": fn, "mime": mime or "application/octet-stream",
+             "b64": base64.b64encode(data).decode()} for fn, data, mime in (attachments or [])]
+    # One message per recipient: students must never see each other's addresses.
+    for one in recips:
+        payload = {"key": b["key"], "action": "email", "to": [one], "subject": subject,
+                   "body": body, "from": cfg["mail_from"], "name": from_name or "The Gibby",
+                   "attachments": atts}
+        if reply_to: payload["replyTo"] = reply_to
+        req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = r.read().decode("utf-8", "replace")
+        _check_bridge_reply(raw)
+    return True
+
+def _check_bridge_reply(raw):
     try:
         res = json.loads(raw)
     except ValueError:
@@ -87,14 +94,14 @@ def send_via_bridge(recips, subject, body, cfg, attachments):
         raise RuntimeError("the bridge answered with an error page: "
                            + (" ".join(mm.group(0).split()) if mm else text.strip()[:200]))
     if res.get("ok"):
-        return True
+        return
     err = str(res.get("error") or res)
     if err == "unknown action":
         err = ("the Gibby Calendar Bridge script is an older version without the email action; "
                "paste the current scripts/gcal-webhook.gs and deploy a new version")
     raise RuntimeError(err)
 
-def send(to, subject, body, cfg=None, attachments=None):
+def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
@@ -112,7 +119,7 @@ def send(to, subject, body, cfg=None, attachments=None):
     errors = []
     if bridge_available():
         try:
-            if send_via_bridge(recips, subject, body, cfg, attachments):
+            if send_via_bridge(recips, subject, body, cfg, attachments, reply_to, from_name):
                 LAST_ERROR = ""; LAST_ROUTE = "bridge"
                 print(f"[email] SENT via bridge to={recips} subject={subject!r}")
                 return True
@@ -122,7 +129,14 @@ def send(to, subject, body, cfg=None, attachments=None):
     if cfg["smtp_host"]:
         try:
             msg = EmailMessage()
-            msg["From"] = cfg["mail_from"]; msg["To"] = ", ".join(recips); msg["Subject"] = subject
+            from email.utils import formataddr
+            msg["From"] = formataddr((from_name, cfg["mail_from"])) if from_name else cfg["mail_from"]
+            if len(recips) == 1:
+                msg["To"] = recips[0]
+            else:   # never expose one student's address to another
+                msg["To"] = cfg["mail_from"]; msg["Bcc"] = ", ".join(recips)
+            if reply_to: msg["Reply-To"] = reply_to
+            msg["Subject"] = subject
             msg.set_content(body)
             for fn, data, mime in (attachments or []):
                 mt, _, st = (mime or "application/octet-stream").partition("/")
