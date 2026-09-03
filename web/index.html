@@ -1459,7 +1459,9 @@ async function adminConnections(){
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets. Sent through the Google bridge as gibby@everetttheatre.com, with Gmail SMTP as the fallback.</div></div></div>
-      <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
+      <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
+      <div class="hint">Sends one email to every account listing the classes currently open on the Learn tab.</div></div>
     <div class="card"><div class="row"><div><h3>Backups</h3><div class="meta">${d.backup&&d.backup.ok
         ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
           +(d.backup.verified?' · verified: '+d.backup.verified.classes+' classes, '+d.backup.verified.registrations+' registrations, '+d.backup.verified.users+' accounts':'')
@@ -1522,6 +1524,11 @@ async function refileContracts(){
   if(!confirm('Re-file every signed contract to Google Drive as a PDF?')) return;
   const r=await api('/api/admin/refile-contracts','POST',{});
   alert('Re-filing '+r.refiling+' contract'+(r.refiling===1?'':'s')+' as PDFs. They appear in the Gibby Contracts folder within a minute or two.\n\nThe old .html copies stay put; delete them from Drive whenever you like.');
+}
+async function announceLearn(){
+  if(!confirm('Email every account (instructors and admins) that new classes are open on the Learn tab?')) return;
+  const r=await api('/api/admin/announce-learn','POST',{});
+  alert(r.error ? r.error : 'Sending to '+r.recipients+' people about '+r.classes+' class'+(r.classes===1?'':'es')+'. The emails go out over the next minute.');
 }
 async function testEmail(){
   const r=await api('/api/test-email','POST',{});

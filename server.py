@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.40.0-bridge-email"
+VERSION = "10.41.0-announce-learn"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2919,6 +2919,39 @@ class H(http.server.BaseHTTPRequestHandler):
                 "smtp_user": cfg.get("smtp_user"),
                 "bridge": mailer.bridge_available(), "route": (mailer.LAST_ROUTE if delivered else ""),
                 "error": ("" if delivered else mailer.LAST_ERROR)})
+        if p == "/api/admin/announce-learn":
+            # One email to every active account: the classes currently open on
+            # the Learn tab. Sends run in the background so the request returns.
+            u = self.require("admin")
+            if not u: return
+            today = datetime.date.today()
+            rows = []
+            for cl in self._classes("WHERE c.status='approved' AND c.audit_ok=1 "):
+                end = _class_end_date(cl) or _class_date(cl)
+                if end and end < today: continue
+                rows.append(cl)
+            rows.sort(key=lambda x: (_class_date(x) or datetime.date.max))
+            if not rows:
+                return self.send_json({"error":"No upcoming classes are open on the Learn tab right now."},409)
+            c = db()
+            people = c.execute("SELECT name,email FROM users WHERE deleted_at IS NULL AND email LIKE '%@%'").fetchall()
+            c.close()
+            listing = "\n".join(
+                f"  - {cl['title']} with {cl.get('instructor_name') or 'a resident teaching artist'}\n"
+                f"    {cl.get('slot_date','')} {cl.get('class_time') or cl.get('slot_time','')}, {cl.get('room','')}".rstrip(", ")
+                for cl in rows)
+            def go():
+                n = 0
+                for name, email in people:
+                    first = (name or "").split()[0] if (name or "").strip() else "there"
+                    body = (f"Hi {first},\n\nNew classes are open on the Learn tab of the Gibby Class Manager. "
+                            f"Resident teaching artists can take them free, as full participants:\n\n{listing}\n\n"
+                            f"Open the app, tap Learn, and press \"I'm coming\" on any class you want to join. "
+                            f"That emails the instructor so they can plan for you.\n\nThanks,\nThe Gibby")
+                    if mailer.send(email, "New classes you can take free on the Learn tab", body): n += 1
+                print(f"[learn] announcement delivered to {n} of {len(people)}")
+            threading.Thread(target=go, daemon=True).start()
+            return self.send_json({"ok":True,"started":True,"recipients":len(people),"classes":len(rows)})
         if p == "/api/test-eventbrite":
             u = self.require("admin")
             if not u: return
