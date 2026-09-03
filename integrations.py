@@ -607,6 +607,40 @@ def update_eventbrite_times(cls, cfg):
 
 MAX_ATTENDEE_PAGES = 200          # ~10k attendees at 50/page; a stop against a bad loop
 
+def list_org_events(cfg, _req_fn=None):
+    """Every live or started event on the organization, oldest first, with the
+    fields the app needs to adopt one as a class. Follows pagination."""
+    req = _req_fn or _req
+    token, org = cfg["eventbrite_token"], cfg.get("eventbrite_org_id")
+    if not (token and org): return []
+    base = (f"https://www.eventbriteapi.com/v3/organizations/{org}/events/"
+            f"?status=live,started&order_by=start_asc&expand=ticket_classes,logo&page_size=50")
+    out, continuation, pages = [], None, 0
+    while True:
+        url = base + (f"&continuation={urllib.parse.quote(continuation)}" if continuation else "")
+        res = req(url, method="GET", token=token) or {}
+        for e in res.get("events") or []:
+            tcs = e.get("ticket_classes") or []
+            costs = [t["cost"]["major_value"] for t in tcs if t.get("cost") and t["cost"].get("major_value")]
+            try: price = min(float(x) for x in costs) if costs else 0.0
+            except Exception: price = 0.0
+            out.append({
+                "id": e.get("id"), "name": (e.get("name") or {}).get("text") or "",
+                "start": (e.get("start") or {}).get("local") or "", "end": (e.get("end") or {}).get("local") or "",
+                "url": e.get("url"), "capacity": e.get("capacity"),
+                "sold": sum((t.get("quantity_sold") or 0) for t in tcs),
+                "price": price, "logo": ((e.get("logo") or {}).get("url")),
+                "summary": e.get("summary") or "",
+                "description": ((e.get("description") or {}).get("text") or ""),
+                "status": e.get("status"),
+            })
+        pages += 1
+        pg = res.get("pagination") or {}
+        if not pg.get("has_more_items") or not pg.get("continuation") or pages >= 20:
+            break
+        continuation = pg["continuation"]
+    return out
+
 def fetch_attendees(event_id, cfg, _req_fn=None):
     """Pull EVERY attendee for an Eventbrite event, following pagination.
 

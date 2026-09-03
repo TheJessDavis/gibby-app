@@ -970,7 +970,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1441,6 +1441,32 @@ async function reinvite(email,name,role){
 }
 
 /* ---------------- connections ---------------- */
+async function adminEbImport(){
+  $('#tab').innerHTML='<h2>Classes on <em>Eventbrite</em></h2><p class="sub">Asking Eventbrite…</p>';
+  const d=await api('/api/eventbrite/upcoming');
+  if(d.error){ $('#tab').innerHTML='<h2>Classes on <em>Eventbrite</em></h2><p class="sub">'+esc(d.error)+'</p>'; return; }
+  const opts=(sel)=>'<option value="">Pick an instructor…</option>'+d.people.map(p=>`<option value="${p.id}" ${p.id===sel?'selected':''}>${esc(p.name)}</option>`).join('');
+  $('#tab').innerHTML=`<h2>Classes on <em>Eventbrite</em></h2>
+    <p class="sub">${d.events.length} live event${d.events.length===1?'':'s'} not in the app yet (${d.linked} already linked). Pick the instructor for each one you want to bring in. Nothing is re-posted; the app just starts tracking them.</p>
+    ${d.events.map(e=>`<div class="card" id="eb${e.id}"><div class="row"><div><h3 style="font-size:1rem">${esc(e.name)}</h3>
+        <div class="meta">${esc(e.start.slice(0,10))} ${esc(e.start.slice(11,16))}–${esc(e.end.slice(11,16))} · ${e.price?'$'+e.price:'free'} · ${e.sold} of ${e.capacity||'?'} sold</div></div>
+        <label style="margin:0;display:flex;align-items:center;gap:6px"><input type="checkbox" class="ebpick" data-id="${e.id}" ${e.suggested_instructor_id?'checked':''}> bring in</label></div>
+      <select id="ebi${e.id}" style="margin-top:8px">${opts(e.suggested_instructor_id)}</select>
+    </div>`).join('') || '<div class="muted">Everything live on Eventbrite is already in the app.</div>'}
+    ${d.events.length?`<button class="btn dark" style="margin-top:12px" onclick="doEbImport()">Bring in the checked classes</button>`:''}
+    <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Back to Connections</button>`;
+}
+async function doEbImport(){
+  const items=[...document.querySelectorAll('.ebpick:checked')].map(cb=>({event_id:cb.dataset.id, instructor_id:parseInt($('#ebi'+cb.dataset.id).value||'0',10)||null}));
+  if(!items.length){ alert('Tick at least one class.'); return; }
+  const missing=items.filter(i=>!i.instructor_id).length;
+  if(missing){ alert(missing+' checked class'+(missing===1?' has':'es have')+' no instructor picked.'); return; }
+  const b=event&&event.target; if(b){ b.disabled=true; b.textContent='Bringing in…'; }
+  const r=await api('/api/eventbrite/import','POST',{items});
+  if(r.error){ alert(r.error); adminEbImport(); return; }
+  alert((r.imported||[]).length+' brought in.'+((r.skipped||[]).length?'\n\nSkipped:\n'+r.skipped.join('\n'):''));
+  adminEbImport();
+}
 async function adminConnections(){
   const d=await api('/api/integrations'); const integrations=d.integrations;
   const pill=s=>s==='connected'?'<span class="pill appr">connected</span>':s==='attention'?'<span class="pill inc">needs attention</span>':'<span class="pill pend">not connected</span>';
@@ -1453,7 +1479,9 @@ async function adminConnections(){
       <button class="btn ${it.status==='connected'?'warn':'dark'}" style="margin-top:12px"
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
         ${it.status==='connected'?'Disconnect':'Connect'}</button>`}
-      ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>`:''}
+      ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('ebimport')">Bring in classes already on Eventbrite</button>
+        <div class="hint">Classes posted straight on Eventbrite show up here so you can attach them to their instructor. They are not re-posted anywhere.</div>`:''}
       ${it.id==='facebook'?`<button class="btn ghost" style="margin-top:8px" onclick="testFacebook()">Verify Page token</button>
         <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
@@ -2100,7 +2128,7 @@ function cardCls(c){
       ${c.photo?`<img class="clspic" src="${c.photo}" alt="" onerror="this.style.visibility='hidden'">`:`<span class="clspic clspic-i">\u{1F3A8}</span>`}
       <span class="clswhen">${esc(when)}</span>
     </div>
-    <div class="clslab">${pt}</div>
+    <div class="clslab">${pt}${c.imported?' · posted on Eventbrite directly':''}</div>
     <h3 class="clsname">${esc(c.title)}</h3>
     <div class="meta">${esc(c.instructor_name)} · ${c.is_series&&c.sessions&&c.sessions.length
       ? `${c.sessions.length} sessions, ${esc(c.sessions[0].date)} – ${esc(c.sessions[c.sessions.length-1].date)}`

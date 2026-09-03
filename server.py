@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.45.0-after-class-flow"
+VERSION = "10.46.0-eventbrite-import"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -192,7 +192,7 @@ def init_db():
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
-                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),("followup_reminded_at","TEXT"),
+                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),("followup_reminded_at","TEXT"),("imported","INTEGER DEFAULT 0"),
                      ("donation_based","INTEGER DEFAULT 0"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
@@ -1425,6 +1425,58 @@ def send_class_email(c, cls, email_type, recipients, subject, body, asof=None, c
               (1 if delivered else 0, cid, email_type))
     return True, f"{rule['label']} sent to {len(recips)}"
 
+def _fmt_clock(iso_local):
+    """'2026-10-03T10:00:00' -> '10:00 AM' (the app's clock format)."""
+    try:
+        t = datetime.datetime.fromisoformat(iso_local)
+        return t.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return ""
+
+def _length_phrase(start_iso, end_iso):
+    try:
+        mins = int((datetime.datetime.fromisoformat(end_iso) - datetime.datetime.fromisoformat(start_iso)).total_seconds() // 60)
+    except Exception:
+        return ""
+    if mins <= 0: return ""
+    h, m = divmod(mins, 60)
+    if h and m: return f"{h} hour{'s' if h != 1 else ''} {m} minutes"
+    if h: return f"{h} hour{'s' if h != 1 else ''}"
+    return f"{m} minutes"
+
+def linked_eventbrite_ids(c):
+    ids = set()
+    for r in c.execute("SELECT external_ids FROM classes WHERE deleted_at IS NULL").fetchall():
+        try:
+            e = json.loads(r["external_ids"] or "{}").get("eventbrite_id")
+            if e: ids.add(str(e))
+        except Exception:
+            pass
+    return ids
+
+def import_eventbrite_event(c, ev, instructor_id, admin_id):
+    """Adopt an Eventbrite event that was created by hand as an approved class in
+    the app. Nothing is posted anywhere: the event already exists on Eventbrite,
+    so the class carries its id and skips the poster, contract and publishing
+    steps. Rosters, follow-ups, Learn and photos all work as for any other class."""
+    start, end = ev.get("start") or "", ev.get("end") or ""
+    try: d = datetime.datetime.fromisoformat(start).date()
+    except Exception: d = None
+    slot_date = day_label(d) if d else ""
+    span = f"{_fmt_clock(start)} – {_fmt_clock(end)}" if start and end else _fmt_clock(start)
+    ext = {"eventbrite_id": str(ev["id"]), "eventbrite_url": ev.get("url"), "imported": True}
+    desc = (ev.get("description") or "").strip() or (ev.get("summary") or "").strip()
+    c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,class_time,length,room,description,summary,
+                 max_p,min_p,ticket_price,photo,poster,slot_ids,is_series,session_count,session_dates,
+                 status,external_ids,imported,created)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'approved',?,1,?)""",
+              (ev.get("name") or "Untitled class", instructor_id, slot_date, span, span,
+               _length_phrase(start, end), "Studio", desc, (ev.get("summary") or "")[:140],
+               ev.get("capacity") or 0, 0, ev.get("price") or 0, None, ev.get("logo"), "[]", 0, 1, "[]",
+               json.dumps(ext), now()))
+    cid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return cid
+
 THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
                    "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933"}
 
@@ -2127,7 +2179,7 @@ class H(http.server.BaseHTTPRequestHandler):
         cards natively (no iframe, so a network blip can never paint an error
         page into the site). Only already-public information appears here."""
         c = db()
-        rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved'
+        rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved' AND COALESCE(imported,0)=0
                     AND deleted_at IS NULL""").fetchall()]
         c.close()
         today = datetime.date.today()
@@ -2466,6 +2518,30 @@ class H(http.server.BaseHTTPRequestHandler):
             failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
             c.close()
             return self.send_json({"needs_you": needs, "failed": failed})
+        if p == "/api/eventbrite/upcoming":
+            # Admin: every live Eventbrite event not yet in the app, with a
+            # suggested instructor when a user's name appears in the listing.
+            u = self.require("admin")
+            if not u: return
+            cfg = integrations.load_config()
+            try:
+                events = integrations.list_org_events(cfg)
+            except Exception as e:
+                return self.send_json({"error": f"Eventbrite did not answer: {e}"}, 502)
+            c = db()
+            linked = linked_eventbrite_ids(c)
+            people = [dict(r) for r in c.execute("SELECT id,name,email FROM users WHERE deleted_at IS NULL ORDER BY name")]
+            c.close()
+            out = []
+            for ev in events:
+                if str(ev["id"]) in linked: continue
+                hay = f"{ev.get('name','')} {ev.get('summary','')} {ev.get('description','')}".lower()
+                sug = next((pp["id"] for pp in people if pp["name"] and pp["name"].lower() in hay), None)
+                if not sug:
+                    sug = next((pp["id"] for pp in people if pp["name"] and pp["name"].split(" ")[0].lower() in hay.split()), None)
+                ev["suggested_instructor_id"] = sug
+                out.append(ev)
+            return self.send_json({"events": out, "people": people, "linked": len(linked)})
         if p == "/api/classes/followup-review":
             # Admin visibility: every class that finished in the last 45 days,
             # who wrote their note, and what the students were sent.
@@ -3126,6 +3202,35 @@ class H(http.server.BaseHTTPRequestHandler):
                 "bridge": mailer.bridge_available(), "route": (mailer.LAST_ROUTE if delivered else ""),
                 "bridge_dedicated": mailer.bridge_config()["dedicated"],
                 "error": ("" if delivered else mailer.LAST_ERROR)})
+        if p == "/api/eventbrite/import":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            items = b.get("items") or []
+            if not items: return self.send_json({"error": "Nothing selected."}, 400)
+            cfg = integrations.load_config()
+            try:
+                events = {str(e["id"]): e for e in integrations.list_org_events(cfg)}
+            except Exception as e:
+                return self.send_json({"error": f"Eventbrite did not answer: {e}"}, 502)
+            c = db()
+            linked = linked_eventbrite_ids(c)
+            done, skipped = [], []
+            for it in items:
+                eid = str(it.get("event_id") or "")
+                iid = it.get("instructor_id")
+                ev = events.get(eid)
+                if not ev: skipped.append(f"{eid}: not a live event"); continue
+                if eid in linked: skipped.append(f"{ev['name']}: already in the app"); continue
+                if not iid or not c.execute("SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL", (iid,)).fetchone():
+                    skipped.append(f"{ev['name']}: pick an instructor"); continue
+                cid = import_eventbrite_event(c, ev, int(iid), u["id"])
+                linked.add(eid); done.append({"id": cid, "title": ev["name"]})
+            c.commit(); c.close()
+            for d in done:      # pull the real roster straight away
+                try: sync_registrations(d["id"])
+                except Exception as e: print("[import] roster sync failed:", e)
+            return self.send_json({"ok": True, "imported": done, "skipped": skipped})
         if p == "/api/admin/thanks-settings":
             u = self.require("admin")
             if not u: return
