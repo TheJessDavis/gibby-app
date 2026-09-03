@@ -1465,6 +1465,8 @@ async function adminConnections(){
       <button class="btn ghost" style="margin-top:8px" onclick="saveMailBridge()">Save mail bridge</button>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
       <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="resendContracts()">Re-send unsigned contract emails</button>
+      <div class="hint">Every instructor with a contract waiting gets the "ready to sign" email again. Unsigned contracts also get one reminder 3 days after they are sent.</div>
       <div class="hint">Sends one email to every account listing the classes currently open on the Learn tab.</div></div>
     <div class="card"><div class="row"><div><h3>Backups</h3><div class="meta">${d.backup&&d.backup.ok
         ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
@@ -1535,6 +1537,11 @@ async function saveMailBridge(){
   const r=await api('/api/admin/mail-bridge','POST',{url,key});
   if(r.error){ alert(r.error); return; }
   alert(r.dedicated ? 'Saved. Send a test email to confirm it goes out as gibby@everetttheatre.com.' : 'Mail bridge cleared. Email will fall back to the calendar bridge and SMTP.');
+}
+async function resendContracts(){
+  if(!confirm('Email every instructor whose contract is still unsigned?')) return;
+  const r=await api('/api/admin/resend-contract-emails','POST',{});
+  alert((r.sent||[]).length+' sent'+((r.failed||[]).length?'\n\nCould not send:\n'+r.failed.join('\n')+'\n\n'+(r.error||''):'')+((r.sent||[]).length?'\n\n'+r.sent.join('\n'):''));
 }
 async function announceLearn(){
   if(!confirm('Email every account (instructors and admins) that new classes are open on the Learn tab?')) return;

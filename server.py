@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.42.0-mail-bridge"
+VERSION = "10.43.0-contract-reminders"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -192,7 +192,7 @@ def init_db():
                      ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
-                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),
+                     ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),
                      ("donation_based","INTEGER DEFAULT 0"),
                      ("links","TEXT"),("reviewing_admin_id","INTEGER"),("review_started_at","TEXT"),
                      ("is_series","INTEGER DEFAULT 0"),("session_count","INTEGER DEFAULT 1"),
@@ -1110,6 +1110,70 @@ def sweep_master_sheet():
     except Exception as ex:
         print("[sheet] update failed (will retry hourly):", ex)
 
+def contract_ready_email(instr, cls, base_url=None, reminder=False):
+    """The 'your contract is ready to sign' email (and its 3-day reminder)."""
+    first = (instr.get("name") or "").split(" ")[0] or "there"
+    url = base_url or mailer.APP_URL
+    steps = (f"  1. Log in: {url}\n"
+             f"  2. Open My classes\n"
+             f"  3. Tap Read and sign\n\n"
+             f"Your username is this email address ({instr['email']}). If you have never signed in "
+             f"before, use the set-your-password link from your welcome email, or tap "
+             f"\"Forgot password?\" on the sign-in page and a fresh link will be sent here.\n\n")
+    if reminder:
+        return (f"Reminder: your contract for {cls['title']} is waiting for your signature",
+            f"Hi {first},\n\nYour instructor contract for \"{cls['title']}\" is still waiting to be signed. "
+            f"The class cannot go live until it is.\n\n" + steps +
+            f"It takes about a minute. Once you sign, we will email you a copy for your records.\n\nThe Gibby")
+    return (f"Action needed: sign your contract for {cls['title']}",
+        f"Hi {first},\n\nGreat news: \"{cls['title']}\" has been approved!\n\n"
+        f"One quick step before it goes live: read and sign your instructor contract in the app.\n\n" + steps +
+        f"It takes about a minute. Once you sign, we will email you a copy for your records.\n\nThe Gibby")
+
+CONTRACT_REMINDER_DAYS = 3
+
+def sweep_contract_reminders():
+    """Hourly: any contract sent 3+ days ago and still unsigned gets one reminder."""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=CONTRACT_REMINDER_DAYS)).isoformat(timespec="seconds")
+    c = db()
+    rows = [dict(r) for r in c.execute("""SELECT c.*, u.email AS instr_email, u.name AS instr_name
+        FROM classes c JOIN users u ON u.id=c.instructor_id
+        WHERE c.contract_status='sent' AND c.deleted_at IS NULL AND c.status NOT IN ('cancelled','archived')
+          AND c.contract_sent_at IS NOT NULL AND c.contract_sent_at<=? AND c.contract_reminded_at IS NULL""",
+        (cutoff,)).fetchall()]
+    c.close()
+    n = 0
+    for cls in rows:
+        instr = {"name": cls["instr_name"], "email": cls["instr_email"]}
+        subj, body = contract_ready_email(instr, cls, reminder=True)
+        if mailer.send(instr["email"], subj, body):
+            c = db(); c.execute("UPDATE classes SET contract_reminded_at=? WHERE id=?",
+                                (datetime.datetime.now().isoformat(timespec="seconds"), cls["id"]))
+            c.commit(); c.close(); n += 1
+    if n: print(f"[contract] {n} reminder(s) sent")
+    return n
+
+def resend_unsigned_contract_emails():
+    """Email every instructor whose contract is waiting, and start the 3-day
+    reminder clock for any contract that never had one (sent before v10.43)."""
+    c = db()
+    rows = [dict(r) for r in c.execute("""SELECT c.*, u.email AS instr_email, u.name AS instr_name
+        FROM classes c JOIN users u ON u.id=c.instructor_id
+        WHERE c.contract_status='sent' AND c.deleted_at IS NULL AND c.status NOT IN ('cancelled','archived')""").fetchall()]
+    c.close()
+    sent, failed = [], []
+    for cls in rows:
+        instr = {"name": cls["instr_name"], "email": cls["instr_email"]}
+        subj, body = contract_ready_email(instr, cls)
+        if mailer.send(instr["email"], subj, body):
+            c = db()
+            c.execute("UPDATE classes SET contract_sent_at=COALESCE(contract_sent_at,?), contract_reminded_at=NULL WHERE id=?",
+                      (datetime.datetime.now().isoformat(timespec="seconds"), cls["id"]))
+            c.commit(); c.close(); sent.append(f"{cls['title']} ({instr['email']})")
+        else:
+            failed.append(f"{cls['title']} ({instr['email']})")
+    return {"sent": sent, "failed": failed, "error": ("" if not failed else mailer.LAST_ERROR)}
+
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
     moment failing, and backfills contracts signed before this feature existed."""
@@ -1618,6 +1682,8 @@ def scheduler_loop():
             except Exception as e: print("[scheduler] error:", e)
             try: sweep_contracts_to_drive()
             except Exception as e: print("[contract] sweep error:", e)
+            try: sweep_contract_reminders()
+            except Exception as e: print("[contract] reminder error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
@@ -2932,6 +2998,10 @@ class H(http.server.BaseHTTPRequestHandler):
             mailer.RUNTIME_BRIDGE = {"url": url, "key": key}
             print(f"[email] mail bridge saved by {u['email']}: url={url[:60]!r} key_set={bool(key)}")
             return self.send_json({"ok":True, "dedicated": bool(url)})
+        if p == "/api/admin/resend-contract-emails":
+            u = self.require("admin")
+            if not u: return
+            return self.send_json(resend_unsigned_contract_emails())
         if p == "/api/admin/announce-learn":
             # One email to every active account: the classes currently open on
             # the Learn tab. Sends run in the background so the request returns.
@@ -4191,8 +4261,9 @@ class H(http.server.BaseHTTPRequestHandler):
             if approve:
                 prepared = start_graphic_review(c, cls, u["id"], spawn=False)
                 ctext = build_contract_text(cls, instr["name"])
-                c.execute("""UPDATE classes SET contract_status='sent', contract_text=? WHERE id=?""",
-                          (ctext, cid))
+                c.execute("""UPDATE classes SET contract_status='sent', contract_text=?,
+                             contract_sent_at=?, contract_reminded_at=NULL WHERE id=?""",
+                          (ctext, datetime.datetime.now().isoformat(timespec="seconds"), cid))
                 after_commit = ("render", prepared, instr, cls, ctext)
             else:
                 c.execute("UPDATE classes SET admin_note=? WHERE id=?", (b.get("note",""), cid))
@@ -4216,18 +4287,9 @@ class H(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=render_graphic_async, args=(after_commit[1],), daemon=True).start()
             # The contract goes out the moment the approval lands.
             _, _, instr2, cls2, ctext2 = after_commit
-            first = (instr2.get("name") or "").split(" ")[0] or "there"
             proto2 = self.headers.get("X-Forwarded-Proto","http"); host2 = self.headers.get("Host","localhost:8000")
-            mailer.send(instr2["email"], f"Action needed: sign your contract for {cls2['title']}",
-                f"Hi {first},\n\nGreat news: \"{cls2['title']}\" has been approved!\n\n"
-                f"One quick step before it goes live: read and sign your instructor contract in the app.\n\n"
-                f"  1. Log in: {proto2}://{host2}\n"
-                f"  2. Open My classes\n"
-                f"  3. Tap Read and sign\n\n"
-                f"Your username is this email address ({instr2['email']}). If you have never signed in "
-                f"before, use the set-your-password link from your welcome email, or tap "
-                f"\"Forgot password?\" on the sign-in page and a fresh link will be sent here.\n\n"
-                f"It takes about a minute. Once you sign, we will email you a copy for your records.\n\nThe Gibby")
+            subj2, body2 = contract_ready_email(instr2, cls2, f"{proto2}://{host2}")
+            mailer.send(instr2["email"], subj2, body2)
         elif after_commit and after_commit[0] == "email":
             (subj, body), to = after_commit[1], after_commit[2]
             mailer.send(to, subj, body)
