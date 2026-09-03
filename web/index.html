@@ -1458,7 +1458,7 @@ async function adminConnections(){
         <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
-    <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets</div></div></div>
+    <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets. Sent through the Google bridge as gibby@everetttheatre.com, with Gmail SMTP as the fallback.</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button></div>
     <div class="card"><div class="row"><div><h3>Backups</h3><div class="meta">${d.backup&&d.backup.ok
         ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
@@ -1526,8 +1526,8 @@ async function refileContracts(){
 async function testEmail(){
   const r=await api('/api/test-email','POST',{});
   if(!r.live) alert('Email is still in DRY-RUN, so nothing was sent.\nAdd SMTP settings + EMAIL_LIVE=true to send for real.\n(Would have gone to '+r.to+' from '+r.from+'.)');
-  else if(r.delivered) alert('Test email SENT to '+r.to+' from '+r.from+'.\nCheck your inbox (and spam).');
-  else alert('Email is set live but the send FAILED (bad SMTP host/user/password, most likely).\nDouble-check the SMTP settings.');
+  else if(r.delivered) alert('Test email SENT to '+r.to+' from '+r.from+(r.route==='bridge'?' through the Google bridge':' through SMTP')+'.\nCheck your inbox (and spam).');
+  else alert('Email is set live but the send FAILED.\n\n'+(r.error||'No detail was returned.'));
 }
 async function toggleInteg(id,action){ await api('/api/integrations/'+id+'/'+action,'POST'); adminConnections(); }
 async function syncCalendar(){

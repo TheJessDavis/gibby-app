@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.39.0-learn-all"
+VERSION = "10.40.0-bridge-email"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2914,9 +2914,10 @@ class H(http.server.BaseHTTPRequestHandler):
             delivered = mailer.send(to, "Gibby Class Manager test email",
                 "This is a test from your Gibby Class Manager. If you received this, email is working.", cfg)
             return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
-                "live": bool(cfg["email_live"] and cfg["smtp_host"]), "delivered": bool(delivered),
+                "live": bool(cfg["email_live"] and (cfg["smtp_host"] or mailer.bridge_available())), "delivered": bool(delivered),
                 "smtp_host": cfg.get("smtp_host"), "smtp_port": cfg.get("smtp_port"),
                 "smtp_user": cfg.get("smtp_user"),
+                "bridge": mailer.bridge_available(), "route": (mailer.LAST_ROUTE if delivered else ""),
                 "error": ("" if delivered else mailer.LAST_ERROR)})
         if p == "/api/test-eventbrite":
             u = self.require("admin")

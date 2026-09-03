@@ -9,7 +9,7 @@ not sent, so the app is safe to run with no mail account.
 All mail is from gibby@theeverett.org. Going live also requires SPF/DKIM/DMARC
 records on theeverett.org, or messages will be marked as spam.
 """
-import smtplib, ssl, json, os
+import smtplib, ssl, json, os, base64, urllib.request
 from email.message import EmailMessage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,7 +38,43 @@ def load_email_config():
 
 APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
 
-LAST_ERROR = ""   # the most recent SMTP failure, so the app can show it
+LAST_ERROR = ""   # the most recent send failure, so the app can show it; cleared on success
+LAST_ROUTE = ""   # "bridge" or "smtp": which route carried the last delivered email
+
+def bridge_config():
+    """The Gibby Calendar Bridge (Apps Script on the Everett Google account) can
+    also send mail, as the mailbox that deployed it or any of its Send-mail-as
+    aliases. No app password involved. MAIL_VIA_BRIDGE=0 turns the route off."""
+    return {
+        "url": os.environ.get("GCAL_WEBHOOK_URL", ""),
+        "key": os.environ.get("GCAL_WEBHOOK_KEY", ""),
+        "enabled": os.environ.get("MAIL_VIA_BRIDGE", "1").lower() not in ("0", "false", "no"),
+    }
+
+def bridge_available():
+    b = bridge_config()
+    return bool(b["enabled"] and b["url"])
+
+def send_via_bridge(recips, subject, body, cfg, attachments):
+    """Returns True when the bridge accepted the message; raises with the
+    bridge's own reason otherwise (old script version, alias missing, quota)."""
+    b = bridge_config()
+    payload = {"key": b["key"], "action": "email", "to": recips, "subject": subject,
+               "body": body, "from": cfg["mail_from"], "name": "The Gibby",
+               "attachments": [{"filename": fn, "mime": mime or "application/octet-stream",
+                                "b64": base64.b64encode(data).decode()}
+                               for fn, data, mime in (attachments or [])]}
+    req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        res = json.loads(r.read().decode("utf-8", "replace"))
+    if res.get("ok"):
+        return True
+    err = str(res.get("error") or res)
+    if err == "unknown action":
+        err = ("the Gibby Calendar Bridge script is an older version without the email action; "
+               "paste the current scripts/gcal-webhook.gs and deploy a new version")
+    raise RuntimeError(err)
 
 def send(to, subject, body, cfg=None, attachments=None):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
@@ -50,30 +86,43 @@ def send(to, subject, body, cfg=None, attachments=None):
     # Every email links back to the app, so nobody has to hunt for the address.
     if APP_URL not in body:
         body = body.rstrip() + f"\n\nOpen the Gibby Class Manager: {APP_URL}"
-    if not (cfg["email_live"] and cfg["smtp_host"]):
+    if not (cfg["email_live"] and (cfg["smtp_host"] or bridge_available())):
         print(f"[email] DRY-RUN from={cfg['mail_from']} to={recips} subject={subject!r}"
               + (f" attachments={[a[0] for a in attachments]}" if attachments else ""))
         return True
-    try:
-        msg = EmailMessage()
-        msg["From"] = cfg["mail_from"]; msg["To"] = ", ".join(recips); msg["Subject"] = subject
-        msg.set_content(body)
-        for fn, data, mime in (attachments or []):
-            mt, _, st = (mime or "application/octet-stream").partition("/")
-            msg.add_attachment(data, maintype=mt, subtype=st or "octet-stream", filename=fn)
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
-            s.starttls(context=ctx)
-            if cfg["smtp_user"]:
-                s.login(cfg["smtp_user"], cfg["smtp_pass"])
-            s.send_message(msg)
-        print(f"[email] SENT to={recips} subject={subject!r}")
-        return True
-    except Exception as e:
-        global LAST_ERROR
-        LAST_ERROR = f"{type(e).__name__}: {e}"
-        print(f"[email] FAILED to={recips} subject={subject!r} error={e}")
-        return False
+    global LAST_ERROR, LAST_ROUTE
+    errors = []
+    if bridge_available():
+        try:
+            if send_via_bridge(recips, subject, body, cfg, attachments):
+                LAST_ERROR = ""; LAST_ROUTE = "bridge"
+                print(f"[email] SENT via bridge to={recips} subject={subject!r}")
+                return True
+        except Exception as e:
+            errors.append(f"Google bridge: {e}")
+            print(f"[email] bridge could not send to={recips} subject={subject!r} error={e}")
+    if cfg["smtp_host"]:
+        try:
+            msg = EmailMessage()
+            msg["From"] = cfg["mail_from"]; msg["To"] = ", ".join(recips); msg["Subject"] = subject
+            msg.set_content(body)
+            for fn, data, mime in (attachments or []):
+                mt, _, st = (mime or "application/octet-stream").partition("/")
+                msg.add_attachment(data, maintype=mt, subtype=st or "octet-stream", filename=fn)
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
+                s.starttls(context=ctx)
+                if cfg["smtp_user"]:
+                    s.login(cfg["smtp_user"], cfg["smtp_pass"])
+                s.send_message(msg)
+            LAST_ERROR = ""; LAST_ROUTE = "smtp"
+            print(f"[email] SENT via smtp to={recips} subject={subject!r}")
+            return True
+        except Exception as e:
+            errors.append(f"SMTP: {type(e).__name__}: {e}")
+            print(f"[email] smtp FAILED to={recips} subject={subject!r} error={e}")
+    LAST_ERROR = " | ".join(errors) or "no email route is configured"
+    return False
 
 # ------------------------------------------------------------- templates ----
 def tmpl_approved(cls, instr):

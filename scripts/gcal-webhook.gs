@@ -17,6 +17,8 @@
  *                      so approved classes land on the calendar automatically.
  *   POST {key,action:'contract'}        -> files a signed-contract HTML doc in
  *                      the "Gibby Contracts" folder on Drive.
+ *   POST {key,action:'email'}           -> sends app email as gibby@everetttheatre.com
+ *                      (a Send-mail-as alias of the deploying mailbox).
  *
  * One-time setup (about 3 minutes):
  *   1. Go to script.google.com while signed in as the Everett account and
@@ -122,6 +124,32 @@ function doPost(e) {
     return reply({ ok: true, id: f.getId(), link: f.getUrl() });
   }
 
+  if (body.action === 'email') {
+    // Send app email as the mailbox that deployed this script, or as one of its
+    // Send-mail-as aliases (gibby@everetttheatre.com). No app password needed.
+    var me = Session.getEffectiveUser().getEmail();
+    var from = String(body.from || '');
+    var opts = { name: String(body.name || 'The Gibby') };
+    if (from && from.toLowerCase() !== me.toLowerCase()) {
+      var aliases = GmailApp.getAliases().map(function (a) { return a.toLowerCase(); });
+      if (aliases.indexOf(from.toLowerCase()) < 0) {
+        return reply({ error: from + ' is not a Send-mail-as address on ' + me +
+          '. In Gmail for ' + me + ' go to Settings > Accounts > Send mail as, add it, then try again.' });
+      }
+      opts.from = from;
+    }
+    if (body.attachments && body.attachments.length) {
+      opts.attachments = body.attachments.map(function (a) {
+        return Utilities.newBlob(Utilities.base64Decode(String(a.b64 || '')),
+          String(a.mime || 'application/octet-stream'), String(a.filename || 'file'));
+      });
+    }
+    var to = (body.to || []).join(',');
+    if (!to) return reply({ error: 'no recipient' });
+    GmailApp.sendEmail(to, String(body.subject || ''), String(body.body || ''), opts);
+    return reply({ ok: true, from: opts.from || me, remaining: MailApp.getRemainingDailyQuota() });
+  }
+
   var cal = CalendarApp.getCalendarById(CALENDAR_ID);
   if (!cal) return reply({ error: 'calendar not found' });
 
@@ -162,6 +190,8 @@ function authDrive2() {
   Logger.log(f.getId());
   f.setTrashed(true);
 }
+// Forces the consent prompt for the Gmail scope the email action needs.
+function authGmail() { Logger.log(GmailApp.getAliases().join(', ') || '(no aliases)'); }
 // Forces the consent prompt for the Sheets WRITE scope the sheet action needs.
 function authSheets() {
   var t = SpreadsheetApp.create('AUTH TEST sheet');
