@@ -463,7 +463,7 @@ async function bootInner(){
   if(user && !user.must_change_pw && (user.tour_seen||0) < TOUR_VERSION) setTimeout(startTour, 600);
   const mrev=/^#review-(\d+)$/.exec(location.hash||'');
   if(mrev){ REVIEW_FOCUS=+mrev[1]; history.replaceState(null,'',location.pathname+location.search); }
-  if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('open');
+  if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('mine');
 }
 function renderChangePw(){
   $('#view').innerHTML=`<div class="login-wrap">
@@ -2825,10 +2825,6 @@ async function instrMine(){
         <textarea id="fbn${c.id}" placeholder="e.g. Two hours was tight for this one. Three would let the glaze dry properly."></textarea>
         <button class="btn dark" style="margin-top:10px" onclick="sendFeedback(${c.id})">Send to The Gibby</button>
       </div>`).join('')}`:''}
-    ${waiting.length?`<label style="margin-top:18px">With the Gibby for review (${waiting.length})</label>
-      ${waiting.map(c=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
-        <div class="meta">Your note is with an admin. You will hear if they need a change.</div></div>
-        <span class="pill ir">in review</span></div></div>`).join('')}`:''}
     ${drafts.length?`<label>Drafts (${drafts.length})</label>
       <p class="sub" style="margin-top:2px">Not submitted yet. The time is only held once you submit.</p>
       ${drafts.map(d=>`<div class="card">
