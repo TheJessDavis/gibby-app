@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.41.1-bridge-error-text"
+VERSION = "10.42.0-mail-bridge"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2918,7 +2918,20 @@ class H(http.server.BaseHTTPRequestHandler):
                 "smtp_host": cfg.get("smtp_host"), "smtp_port": cfg.get("smtp_port"),
                 "smtp_user": cfg.get("smtp_user"),
                 "bridge": mailer.bridge_available(), "route": (mailer.LAST_ROUTE if delivered else ""),
+                "bridge_dedicated": mailer.bridge_config()["dedicated"],
                 "error": ("" if delivered else mailer.LAST_ERROR)})
+        if p == "/api/admin/mail-bridge":
+            # Save the Gibby Mail Bridge (Apps Script on the gibby@ mailbox) the app sends through.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            url = (b.get("url") or "").strip(); key = (b.get("key") or "").strip()
+            if url and not url.startswith("https://script.google.com/macros/s/"):
+                return self.send_json({"error":"That is not an Apps Script web app URL (it should start with https://script.google.com/macros/s/ and end in /exec)."},400)
+            _meta_set("mail_bridge_url", url); _meta_set("mail_bridge_key", key)
+            mailer.RUNTIME_BRIDGE = {"url": url, "key": key}
+            print(f"[email] mail bridge saved by {u['email']}: url={url[:60]!r} key_set={bool(key)}")
+            return self.send_json({"ok":True, "dedicated": bool(url)})
         if p == "/api/admin/announce-learn":
             # One email to every active account: the classes currently open on
             # the Learn tab. Sends run in the background so the request returns.
@@ -4496,6 +4509,10 @@ class Threaded(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 if __name__ == "__main__":
+    try:
+        mailer.RUNTIME_BRIDGE = {"url": _meta_get("mail_bridge_url"), "key": _meta_get("mail_bridge_key")}
+    except Exception as e:
+        print("[email] could not load the saved mail bridge:", e)
     init_db()
     threading.Thread(target=scheduler_loop, daemon=True).start()   # daily lifecycle automations
     threading.Thread(target=queue_worker, daemon=True).start()     # outbound posting + retries

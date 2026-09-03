@@ -41,13 +41,21 @@ APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
 LAST_ERROR = ""   # the most recent send failure, so the app can show it; cleared on success
 LAST_ROUTE = ""   # "bridge" or "smtp": which route carried the last delivered email
 
+RUNTIME_BRIDGE = {}   # the mail bridge saved by an admin in the app (url, key); env wins
+
 def bridge_config():
-    """The Gibby Calendar Bridge (Apps Script on the Everett Google account) can
-    also send mail, as the mailbox that deployed it or any of its Send-mail-as
-    aliases. No app password involved. MAIL_VIA_BRIDGE=0 turns the route off."""
+    """A dedicated Gibby Mail Bridge (Apps Script on the gibby@everetttheatre.com
+    account, scripts/mail-bridge.gs) sends every email as that mailbox. Set it
+    with MAIL_BRIDGE_URL / MAIL_BRIDGE_KEY or under Connections > Email. Without
+    one, the calendar bridge is tried and explains what it needs.
+    MAIL_VIA_BRIDGE=0 turns the whole route off."""
+    url = os.environ.get("MAIL_BRIDGE_URL", "") or RUNTIME_BRIDGE.get("url", "")
+    key = os.environ.get("MAIL_BRIDGE_KEY", "") or RUNTIME_BRIDGE.get("key", "")
+    dedicated = bool(url)
+    if not url:
+        url = os.environ.get("GCAL_WEBHOOK_URL", ""); key = os.environ.get("GCAL_WEBHOOK_KEY", "")
     return {
-        "url": os.environ.get("GCAL_WEBHOOK_URL", ""),
-        "key": os.environ.get("GCAL_WEBHOOK_KEY", ""),
+        "url": url, "key": key, "dedicated": dedicated,
         "enabled": os.environ.get("MAIL_VIA_BRIDGE", "1").lower() not in ("0", "false", "no"),
     }
 
