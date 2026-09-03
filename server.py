@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.49.0-photos-calendar-fix"
+VERSION = "10.50.0-calendar-review"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1201,6 +1201,70 @@ def push_photo_to_drive(cls, filename, b64, mime="image/jpeg"):
             err = "the Google bridge script is older than Version 16 and has no photo action"
         raise RuntimeError(err)
     return res
+
+_CAL_BLOCK_WORDS = ("blocked","board","closed","live stage","private","rental","hire","whole","meeting","rehearsal","setup","maintenance")
+
+def calendar_review():
+    """Every event on the Gibby calendar (season window) with the app class it
+    belongs to, if any. Matching: the event id the app stored when it created
+    the event, else same day + similar title. Block-style events (rentals,
+    board, closed) are flagged so nobody deletes them by accident."""
+    import difflib
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"): raise RuntimeError("the Google bridge is not configured")
+    payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "list"}).encode()
+    req = urllib.request.Request(cfg["webhook_url"], data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        raw = r.read().decode("utf-8", "replace")
+    try: res = json.loads(raw)
+    except ValueError: raise RuntimeError("the bridge answered with an error page; it may need the list action (Version 17)")
+    if not res.get("ok"):
+        err = str(res.get("error") or res)
+        raise RuntimeError("the Google bridge script has no list action yet (Version 17)" if err == "unknown action" else err)
+    c = db()
+    classes = [dict(r) for r in c.execute("SELECT id,title,slot_date,session_dates,external_ids,status,instructor_id FROM classes WHERE deleted_at IS NULL AND status IN ('approved','pending','graphic_review','instructor_review')")]
+    people = {r["id"]: r["name"] for r in c.execute("SELECT id,name FROM users")}
+    c.close()
+    by_gid, by_day = {}, {}
+    for cl in classes:
+        try: ext = json.loads(cl.get("external_ids") or "{}")
+        except Exception: ext = {}
+        for gid in str(ext.get("gcal_event_id") or "").split(","):
+            if gid.strip(): by_gid[gid.strip()] = cl
+        days = []
+        d = _class_date(cl)
+        if d: days.append(d.isoformat())
+        try:
+            for sd in json.loads(cl.get("session_dates") or "[]"):
+                pd = parse_day(sd.get("date"))
+                if pd: days.append(pd.isoformat())
+        except Exception: pass
+        for day in days: by_day.setdefault(day, []).append(cl)
+    out = []
+    for ev in res.get("events") or []:
+        title = ev.get("title") or ""; day = (ev.get("start") or "")[:10]
+        low = title.lower()
+        kind = "block" if any(w in low for w in _CAL_BLOCK_WORDS) else "class"
+        match, how = None, ""
+        eid = str(ev.get("id") or "")
+        base = eid.split("@")[0]
+        for k, cl in by_gid.items():
+            if k == eid or k.split("@")[0] == base:
+                match, how = cl, "created by the app"; break
+        if not match:
+            best, score = None, 0.0
+            for cl in by_day.get(day, []):
+                sc = difflib.SequenceMatcher(None, _norm_title(title), _norm_title(cl["title"])).ratio()
+                if sc > score: best, score = cl, sc
+            if best and score >= 0.45:
+                match, how = best, f"same day, title {int(score*100)}% similar"
+        out.append({"id": eid, "title": title, "start": ev.get("start"), "end": ev.get("end"), "allDay": ev.get("allDay"),
+                    "location": ev.get("location"), "kind": kind,
+                    "class_id": match["id"] if match else None, "class_title": match["title"] if match else None,
+                    "instructor": people.get(match["instructor_id"]) if match else None, "how": how})
+    out.sort(key=lambda e: e.get("start") or "")
+    return out
 
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
@@ -2632,6 +2696,13 @@ class H(http.server.BaseHTTPRequestHandler):
             failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
             c.close()
             return self.send_json({"needs_you": needs, "failed": failed})
+        if p == "/api/calendar/review":
+            u = self.require("admin")
+            if not u: return
+            try:
+                return self.send_json({"events": calendar_review()})
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 502)
         if p == "/api/eventbrite/upcoming":
             # Admin: every live Eventbrite event not yet in the app, with a
             # suggested instructor when a user's name appears in the listing.
@@ -3383,6 +3454,24 @@ class H(http.server.BaseHTTPRequestHandler):
                 saved.append({"name": name, "link": res.get("link")})
             return self.send_json({"ok": bool(saved), "saved": saved, "failed": failed,
                                    "folder": (res.get("folder") if saved else None)})
+        if p == "/api/calendar/delete":
+            # Admin removes calendar events they ticked on the review screen.
+            # Only ids that the review just listed as unmatched are accepted.
+            u = self.require("admin")
+            if not u: return
+            ids = [str(x) for x in (self.read_json().get("ids") or []) if x]
+            if not ids: return self.send_json({"error": "Nothing ticked."}, 400)
+            try:
+                allowed = {e["id"] for e in calendar_review() if not e["class_id"]}
+            except Exception as e:
+                return self.send_json({"error": str(e)}, 502)
+            refused = [i for i in ids if i not in allowed]
+            ids = [i for i in ids if i in allowed]
+            if not ids: return self.send_json({"error": "Those events are attached to app classes, so they were not removed."}, 400)
+            cfg = gcal.load_gcal_config()
+            n = gcal.delete_events(ids, cfg)
+            print(f"[calendar] {u['email']} removed {n} calendar event(s) not in the app")
+            return self.send_json({"ok": True, "removed": n or 0, "refused": refused})
         if p == "/api/eventbrite/import":
             u = self.require("admin")
             if not u: return

@@ -970,7 +970,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport, calreview:adminCalReview,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1441,6 +1441,35 @@ async function reinvite(email,name,role){
 }
 
 /* ---------------- connections ---------------- */
+async function adminCalReview(){
+  $('#tab').innerHTML='<h2>Calendar <em>vs the app</em></h2><p class="sub">Reading the Gibby calendar…</p>';
+  const d=await api('/api/calendar/review');
+  if(d.error){ $('#tab').innerHTML='<h2>Calendar <em>vs the app</em></h2><p class="sub">'+esc(d.error)+'</p>'; return; }
+  const ev=d.events||[]; const un=ev.filter(e=>!e.class_id&&e.kind==='class'), blocks=ev.filter(e=>!e.class_id&&e.kind==='block'), ok=ev.filter(e=>e.class_id);
+  const when=e=>esc((e.start||'').slice(0,10))+(e.allDay?' (all day)':' '+esc((e.start||'').slice(11,16))+'–'+esc((e.end||'').slice(11,16)));
+  const row=(e,checked)=>`<div class="card"><label style="display:flex;gap:10px;align-items:flex-start;margin:0"><input type="checkbox" class="calpick" data-id="${esc(e.id)}" ${checked?'checked':''}>
+      <div><b>${esc(e.title||'(untitled)')}</b><div class="meta">${when(e)}${e.location?' · '+esc(e.location):''}</div></div></label></div>`;
+  $('#tab').innerHTML=`<h2>Calendar <em>vs the app</em></h2>
+    <p class="sub">${ev.length} events on the Gibby calendar: ${ok.length} match a class in the app, ${un.length} look like classes the app does not know, ${blocks.length} look like blocks or rentals.</p>
+    <label>Not in the app (${un.length})</label>
+    <p class="sub" style="margin-top:2px">Ticked by default. Untick anything that should stay. These times will show as open in the app once removed.</p>
+    ${un.map(e=>row(e,true)).join('')||'<div class="muted">Every class-looking event matches a class in the app.</div>'}
+    <label style="margin-top:16px">Blocks, rentals, meetings (${blocks.length})</label>
+    <p class="sub" style="margin-top:2px">Not ticked. These keep rooms busy on purpose.</p>
+    ${blocks.map(e=>row(e,false)).join('')||'<div class="muted">None.</div>'}
+    ${(un.length+blocks.length)?`<button class="btn warn" style="margin-top:12px" onclick="calDelete()">Remove the ticked events from the calendar</button>`:''}
+    <label style="margin-top:16px">Matched to app classes (${ok.length})</label>
+    ${ok.map(e=>`<div class="card"><b>${esc(e.title)}</b><div class="meta">${when(e)} · ${esc(e.class_title)}${e.instructor?' · '+esc(e.instructor):''} · ${esc(e.how)}</div></div>`).join('')}
+    <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Back to Connections</button>`;
+}
+async function calDelete(){
+  const ids=[...document.querySelectorAll('.calpick:checked')].map(cb=>cb.dataset.id);
+  if(!ids.length){ alert('Nothing is ticked.'); return; }
+  if(!confirm('Remove '+ids.length+' event'+(ids.length===1?'':'s')+' from the Gibby calendar?\n\nThis cannot be undone from the app.')) return;
+  const r=await api('/api/calendar/delete','POST',{ids});
+  alert(r.error||('Removed '+r.removed+'.'+((r.refused||[]).length?' '+r.refused.length+' were attached to app classes and left alone.':'')));
+  adminCalReview();
+}
 async function adminEbImport(){
   $('#tab').innerHTML='<h2>Classes on <em>Eventbrite</em></h2><p class="sub">Asking Eventbrite…</p>';
   const d=await api('/api/eventbrite/upcoming');
@@ -1486,7 +1515,9 @@ async function adminConnections(){
       ${it.id==='facebook'?`<button class="btn ghost" style="margin-top:8px" onclick="testFacebook()">Verify Page token</button>
         <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
-      <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button></div>
+      <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('calreview')">Review the calendar against the app</button>
+      <div class="hint">Lists every calendar event and whether it belongs to a class in the app. Remove the leftovers with a tick; nothing is deleted on its own.</div></div>
     <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets. Sent as gibby@everetttheatre.com through the Gibby Mail Bridge, with Gmail SMTP as the fallback.</div></div></div>
       <div class="meta" style="margin-top:8px">Mail bridge web app URL and key (from the Gibby Mail Bridge script on the gibby@ account):</div>
       <input id="mb_url" placeholder="https://script.google.com/macros/s/.../exec" style="margin-top:6px">

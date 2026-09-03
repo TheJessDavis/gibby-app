@@ -124,6 +124,21 @@ function doPost(e) {
     return reply({ ok: true, id: f.getId(), link: f.getUrl() });
   }
 
+  if (body.action === 'list') {
+    // Read-only: every event in a window, WITH titles, for the admin's
+    // calendar-vs-app review. Only the app (with the key) can ask for this.
+    var cal2 = CalendarApp.getCalendarById(CALENDAR_ID);
+    if (!cal2) return reply({ error: 'calendar not found' });
+    var f = new Date(body.from || FEED_START), t = new Date(body.to || FEED_END);
+    var evs = cal2.getEvents(f, t).map(function (ev) {
+      return { id: ev.getId(), title: ev.getTitle(), allDay: ev.isAllDayEvent(),
+        start: Utilities.formatDate(ev.getStartTime(), 'America/New_York', "yyyy-MM-dd'T'HH:mm"),
+        end: Utilities.formatDate(ev.getEndTime(), 'America/New_York', "yyyy-MM-dd'T'HH:mm"),
+        location: ev.getLocation() || '' };
+    });
+    return reply({ ok: true, events: evs });
+  }
+
   if (body.action === 'photo') {
     // After-class photos: Gibby Class Photos / <class title> / <file>.
     var root;
