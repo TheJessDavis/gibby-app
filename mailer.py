@@ -67,7 +67,17 @@ def send_via_bridge(recips, subject, body, cfg, attachments):
     req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
     with urllib.request.urlopen(req, timeout=60) as r:
-        res = json.loads(r.read().decode("utf-8", "replace"))
+        raw = r.read().decode("utf-8", "replace")
+    try:
+        res = json.loads(raw)
+    except ValueError:
+        # Apps Script answers with an HTML error page when the script needs a
+        # permission it has not been granted yet; surface its one-line reason.
+        import re as _re
+        text = _re.sub(r"<[^>]+>", " ", raw)
+        mm = _re.search(r"(Exception:|Authorization is required|Script function not found)[^<]{0,300}", text)
+        raise RuntimeError("the bridge answered with an error page: "
+                           + (" ".join(mm.group(0).split()) if mm else text.strip()[:200]))
     if res.get("ok"):
         return True
     err = str(res.get("error") or res)
