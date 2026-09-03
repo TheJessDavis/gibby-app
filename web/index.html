@@ -993,6 +993,11 @@ async function adminDashboard(){
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
     <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
+    ${d.email_error?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
+      <div class="row"><div><h3>\u26a0 Email is not going out</h3>
+        <div class="meta">The last email the app tried to send was rejected, so instructors and admins are not getting notifications, invitations or contracts.</div></div></div>
+      <div class="meta" style="margin-top:8px;color:#B4442C">${esc(d.email_error)}</div>
+      <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Open Connections to send a test</button></div>`:''}
     ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
       <div class="row"><div><h3>⚠ Publishing needs attention</h3>
         <div class="meta">${d.publish_failures.length} step${d.publish_failures.length===1?'':'s'} could not be posted after ${5} tries. The class itself is still approved.</div></div></div>

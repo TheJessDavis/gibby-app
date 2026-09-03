@@ -2294,7 +2294,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"classes": self._classes("WHERE c.status='graphic_review' ")})
         if p == "/api/classes/auditable":
             # Classes whose instructor said other resident teaching artists may
-            # sit in free. Upcoming and approved only, and never your own.
+            # take free. Upcoming and approved only; your own are included, flagged.
             u = self.require()
             if not u: return
             rows = self._classes("WHERE c.status='approved' AND c.audit_ok=1 ")
@@ -2394,6 +2394,7 @@ class H(http.server.BaseHTTPRequestHandler):
             approved = self._classes("WHERE c.status='approved' ")
             return self.send_json({
                 "publish_failures": self._publish_failures(),
+                "email_error": mailer.LAST_ERROR,
                 "pending": self._classes("WHERE c.status='pending' "),
                 "graphic": self._classes("WHERE c.status='graphic_review' "),
                 "returned": self._classes("WHERE c.status='incomplete' "),
