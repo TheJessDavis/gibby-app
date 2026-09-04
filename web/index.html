@@ -565,7 +565,7 @@ function renderProfile(){
   </div>`;
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
+const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['requests','\u{1F4CC}','Requests'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
   document.body.classList.remove('formopen'); closeMore();
@@ -970,7 +970,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport, calreview:adminCalReview,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1441,6 +1441,43 @@ async function reinvite(email,name,role){
 }
 
 /* ---------------- connections ---------------- */
+async function adminRequests(){
+  const d=await api('/api/requests'); const rs=d.requests||[];
+  const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
+  const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
+      <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
+      ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}
+      ${r.status==='claimed'?`<div class="meta" style="margin-top:4px;color:#3F7A32;font-weight:800">Claimed by ${esc(r.claimed_by_name||'?')} ${esc((r.claimed_at||'').slice(0,10))}${r.class_title?' · submitted as '+esc(r.class_title)+' ('+esc(r.class_status)+')':' · proposal in progress'}</div>`:''}</div>
+      ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
+    <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
+  $('#tab').innerHTML=`<h2>Class <em>requests</em></h2>
+    <p class="sub">Tell the teaching artists what the calendar needs. Every instructor is emailed, and the first to claim gets a proposal pre-filled with these details.</p>
+    <div class="card"><label>What would you like taught?</label><input id="rq_title" placeholder="e.g. Kids pottery">
+      <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
+      <div class="two"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
+        <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
+      <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
+      <button class="btn dark" style="margin-top:10px" onclick="postRequest()">Post it and email the instructors</button></div>
+    <label style="margin-top:16px">Open (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing open.</div>'}
+    <label style="margin-top:16px">Claimed (${claimed.length})</label>${claimed.map(card).join('')||'<div class="muted">None claimed yet.</div>'}
+    ${closed.length?`<label style="margin-top:16px">Closed recently (${closed.length})</label>${closed.map(card).join('')}`:''}`;
+}
+async function postRequest(){
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value};
+  const r=await api('/api/requests','POST',b);
+  if(r.error){ alert(r.error); return; }
+  alert('Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.'); adminRequests();
+}
+async function reqAction(id, action){
+  const r=await api('/api/requests/'+id+'/'+action,'POST',{}); if(r.error){ alert(r.error); return; }
+  if(action==='claim'){
+    alert('It is yours. Pick the time next; everything else is filled in for you.');
+    PENDING_DRAFT={id:r.draft_id, payload:null}; DRAFT_ID=r.draft_id;
+    try{ const {draft}=await api('/api/drafts/'+r.draft_id); PENDING_DRAFT.payload=draft.payload||{}; }catch(_){}
+    ROOM_PICK=null; renderInstr('open'); return;
+  }
+  adminRequests();
+}
 async function adminCalReview(){
   $('#tab').innerHTML='<h2>Calendar <em>vs the app</em></h2><p class="sub">Reading the Gibby calendar…</p>';
   const d=await api('/api/calendar/review');
@@ -2270,6 +2307,10 @@ function cardCls(c){
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
+      ${c.cal_start?`<div class="two" style="margin-top:8px">
+        <a class="btn ghost" style="text-decoration:none;text-align:center" href="/class-ics/${c.id}.ics">\u{1F4C5} Add to calendar</a>
+        <a class="btn ghost" style="text-decoration:none;text-align:center" target="_blank" rel="noopener" href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(c.title)}&dates=${c.cal_start}/${c.cal_end}&ctz=America/New_York&location=${encodeURIComponent('The Gibby, '+(c.room||''))}&details=${encodeURIComponent('Your class at The Gibby. Details and roster: '+location.origin)}">Google Calendar</a></div>
+      <div class="hint">Add to calendar opens in Apple Calendar or Outlook${c.is_series?' with every session':''}. Google Calendar adds the ${c.is_series?'first session':'class'} to your Google account.</div>`:''}
       <div id="photos${c.id}"></div>
       ${actingRole()==='admin'?`<button class="btn ghost" style="margin-top:8px" onclick="syncRegistrations(${c.id})">Sync registrations from Eventbrite</button>`:''}
       <div id="roster${c.id}"></div>`:''}
@@ -2858,7 +2899,14 @@ async function instrMine(){
                               ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
   // asked once the class has finished, and only until they answer
   const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
+  let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
+    ${reqs.length?`<label>The Gibby is looking for (${reqs.length})</label>
+      <p class="sub" style="margin-top:2px">Classes the Gibby would love to run. Claim one and the proposal is pre-filled; you just pick the time.</p>
+      ${reqs.map(r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
+        <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
+        ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}</div></div>
+        <button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">Claim this one</button></div>`).join('')}`:''}
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
       <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. It goes out in your name, and replies come straight to you.</p>
       ${todo.map(c=>`<div class="card">

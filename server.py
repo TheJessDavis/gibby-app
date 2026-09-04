@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.50.1-mail-retry"
+VERSION = "10.51.0-requests-board-ics"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,10 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    c.execute("""CREATE TABLE IF NOT EXISTS class_requests(
+        id INTEGER PRIMARY KEY, title TEXT, notes TEXT, room TEXT, ages TEXT, when_text TEXT,
+        status TEXT DEFAULT 'open', created_by INTEGER, created TEXT,
+        claimed_by INTEGER, claimed_at TEXT, draft_id INTEGER, class_id INTEGER, closed_at TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS class_photos(
         id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, drive_id TEXT, drive_link TEXT,
         folder_link TEXT, filename TEXT, thumb TEXT, created TEXT)""")
@@ -1269,6 +1273,48 @@ def calendar_review():
     out.sort(key=lambda e: e.get("start") or "")
     return out
 
+def _class_sessions_local(cls):
+    """[(start_dt, end_dt)] for every session of a class, local wall-clock."""
+    span = cls.get("class_time") or cls.get("slot_time") or ""
+    def clock(s):
+        try: return tmin(s)
+        except Exception: return None
+    parts = [p.strip() for p in re.split(r"\s*[–-]\s*", span) if p.strip()]
+    st, en = (clock(parts[0]) if parts else None), (clock(parts[1]) if len(parts) > 1 else None)
+    out = []
+    try: sessions = json.loads(cls.get("session_dates") or "[]")
+    except Exception: sessions = []
+    days = []
+    if sessions:
+        for sd in sessions:
+            d = parse_day(sd.get("date"))
+            if d: days.append((d, clock(sd.get("start")) or st, clock(sd.get("end")) or en))
+    else:
+        d = _class_date(cls)
+        if d: days.append((d, st, en))
+    for d, a, b in days:
+        a = a if a is not None else 9 * 60
+        b = b if b is not None else a + 120
+        out.append((datetime.datetime.combine(d, datetime.time(a // 60, a % 60)),
+                    datetime.datetime.combine(d, datetime.time(b // 60, b % 60))))
+    return out
+
+def class_ics(cls):
+    """An .ics file for the instructor's own calendar (Apple, Google, Outlook)."""
+    def esc(t): return str(t or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Gibby Class Manager//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"]
+    stamp = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    for i, (a, b) in enumerate(_class_sessions_local(cls)):
+        lines += ["BEGIN:VEVENT", f"UID:gibby-class-{cls['id']}-{i}@gibby-app",
+                  f"DTSTAMP:{stamp}", f"DTSTART;TZID=America/New_York:{a.strftime('%Y%m%dT%H%M%S')}",
+                  f"DTEND;TZID=America/New_York:{b.strftime('%Y%m%dT%H%M%S')}",
+                  f"SUMMARY:{esc(cls.get('title'))}" + (f" (session {i+1})" if cls.get("is_series") else ""),
+                  f"LOCATION:{esc('The Gibby, ' + (cls.get('room') or 'Gibby Center for the Arts'))}",
+                  f"DESCRIPTION:{esc('Your class at The Gibby. Details and roster: ' + mailer.APP_URL)}",
+                  "END:VEVENT"]
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
+
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
     moment failing, and backfills contracts signed before this feature existed."""
@@ -2139,6 +2185,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/embed.json": return self.embed_json()
         if p == "/notify": return self.notify_page()
         if p == "/unsubscribe": return self.unsubscribe_page()
+        if p.startswith("/class-ics/"): return self.class_ics_dl(p)
         if p.startswith("/class-photo/"): return self.class_photo(p)
         if p.startswith("/class-poster/"): return self.class_poster(p)
         if p.startswith("/contract-pdf/"): return self.contract_pdf_dl(p)
@@ -2354,6 +2401,23 @@ class H(http.server.BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError): return
                 remaining -= len(chunk)
         return
+
+    def class_ics_dl(self, p):
+        u = self.current_user()
+        if not u: return self.send_error(401)
+        try: cid = int(p.split("/")[2].split(".")[0])
+        except Exception: return self.send_error(404)
+        c = db(); row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone(); c.close()
+        if not row: return self.send_error(404)
+        cls = dict(row)
+        if u["role"] != "admin" and cls["instructor_id"] != u["id"]: return self.send_error(403)
+        body = class_ics(cls).encode("utf-8")
+        safe = re.sub(r"[^A-Za-z0-9]+", "-", cls.get("title") or "class").strip("-")[:60] or "class"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{safe}.ics"')
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
 
     def embed_json(self):
         """PUBLIC data feed for the website: the site's own script renders the
@@ -2699,6 +2763,22 @@ class H(http.server.BaseHTTPRequestHandler):
             failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
             c.close()
             return self.send_json({"needs_you": needs, "failed": failed})
+        if p == "/api/requests":
+            # The class requests board: what The Gibby would like taught. Open
+            # requests are visible to every instructor; admins also see who claimed.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT r.*, a.name AS created_by_name, i.name AS claimed_by_name,
+                 cl.title AS class_title, cl.status AS class_status
+                 FROM class_requests r LEFT JOIN users a ON a.id=r.created_by LEFT JOIN users i ON i.id=r.claimed_by
+                 LEFT JOIN classes cl ON cl.id=r.class_id
+                 WHERE r.status!='closed' OR r.closed_at>=? ORDER BY r.status='open' DESC, r.id DESC""",
+                 ((datetime.datetime.now()-datetime.timedelta(days=30)).isoformat(timespec="seconds"),)).fetchall()]
+            c.close()
+            if u["role"] != "admin":
+                rows = [r for r in rows if r["status"] == "open" or r["claimed_by"] == u["id"]]
+            return self.send_json({"requests": rows})
         if p == "/api/calendar/review":
             u = self.require("admin")
             if not u: return
@@ -2795,7 +2875,14 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/classes/mine":
             u = self.require("instructor")
             if not u: return
-            return self.send_json({"classes": self._classes("WHERE c.instructor_id=? ", (u["id"],))})
+            rows = self._classes("WHERE c.instructor_id=? ", (u["id"],))
+            for cl in rows:
+                ses = _class_sessions_local(cl)
+                cl["cal_start"] = ses[0][0].strftime("%Y%m%dT%H%M%S") if ses else None
+                cl["cal_end"] = ses[0][1].strftime("%Y%m%dT%H%M%S") if ses else None
+                d = _class_date(cl); cl["sort_key"] = d.isoformat() if d else "9999"
+            rows.sort(key=lambda x: (x["sort_key"], x.get("id") or 0))
+            return self.send_json({"classes": rows})
         if p == "/api/classes/all":
             u = self.require("admin")
             if not u: return
@@ -3457,6 +3544,63 @@ class H(http.server.BaseHTTPRequestHandler):
                 saved.append({"name": name, "link": res.get("link")})
             return self.send_json({"ok": bool(saved), "saved": saved, "failed": failed,
                                    "folder": (res.get("folder") if saved else None)})
+        if p == "/api/requests":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            title = (b.get("title") or "").strip()[:120]
+            if len(title) < 3: return self.send_json({"error":"Give the request a short title, like 'Kids pottery'."},400)
+            c = db()
+            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created)
+                         VALUES(?,?,?,?,?,'open',?,?)""",
+                      (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
+                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now()))
+            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            instructors = emails_for(c, "WHERE role='instructor'")
+            c.commit(); c.close()
+            if b.get("notify", True) and instructors:
+                mailer.send(instructors, f"The Gibby is looking for: {title}",
+                    f"Hello,\n\nThe Gibby would love someone to teach this:\n\n  {title}\n"
+                    + (f"  When: {b.get('when_text')}\n" if b.get("when_text") else "")
+                    + (f"  Room: {b.get('room')}\n" if b.get("room") else "")
+                    + (f"  Ages: {b.get('ages')}\n" if b.get("ages") else "")
+                    + (f"\n{b.get('notes').strip()}\n" if (b.get("notes") or "").strip() else "")
+                    + f"\nIf that is you, open the app and press Claim on the request. It pre-fills a class "
+                    f"proposal so you only pick the time and add your details: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
+            return self.send_json({"ok":True, "id":rid, "emailed":len(instructors)})
+        mrq = re.match(r"^/api/requests/(\d+)/(claim|close|reopen)$", p)
+        if mrq:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            rid, action = int(mrq.group(1)), mrq.group(2); c = db()
+            row = c.execute("SELECT * FROM class_requests WHERE id=?", (rid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            row = dict(row)
+            if action in ("close", "reopen"):
+                if u["role"] != "admin": c.close(); return self.send_json({"error":"forbidden"},403)
+                c.execute("UPDATE class_requests SET status=?, closed_at=? WHERE id=?",
+                          ("closed" if action == "close" else "open", now() if action == "close" else None, rid))
+                c.commit(); c.close(); return self.send_json({"ok":True})
+            # claim: make a pre-filled draft for this instructor and hand it back
+            if row["status"] != "open":
+                c.close(); return self.send_json({"error":"Someone already claimed this one."},409)
+            n = c.execute("SELECT COUNT(*) FROM drafts WHERE instructor_id=? AND deleted_at IS NULL",(u["id"],)).fetchone()[0]
+            if n >= 20: c.close(); return self.send_json({"error":"You have 20 drafts already. Delete one first."},400)
+            payload = {"title": row["title"], "description": row.get("notes") or "", "room": row.get("room") or "",
+                       "age_range": row.get("ages") or "", "slot_ids": [], "request_id": rid}
+            c.execute("""INSERT INTO drafts(instructor_id,title,payload,slot_ids,slot_date,slot_time,room,is_series,session_count,created,updated)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                      (u["id"], row["title"], json.dumps(payload), "[]", None, None, row.get("room") or "", 0, 1, now(), now()))
+            did = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            c.execute("UPDATE class_requests SET status='claimed', claimed_by=?, claimed_at=?, draft_id=? WHERE id=?",
+                      (u["id"], now(), did, rid))
+            admins = emails_for(c, "WHERE role='admin'")
+            c.commit(); c.close()
+            if admins:
+                mailer.send(admins, f"{u['name']} claimed a class request: {row['title']}",
+                    f"{u['name']} claimed \"{row['title']}\" from the requests board and is working on the proposal. "
+                    f"You will see it in Approvals when it is submitted.\n\n{mailer.APP_URL}")
+            return self.send_json({"ok":True, "draft_id":did})
         if p == "/api/calendar/delete":
             # Admin removes calendar events they ticked on the review screen.
             # Only ids that the review just listed as unmatched are accepted.
@@ -3937,6 +4081,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("draft_id"):        # the proposal is submitted; retire its draft
                 c.execute("UPDATE drafts SET deleted_at=? WHERE id=? AND instructor_id=?",
                           (now(), b["draft_id"], u["id"]))
+                # A proposal born from the requests board closes the loop on that request.
+                c.execute("UPDATE class_requests SET class_id=?, status='claimed' WHERE draft_id=?", (new_id, b["draft_id"]))
             # Every OTHER admin hears about it; the submitter already knows.
             admins = [a for a in emails_for(c, "WHERE role='admin'")
                       if a.lower() != (u.get("email") or "").lower()]
