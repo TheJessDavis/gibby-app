@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.54.0-photo-social-queue"
+VERSION = "10.54.1-social-post-guard"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3701,8 +3701,10 @@ class H(http.server.BaseHTTPRequestHandler):
             cfg = integrations.load_config()
             try:
                 res = integrations.post_photo_to_facebook(cfg, message, raw)
+                if not res.get("ok"):
+                    raise RuntimeError(res.get("status") or res.get("error") or "not posted")
             except Exception as e:
-                c = db(); c.execute("UPDATE social_posts SET error=? WHERE id=?", (str(e)[:300], sid)); c.commit(); c.close()
+                c = db(); c.execute("UPDATE social_posts SET error=?, message=?, photo_id=? WHERE id=?", (str(e)[:300], message, pid, sid)); c.commit(); c.close()
                 return self.send_json({"error": f"Facebook did not take it: {e}"}, 502)
             c = db()
             c.execute("""UPDATE social_posts SET status='posted', message=?, photo_id=?, decided_by=?, decided_at=?, fb_post_id=?, error=NULL WHERE id=?""",
