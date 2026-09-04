@@ -9,7 +9,7 @@ approval). External posting (Eventbrite, Facebook, Instagram, Canva, Descene) an
 emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
-import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64
+import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64, html
 import integrations, mailer, gcal, pdfgen, threading, time, io
 PROCESS_STARTED = time.time()
 
@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.52.0-student-ratings"
+VERSION = "10.52.1-rating-page-fix"
 
 # ---------------------------------------------------------------- database ----
 def db():
