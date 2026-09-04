@@ -1016,7 +1016,7 @@ async function adminDashboard(){
       <div class="meta">Past classes that filled their seats. One tap copies everything into a fresh booking.</div></div></div>
       ${rr.map((c,i)=>`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
         <div style="font-weight:800;font-size:13.5px">${esc(c.title)}</div>
-        <div class="meta" style="margin-top:2px">${esc(c.instructor_name)} · filled ${c.enrolled} of ${c.max_p} seats · last ran ${esc(c.slot_date||'')}</div>
+        <div class="meta" style="margin-top:2px">${esc(c.instructor_name)} · filled ${c.enrolled} of ${c.max_p} seats${c.rating_n?` · \u2605 ${c.rating_avg} (${c.rating_n})`:''} · last ran ${esc(c.slot_date||'')}</div>
         <button class="btn dark" style="margin-top:8px" onclick="rerunClass(${i})">Run it again</button></div>`).join('')}</div>`:''}
     <label>Pending approval (${d.pending.length})</label>
     ${d.pending.map(c=>`<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill pend">pending</span></div>
@@ -2305,6 +2305,7 @@ function cardCls(c){
       <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
+      ${c.rating_n?`<div class="meta" style="margin-top:6px"><b style="color:#B4761A">\u2605 ${c.rating_avg}</b> from ${c.rating_n} student${c.rating_n===1?'':'s'}${(c.rating_comments||[]).length?`<div style="margin-top:4px">${c.rating_comments.slice(0,3).map(x=>`<div style="border-left:3px solid var(--line);padding-left:8px;margin-top:4px">\u201c${esc(x.text)}\u201d</div>`).join('')}${c.rating_comments.length>3?`<div class="hint">and ${c.rating_comments.length-3} more</div>`:''}</div>`:''}</div>`:''}
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
       ${c.cal_start?`<div class="two" style="margin-top:8px">

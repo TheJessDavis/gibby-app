@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.51.0-requests-board-ics"
+VERSION = "10.52.0-student-ratings"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,11 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    if not c.execute("SELECT 1 FROM meta WHERE k='feedback_secret'").fetchone():
+        c.execute("INSERT INTO meta(k,v) VALUES('feedback_secret',?)", (secrets.token_hex(24),))
+    c.execute("""CREATE TABLE IF NOT EXISTS student_ratings(
+        id INTEGER PRIMARY KEY, class_id INTEGER, token TEXT UNIQUE, email TEXT, rating INTEGER,
+        comment TEXT, created TEXT, updated TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS class_requests(
         id INTEGER PRIMARY KEY, title TEXT, notes TEXT, room TEXT, ages TEXT, when_text TEXT,
         status TEXT DEFAULT 'open', created_by INTEGER, created TEXT,
@@ -1315,6 +1320,37 @@ def class_ics(cls):
     lines.append("END:VCALENDAR")
     return "\r\n".join(lines) + "\r\n"
 
+_FEEDBACK_SECRET = None
+def feedback_secret():
+    """Created once at startup (init_db); cached so no write ever happens inside
+    another connection's transaction."""
+    global _FEEDBACK_SECRET
+    if not _FEEDBACK_SECRET:
+        _FEEDBACK_SECRET = _meta_get("feedback_secret") or hashlib.sha256(("fb:" + SEED_PW).encode()).hexdigest()
+    return _FEEDBACK_SECRET
+
+def feedback_token(class_id, email):
+    """A per-student link key: no login, nothing guessable, tied to this class."""
+    import hmac, hashlib
+    return hmac.new(feedback_secret().encode(), f"{class_id}:{(email or '').strip().lower()}".encode(), hashlib.sha256).hexdigest()[:20]
+
+def feedback_link(class_id, email):
+    return f"{mailer.APP_URL}/feedback?c={class_id}&t={feedback_token(class_id, email)}"
+
+def class_ratings(c, class_ids):
+    """{class_id: {"avg": 4.6, "n": 7, "comments": [...]}} for the ids given."""
+    if not class_ids: return {}
+    q = ",".join("?" * len(class_ids))
+    out = {}
+    for r in c.execute(f"SELECT class_id, rating, comment, created FROM student_ratings WHERE class_id IN ({q}) AND rating IS NOT NULL", list(class_ids)):
+        d = out.setdefault(r["class_id"], {"sum": 0, "n": 0, "comments": []})
+        d["sum"] += r["rating"]; d["n"] += 1
+        if (r["comment"] or "").strip(): d["comments"].append({"text": r["comment"].strip()[:400], "rating": r["rating"], "when": (r["created"] or "")[:10]})
+    for cid, d in out.items():
+        d["avg"] = round(d["sum"] / d["n"], 1) if d["n"] else None
+        del d["sum"]
+    return out
+
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
     moment failing, and backfills contracts signed before this feature existed."""
@@ -1789,6 +1825,9 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
                     f"----\nSent through The Gibby Class Manager. Reply to reach your instructor directly.")
         else:
             subj, body = after_class_email(cls, first, attended, note, iname)
+        if email_type == "followup":
+            body = body.replace("\n\nSee you at The Gibby,",
+                f"\n\nHow was it? Tap a star to tell us (takes ten seconds): {feedback_link(cid, p['email'])}\n\nSee you at The Gibby,", 1)
         kw = {"reply_to": instr["email"], "from_name": f"{iname} via The Gibby"} if (note.strip() and instr and instr["email"]) else {}
         if mailer.send(p["email"], subj, body, cfg, **kw): ok += 1
     c.execute("UPDATE email_log SET delivered=? WHERE class_id=? AND email_type=?",
@@ -2184,6 +2223,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/embed": return self.embed_page()
         if p == "/embed.json": return self.embed_json()
         if p == "/notify": return self.notify_page()
+        if p == "/feedback": return self.feedback_page()
         if p == "/unsubscribe": return self.unsubscribe_page()
         if p.startswith("/class-ics/"): return self.class_ics_dl(p)
         if p.startswith("/class-photo/"): return self.class_photo(p)
@@ -2301,6 +2341,28 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Content-Length", str(len(html)))
         self.end_headers(); self.wfile.write(html)
+
+    def feedback_page(self):
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        cid = (qs.get("c") or [""])[0]; tok = (qs.get("t") or [""])[0]
+        c = db(); row = c.execute("SELECT id,title FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+        prev = c.execute("SELECT rating, comment FROM student_ratings WHERE token=?", (tok,)).fetchone() if tok else None
+        c.close()
+        if not row or not tok:
+            return self._tiny_page("Gibby Center for the Arts", "<h1>That link has expired</h1><p>Please use the link from your email.</p>")
+        title = html.escape(row["title"]); cur = (prev["rating"] if prev else 0) or 0
+        stars = "".join(f"<button type='button' class='st{' on' if i <= cur else ''}' data-v='{i}' aria-label='{i} star{'s' if i > 1 else ''}'>&#9733;</button>" for i in range(1, 6))
+        return self._tiny_page(f"How was {title}?",
+            f"<h1>How was {title}?</h1><p>Tap a star. A sentence about what you loved or what we could do better helps the next class.</p>"
+            f"<style>.st{{font-size:2.4rem;background:none;border:0;color:#ccc;cursor:pointer;padding:4px}}.st.on{{color:#E8A33D}}</style>"
+            f"<div id='stars'>{stars}</div>"
+            f"<textarea id='cm' rows='3' placeholder='Optional: a sentence about the class' style='width:100%;margin-top:10px'>{html.escape((prev['comment'] if prev else '') or '')}</textarea>"
+            f"<button id='send' style='margin-top:10px'>Send</button>"
+            f"<div class='ok' id='done' style='display:none'>Thank you! We read every one.</div>"
+            f"<script>var v={cur};document.querySelectorAll('.st').forEach(function(b){{b.onclick=function(){{v=+b.dataset.v;document.querySelectorAll('.st').forEach(function(x){{x.classList.toggle('on',+x.dataset.v<=v)}})}}}});"
+            f"document.getElementById('send').onclick=function(){{if(!v){{alert('Tap a star first.');return}}this.disabled=true;"
+            f"fetch('/api/feedback',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{c:'{html.escape(cid)}',t:'{html.escape(tok)}',rating:v,comment:document.getElementById('cm').value}})}})"
+            f".then(function(r){{return r.json()}}).then(function(d){{document.getElementById('done').style.display='block'}})}}</script>")
 
     def notify_page(self):
         self._tiny_page("Get notified - Gibby Center for the Arts",
@@ -3037,6 +3099,17 @@ class H(http.server.BaseHTTPRequestHandler):
         return rows
 
     def _classes(self, where, args=()):
+        rows = self._classes_raw(where, args)
+        try:
+            c = db(); rt = class_ratings(c, [r["id"] for r in rows]); c.close()
+            for r in rows:
+                d = rt.get(r["id"]); r["rating_avg"] = d["avg"] if d else None; r["rating_n"] = d["n"] if d else 0
+                r["rating_comments"] = d["comments"] if d else []
+        except Exception as e:
+            print("[feedback] could not attach ratings:", e)
+        return rows
+
+    def _classes_raw(self, where, args=()):
         c = db()
         rows = c.execute(f"""SELECT c.*, u.name AS instructor_name, ra.name AS reviewing_admin_name,
                              f.enrollment AS fb_enrollment, f.materials AS fb_materials,
@@ -3713,6 +3786,28 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             return self.send_json(integrations.facebook_check(integrations.load_config()))
+        if p == "/api/feedback":
+            # PUBLIC: a student rates a class through the link in their email.
+            # The token proves they were on that class's list; nothing else is trusted.
+            b = self.read_json()
+            try: cid = int(b.get("c") or 0)
+            except Exception: cid = 0
+            tok = str(b.get("t") or "")[:40]
+            try: rating = int(b.get("rating") or 0)
+            except Exception: rating = 0
+            comment = (b.get("comment") or "").strip()[:400]
+            if not (cid and tok and 1 <= rating <= 5): return self.send_json({"error":"bad request"},400)
+            c = db()
+            row = c.execute("SELECT id FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            emails = [r["email"] for r in c.execute("SELECT email FROM registrations WHERE class_id=? AND refunded=0", (cid,))]
+            who = next((e for e in emails if e and feedback_token(cid, e) == tok), None)
+            if not who: c.close(); return self.send_json({"error":"that link is not valid"},403)
+            c.execute("""INSERT INTO student_ratings(class_id,token,email,rating,comment,created,updated) VALUES(?,?,?,?,?,?,?)
+                         ON CONFLICT(token) DO UPDATE SET rating=excluded.rating, comment=excluded.comment, updated=excluded.updated""",
+                      (cid, tok, who, rating, comment, now(), now()))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/notify-signup":
             # PUBLIC: the /notify interest form. Store-and-thank, nothing else.
             b = self.read_json()
