@@ -1634,6 +1634,18 @@ async function refileContracts(){
   const r=await api('/api/admin/refile-contracts','POST',{});
   alert('Re-filing '+r.refiling+' contract'+(r.refiling===1?'':'s')+' as PDFs. They appear in the Gibby Contracts folder within a minute or two.\n\nThe old .html copies stay put; delete them from Drive whenever you like.');
 }
+function pickSocialPhoto(sid, pid, img){
+  const card=$('#sp'+sid); card.querySelectorAll('img[data-pid]').forEach(i=>i.style.borderColor='transparent'); img.style.borderColor='#2B4C7E';
+  const r=card.querySelector('input[name="spp'+sid+'"][value="'+pid+'"]'); if(r) r.checked=true;
+}
+async function socialAct(id, action){
+  const card=$('#sp'+id); const pick=card.querySelector('input[name="spp'+id+'"]:checked');
+  if(action==='post' && !confirm('Post this photo and caption to the Gibby Facebook Page now?')) return;
+  const r=await api('/api/social/'+id+'/'+action,'POST',{message:$('#spm'+id).value, photo_id: pick?+pick.value:null});
+  if(r.error){ alert(r.error); return; }
+  if(action==='post') alert(r.facebook&&r.facebook.status?('Done: '+r.facebook.status):'Posted.');
+  adminMarketing();
+}
 async function reimbAct(id, action){
   let note='';
   if(action==='decline'){ note=prompt('Why? (the instructor sees this)'); if(note===null) return; }
@@ -1728,7 +1740,19 @@ async function adminMarketing(){
     return `${c.title}\n${c.slot_date}${c.class_time?' · '+c.class_time:''}${c.donation_based?' · Donation-based':(c.ticket_price?' · $'+c.ticket_price:'')}\n${url}`;
   }).join('\n\n');
   const draft = `Hi from the Gibby Center for the Arts!\n\nNew art workshops are open for registration:\n\n${lines}\n\nSee everything coming up: https://theeverett.org/artworkshops\n\nSee you at The Gibby!`;
+  let social={posts:[],live:false}; try{ social=await api('/api/social'); }catch(_){}
+  const drafts=(social.posts||[]).filter(p=>p.status==='draft'), done=(social.posts||[]).filter(p=>p.status!=='draft');
   $('#tab').innerHTML = `<h2>Class <em>announcements</em></h2>
+    ${drafts.length?`<label>Photo posts waiting for your approval (${drafts.length})</label>
+      <p class="sub" style="margin-top:2px">Instructors uploaded photos. Nothing goes to Facebook until you press Approve.${social.live?'':' Posting is in dry-run right now, so Approve only records it.'}</p>
+      ${drafts.map(p=>`<div class="card" id="sp${p.id}"><div class="row"><div><h3 style="font-size:1rem">${esc(p.class_title)}</h3>
+          <div class="meta">${esc(p.instructor_name||'')} \u00b7 ${esc(p.slot_date||'')}${p.error?` \u00b7 <span style="color:#B45309">last try: ${esc(p.error)}</span>`:''}</div></div></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${(p.photos||[]).map(ph=>`<label style="margin:0"><input type="radio" name="spp${p.id}" value="${ph.id}" ${ph.id===p.photo_id?'checked':''} style="display:none">
+            <img src="${ph.thumb||''}" alt="" data-pid="${ph.id}" onclick="pickSocialPhoto(${p.id},${ph.id},this)" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:3px solid ${ph.id===p.photo_id?'#2B4C7E':'transparent'};cursor:pointer"></label>`).join('')}</div>
+        <label style="margin-top:8px">Caption</label><textarea id="spm${p.id}" rows="4">${esc(p.message||'')}</textarea>
+        <div class="two" style="margin-top:10px"><button class="btn warn" onclick="socialAct(${p.id},'decline')">Not this one</button>
+          <button class="btn green" onclick="socialAct(${p.id},'post')">Approve &amp; post to Facebook</button></div></div>`).join('')}`:''}
+    ${done.length?`<label style="margin-top:14px">Recent photo posts</label>${done.map(p=>`<div class="card"><b>${esc(p.class_title)}</b><div class="meta">${p.status==='posted'?'Posted':'Declined'} ${esc((p.decided_at||'').slice(0,10))} by ${esc(p.decided_by_name||'')}</div></div>`).join('')}`:''}
     <p class="sub">One email to everyone who has ever taken a class, plus the notify-me list. You press the button; nothing sends on its own.</p>
     <div class="card">
       <div class="row"><h3 style="font-size:1rem">Your audience</h3><span class="pill appr">${d.audience} people</span></div>
@@ -2596,7 +2620,7 @@ async function photosInner(id){
       <div class="meta" style="margin-top:6px">${ph.length} photo${ph.length===1?'':'s'} on Drive${d.folder?` · <a href="${d.folder}" target="_blank" rel="noopener">open the folder</a>`:''}</div>`
       :'<div class="meta">No photos yet.</div>'}
     <input type="file" id="pf${id}" accept="image/*" multiple style="margin-top:8px" onchange="uploadPhotos(${id})">
-    <div class="hint">Pick up to 12 photos from the class. They are resized on your phone and filed in the Gibby Class Photos folder on Drive.</div>
+    <div class="hint">Pick up to 12 photos from the class. They are resized on your phone and filed in the Gibby Class Photos folder on Drive. The Gibby may share one on Facebook after an admin approves it.</div>
     <div id="pfstat${id}" class="meta"></div></div>`;
 }
 function shrinkImage(file, maxSide, quality){
@@ -2615,7 +2639,7 @@ async function uploadPhotos(id){
   const photos=[];
   for(let i=0;i<files.length;i++){
     st.textContent='Preparing photo '+(i+1)+' of '+files.length+'…';
-    try{ photos.push({name:files[i].name, mime:'image/jpeg', b64:await shrinkImage(files[i],1600,0.85), thumb:await shrinkImage(files[i],320,0.7)}); }
+    try{ photos.push({name:files[i].name, mime:'image/jpeg', b64:await shrinkImage(files[i],1600,0.85), thumb:await shrinkImage(files[i],320,0.7), social:await shrinkImage(files[i],1000,0.8)}); }
     catch(e){ st.textContent=e.message; return; }
   }
   st.textContent='Sending '+photos.length+' photo'+(photos.length===1?'':'s')+' to Drive…';

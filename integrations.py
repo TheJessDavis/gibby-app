@@ -895,6 +895,28 @@ def post_facebook(cls, cfg, link=None):
             detail = f"Facebook returned HTTP {e.code}"
         raise RuntimeError(detail)
 
+def post_photo_to_facebook(cfg, caption, jpeg_bytes):
+    """A Page photo post from raw JPEG bytes (after-class photos). Dry-run when
+    posting is not live, like every other outbound call."""
+    if not (cfg["fb_page_id"] and cfg["fb_page_token"]):
+        return _no("skipped: no Facebook config")
+    if not cfg["live"]:
+        return _ok("fb-dryrun", "dry-run (photo post)")
+    try:
+        page_tok = _fb_page_token(cfg)
+        body = _multipart_post(f"https://graph.facebook.com/v23.0/{cfg['fb_page_id']}/photos",
+                               {"caption": caption, "published": "true", "access_token": page_tok},
+                               "source", "class-photo.jpg", jpeg_bytes)
+        res = json.loads(body.decode() or "{}")
+        return _ok(res.get("post_id") or res.get("id"), "posted to the Facebook Page")
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode()).get("error") or {}
+            detail = f"Facebook said: {err.get('message')} (code {err.get('code')})"
+        except Exception:
+            detail = f"Facebook returned HTTP {e.code}"
+        raise RuntimeError(detail)
+
 def promote_facebook(cls, cfg):
     """The dashboard's Promote button: a short 'spots still open' booster post
     on the Page, distinct from the original announcement. Uses the same poster

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.53.0-reimbursements"
+VERSION = "10.54.0-photo-social-queue"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -198,9 +198,14 @@ def init_db():
         id INTEGER PRIMARY KEY, title TEXT, notes TEXT, room TEXT, ages TEXT, when_text TEXT,
         status TEXT DEFAULT 'open', created_by INTEGER, created TEXT,
         claimed_by INTEGER, claimed_at TEXT, draft_id INTEGER, class_id INTEGER, closed_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS social_posts(
+        id INTEGER PRIMARY KEY, class_id INTEGER, photo_id INTEGER, message TEXT, status TEXT DEFAULT 'draft',
+        created_by INTEGER, created TEXT, decided_by INTEGER, decided_at TEXT, fb_post_id TEXT, error TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS class_photos(
         id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, drive_id TEXT, drive_link TEXT,
         folder_link TEXT, filename TEXT, thumb TEXT, created TEXT)""")
+    try: c.execute("ALTER TABLE class_photos ADD COLUMN social TEXT")
+    except Exception: pass
     for col in ("promoted","reminded","followed_up","low_alerted"):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
@@ -1192,6 +1197,23 @@ def resend_unsigned_contract_emails():
         else:
             failed.append(f"{cls['title']} ({instr['email']})")
     return {"sent": sent, "failed": failed, "error": ("" if not failed else mailer.LAST_ERROR)}
+
+def social_draft_message(cls, instructor_name=""):
+    ts = thanks_settings()
+    who = f" Thanks to {instructor_name.split(' ')[0]} for leading it." if instructor_name else ""
+    return (f"Look what happened at {cls.get('title','our class')} this week at The Gibby!{who}\n\n"
+            f"Every class is hands-on, beginner-friendly, and all materials are included. "
+            f"See what is coming up: {ts['upcoming_url']}")
+
+def ensure_social_draft(c, cls, photo_id, user_id):
+    """One draft per class, created the first time photos arrive. Nothing is
+    posted until an admin approves it on the Marketing tab."""
+    if c.execute("SELECT 1 FROM social_posts WHERE class_id=?", (cls["id"],)).fetchone():
+        return None
+    instr = c.execute("SELECT name FROM users WHERE id=?", (cls.get("instructor_id"),)).fetchone()
+    c.execute("""INSERT INTO social_posts(class_id,photo_id,message,status,created_by,created) VALUES(?,?,?,'draft',?,?)""",
+              (cls["id"], photo_id, social_draft_message(cls, instr["name"] if instr else ""), user_id, now()))
+    return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
 def push_photo_to_drive(cls, filename, b64, mime="image/jpeg"):
     """File one after-class photo under Gibby Class Photos/<class title> on Drive
@@ -2832,6 +2854,19 @@ class H(http.server.BaseHTTPRequestHandler):
             failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
             c.close()
             return self.send_json({"needs_you": needs, "failed": failed})
+        if p == "/api/social":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            since = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat(timespec="seconds")
+            rows = [dict(r) for r in c.execute("""SELECT sp.*, cl.title AS class_title, cl.slot_date, us.name AS instructor_name,
+                 ad.name AS decided_by_name FROM social_posts sp JOIN classes cl ON cl.id=sp.class_id
+                 LEFT JOIN users us ON us.id=cl.instructor_id LEFT JOIN users ad ON ad.id=sp.decided_by
+                 WHERE sp.status='draft' OR sp.decided_at>=? ORDER BY sp.status='draft' DESC, sp.id DESC""", (since,)).fetchall()]
+            for r in rows:
+                r["photos"] = [dict(x) for x in c.execute("SELECT id, thumb, filename FROM class_photos WHERE class_id=? ORDER BY id", (r["class_id"],))]
+            c.close()
+            return self.send_json({"posts": rows, "live": bool(integrations.load_config().get("live"))})
         if p == "/api/reimbursements":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3628,13 +3663,53 @@ class H(http.server.BaseHTTPRequestHandler):
                 except Exception as e:
                     failed.append(f"{name}: {e}"); continue
                 thumb = (ph.get("thumb") or "")[:60000]
+                social = (ph.get("social") or "")[:400000]
                 c = db()
-                c.execute("""INSERT INTO class_photos(class_id,user_id,drive_id,drive_link,folder_link,filename,thumb,created)
-                             VALUES(?,?,?,?,?,?,?,?)""", (cid, u["id"], res.get("id"), res.get("link"), res.get("folder"), name, thumb, now()))
+                c.execute("""INSERT INTO class_photos(class_id,user_id,drive_id,drive_link,folder_link,filename,thumb,social,created)
+                             VALUES(?,?,?,?,?,?,?,?,?)""", (cid, u["id"], res.get("id"), res.get("link"), res.get("folder"), name, thumb, social, now()))
+                pid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+                try: ensure_social_draft(c, cls, pid, u["id"])
+                except Exception as e: print("[social] draft not created:", e)
                 c.commit(); c.close()
                 saved.append({"name": name, "link": res.get("link")})
             return self.send_json({"ok": bool(saved), "saved": saved, "failed": failed,
                                    "folder": (res.get("folder") if saved else None)})
+        msp = re.match(r"^/api/social/(\d+)/(post|decline)$", p)
+        if msp:
+            # The only place a class photo reaches Facebook: an admin pressing Approve.
+            u = self.require("admin")
+            if not u: return
+            sid, action = int(msp.group(1)), msp.group(2); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM social_posts WHERE id=?", (sid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            row = dict(row)
+            if row["status"] != "draft": c.close(); return self.send_json({"error":"That one was already handled."},409)
+            if action == "decline":
+                c.execute("UPDATE social_posts SET status='declined', decided_by=?, decided_at=? WHERE id=?", (u["id"], now(), sid))
+                c.commit(); c.close(); return self.send_json({"ok":True, "status":"declined"})
+            message = (b.get("message") or row["message"] or "").strip()[:2000]
+            pid = int(b.get("photo_id") or row["photo_id"] or 0)
+            ph = c.execute("SELECT * FROM class_photos WHERE id=? AND class_id=?", (pid, row["class_id"])).fetchone()
+            if not ph or not (ph["social"] or ph["thumb"]):
+                c.close(); return self.send_json({"error":"Pick a photo first."},400)
+            data_url = ph["social"] or ph["thumb"]
+            try:
+                raw = base64.b64decode(data_url.split(",",1)[1] if "," in data_url[:40] else data_url)
+            except Exception:
+                c.close(); return self.send_json({"error":"That photo could not be read."},400)
+            c.close()
+            cfg = integrations.load_config()
+            try:
+                res = integrations.post_photo_to_facebook(cfg, message, raw)
+            except Exception as e:
+                c = db(); c.execute("UPDATE social_posts SET error=? WHERE id=?", (str(e)[:300], sid)); c.commit(); c.close()
+                return self.send_json({"error": f"Facebook did not take it: {e}"}, 502)
+            c = db()
+            c.execute("""UPDATE social_posts SET status='posted', message=?, photo_id=?, decided_by=?, decided_at=?, fb_post_id=?, error=NULL WHERE id=?""",
+                      (message, pid, u["id"], now(), res.get("id") or "", sid))
+            c.commit(); c.close()
+            print(f"[social] {u['email']} approved photo post for class #{row['class_id']}: {res.get('status')}")
+            return self.send_json({"ok":True, "status":"posted", "facebook": res})
         mrb = re.match(r"^/api/classes/(\d+)/reimburse$", p)
         if mrb:
             # Instructor asks to be paid back for supplies: amount, what for, receipt photo.
