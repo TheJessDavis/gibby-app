@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.50.0-calendar-review"
+VERSION = "10.50.1-mail-retry"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1255,7 +1255,10 @@ def calendar_review():
         if not match:
             best, score = None, 0.0
             for cl in by_day.get(day, []):
-                sc = difflib.SequenceMatcher(None, _norm_title(title), _norm_title(cl["title"])).ratio()
+                a, b2 = _norm_title(title), _norm_title(cl["title"])
+                sc = difflib.SequenceMatcher(None, a, b2).ratio()
+                # "Paint Your Pet: Acrylic Pet Portrait Workshop" contains "paint your pet"
+                if b2 and len(b2) >= 8 and (b2 in a or a in b2): sc = max(sc, 0.9)
                 if sc > score: best, score = cl, sc
             if best and score >= 0.45:
                 match, how = best, f"same day, title {int(score*100)}% similar"

@@ -9,7 +9,7 @@ not sent, so the app is safe to run with no mail account.
 All mail is from gibby@theeverett.org. Going live also requires SPF/DKIM/DMARC
 records on theeverett.org, or messages will be marked as spam.
 """
-import smtplib, ssl, json, os, base64, urllib.request
+import smtplib, ssl, json, os, base64, time, urllib.request, urllib.error
 from email.message import EmailMessage
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -77,8 +77,18 @@ def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from
         if reply_to: payload["replyTo"] = reply_to
         req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            raw = r.read().decode("utf-8", "replace")
+        raw = None
+        for attempt in (1, 2):      # Apps Script occasionally answers 404/5xx for one call; try twice
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    raw = r.read().decode("utf-8", "replace")
+                break
+            except urllib.error.HTTPError as e:
+                if attempt == 2 or e.code not in (404, 429, 500, 502, 503, 504): raise
+                print(f"[email] bridge answered {e.code}; retrying once"); time.sleep(3)
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                if attempt == 2: raise
+                print(f"[email] bridge unreachable ({e}); retrying once"); time.sleep(3)
         _check_bridge_reply(raw)
     return True
 
@@ -153,7 +163,9 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
         except Exception as e:
             errors.append(f"SMTP: {type(e).__name__}: {e}")
             print(f"[email] smtp FAILED to={recips} subject={subject!r} error={e}")
-    LAST_ERROR = " | ".join(errors) or "no email route is configured"
+    import datetime as _dt
+    LAST_ERROR = (f"{_dt.datetime.now().strftime('%b %d %I:%M %p')} · to {', '.join(recips)} · \"{subject}\" · "
+                  + (" | ".join(errors) or "no email route is configured"))
     return False
 
 # ------------------------------------------------------------- templates ----
