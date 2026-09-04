@@ -1634,6 +1634,13 @@ async function refileContracts(){
   const r=await api('/api/admin/refile-contracts','POST',{});
   alert('Re-filing '+r.refiling+' contract'+(r.refiling===1?'':'s')+' as PDFs. They appear in the Gibby Contracts folder within a minute or two.\n\nThe old .html copies stay put; delete them from Drive whenever you like.');
 }
+async function reimbAct(id, action){
+  let note='';
+  if(action==='decline'){ note=prompt('Why? (the instructor sees this)'); if(note===null) return; }
+  const r=await api('/api/reimbursements/'+id+'/'+action,'POST',{note});
+  if(r.error){ alert(r.error); return; }
+  adminMoney();
+}
 async function saveThanks(){
   const r=await api('/api/admin/thanks-settings','POST',{google_url:$('#th_google').value, facebook_url:$('#th_fb').value,
     promo_code:$('#th_code').value, promo_pct:$('#th_pct').value, upcoming_url:$('#th_up').value});
@@ -1755,7 +1762,8 @@ async function markPaid(id, paid){
   renderAdmin('money');
 }
 async function adminMoney(){
-  const [d, integ] = await Promise.all([api('/api/report/money'), api('/api/integrations')]);
+  const [d, integ, rbd] = await Promise.all([api('/api/report/money'), api('/api/integrations'), api('/api/reimbursements').catch(()=>({reimbursements:[]}))]);
+  window.__reimb = rbd.reimbursements||[];
   const DRIVE = integ.drive || {};
   const t = d.totals;
   const league = (rows, unit) => rows.length ? rows.map((r,i)=>`<div class="lg">
@@ -1771,6 +1779,16 @@ async function adminMoney(){
        <div class="meta" style="margin-top:4px">Counted from the tracking tag on each Register link, reported back by Eventbrite.</div></div>`
     : '';
   $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
+    ${(function(){ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='requested'), appr=rs.filter(r=>r.status==='approved');
+      const row=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">$${(+r.amount).toFixed(2)} \u00b7 ${esc(r.instructor_name)}</h3>
+          <div class="meta">${esc(r.class_title)} \u00b7 ${esc(r.slot_date||'')} \u00b7 ${esc(r.note||'')}</div>
+          ${r.receipt_link?`<a class="meta" href="${r.receipt_link}" target="_blank" rel="noopener">View receipt</a>`:'<div class="meta">No receipt photo</div>'}</div>
+          ${r.receipt_thumb?`<img src="${r.receipt_thumb}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">`:''}</div>
+        <div class="two" style="margin-top:10px">
+          ${r.status==='requested'?`<button class="btn warn" onclick="reimbAct(${r.id},'decline')">Decline</button><button class="btn green" onclick="reimbAct(${r.id},'approve')">Approve</button>`
+            :`<span class="meta">Approved ${esc((r.decided_at||'').slice(0,10))}</span><button class="btn dark" onclick="reimbAct(${r.id},'paid')">Mark paid</button>`}</div></div>`;
+      return (open.length||appr.length)?`<label>Supply reimbursements (${open.length} waiting${appr.length?', '+appr.length+' approved, unpaid':''})</label>
+        ${open.map(row).join('')}${appr.map(row).join('')}`:''; })()}
     <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.
       ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>
     ${chanRow}
@@ -2308,6 +2326,8 @@ function cardCls(c){
       ${c.rating_n?`<div class="meta" style="margin-top:6px"><b style="color:#B4761A">\u2605 ${c.rating_avg}</b> from ${c.rating_n} student${c.rating_n===1?'':'s'}${(c.rating_comments||[]).length?`<div style="margin-top:4px">${c.rating_comments.slice(0,3).map(x=>`<div style="border-left:3px solid var(--line);padding-left:8px;margin-top:4px">\u201c${esc(x.text)}\u201d</div>`).join('')}${c.rating_comments.length>3?`<div class="hint">and ${c.rating_comments.length-3} more</div>`:''}</div>`:''}</div>`:''}
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="reimburseForm(${c.id})">\u{1F9FE} Get paid back for supplies</button>
+      <div id="rb${c.id}"></div>
       ${c.cal_start?`<div class="two" style="margin-top:8px">
         <a class="btn ghost" style="text-decoration:none;text-align:center" href="/class-ics/${c.id}.ics">\u{1F4C5} Add to calendar</a>
         <a class="btn ghost" style="text-decoration:none;text-align:center" target="_blank" rel="noopener" href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(c.title)}&dates=${c.cal_start}/${c.cal_end}&ctz=America/New_York&location=${encodeURIComponent('The Gibby, '+(c.room||''))}&details=${encodeURIComponent('Your class at The Gibby. Details and roster: '+location.origin)}">Google Calendar</a></div>
@@ -2546,6 +2566,26 @@ async function emailClass(id,kind){
 // Registration view: its own boundary, scoped to this class's roster container, so a
 // bad registration record cannot take down the class card or the list around it.
 function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
+function reimburseForm(id){
+  const box=$('#rb'+id); if(!box) return;
+  if(box.innerHTML){ box.innerHTML=''; return; }
+  box.innerHTML=`<div class="card" style="margin-top:8px">
+    <div class="two"><div><label>Amount you spent</label><input id="rba${id}" inputmode="decimal" placeholder="24.50"></div>
+      <div><label>Receipt photo</label><input type="file" id="rbf${id}" accept="image/*"></div></div>
+    <label>What was it for?</label><input id="rbn${id}" placeholder="e.g. clay and glaze from Michaels">
+    <button class="btn dark" style="margin-top:8px" onclick="sendReimburse(${id})">Send to the Gibby</button>
+    <div class="hint">The receipt is filed with your class photos on Drive. An admin approves it and it goes out with your next payment.</div>
+    <div id="rbs${id}" class="meta"></div></div>`;
+}
+async function sendReimburse(id){
+  const st=$('#rbs'+id); const f=$('#rbf'+id).files[0];
+  const body={amount:$('#rba'+id).value, note:$('#rbn'+id).value};
+  if(f){ st.textContent='Preparing the receipt…'; try{ body.b64=await shrinkImage(f,1600,0.85); body.thumb=await shrinkImage(f,320,0.7); }catch(e){ st.textContent=e.message; return; } }
+  st.textContent='Sending…';
+  const r=await api('/api/classes/'+id+'/reimburse','POST',body);
+  if(r.error){ st.textContent=r.error; return; }
+  alert('Sent. The Gibby will review it.'); $('#rb'+id).innerHTML='';
+}
 function viewPhotos(id){ return boundary('photos', '#photos'+id, ()=>photosInner(id), false); }
 async function photosInner(id){
   const d = await api('/api/classes/'+id+'/photos');
