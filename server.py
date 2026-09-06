@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.54.1-social-post-guard"
+VERSION = "10.55.0-admin-edits-notes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4812,6 +4812,17 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"That is not your class."},403)
             note = (b.get("note") or "").strip()
             cur = row["followup_status"] or ""
+            if u["role"] == "admin" and b.get("admin_edit"):
+                # Admin edits (or writes) the note before it goes out. Never triggers
+                # a send by itself; the morning send or "Send now" carries it.
+                if cur in ("sent", "sent_late", "sent_generic"):
+                    c.close(); return self.send_json({"error":"That note already went to the students."},409)
+                new_status = "ready" if len(note) >= 20 else ("awaiting_instructor" if cur in ("", "awaiting_instructor", "ready") else cur)
+                c.execute("UPDATE classes SET followup_note=?, followup_status=?, followup_submitted_at=COALESCE(followup_submitted_at, ?) WHERE id=?",
+                          (note, new_status, now() if new_status == "ready" else None, cid))
+                c.commit(); c.close()
+                print(f"[followup] admin {u['email']} edited the note for class #{cid}")
+                return self.send_json({"ok":True, "status":new_status})
             if b.get("save"):
                 c.execute("UPDATE classes SET followup_note=? WHERE id=?", (note, cid))
                 c.commit(); c.close()

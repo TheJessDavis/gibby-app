@@ -2071,8 +2071,13 @@ async function adminApprovals(){
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}.`
           : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
       </div>
-      ${c.note_written?`<div class="meta" style="margin-top:8px;white-space:pre-wrap;border-left:3px solid var(--line);padding-left:10px">${esc(c.followup_note||'')}</div>`:''}
-      ${!c.thanks_sent_at?`<button class="btn ghost" style="margin-top:10px" onclick="sendFollowup(${c.id})">Send now</button>`:''}
+      ${c.thanks_sent_at
+        ? (c.note_written?`<div class="meta" style="margin-top:8px;white-space:pre-wrap;border-left:3px solid var(--line);padding-left:10px">${esc(c.followup_note||'')}</div>`:'')
+        : `<label style="margin-top:10px">${c.note_written?"The instructor's note (edit if you need to)":"No note yet. Write one here, or leave it blank and The Gibby's thank-you goes alone"}</label>
+           <textarea id="fa${c.id}" rows="4">${esc(c.followup_note||'')}</textarea>
+           <div class="hint">Goes out in ${esc(c.instructor_name||'the instructor')}'s name on the scheduled morning, or now with Send now.</div>
+           <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="saveAdminNote(${c.id})">Save note</button>
+             <button class="btn dark" onclick="sendFollowup(${c.id})">Send now</button></div>`}
     </div>`).join('') || '<div class="muted">No classes have finished recently.</div>'}`;
   // If a publish is already running (e.g. after a reload, or another admin started
   // it), pick the live status back up instead of showing a stale idle card.
@@ -2105,7 +2110,16 @@ async function saveFollowup(id, save){
       : 'Saved. It goes to your students tomorrow morning, in your name.');
   instrMine();
 }
+async function saveAdminNote(id){
+  const r = await api('/api/classes/'+id+'/followup-note','POST',{note:$('#fa'+id).value, admin_edit:true});
+  if(r.error){ alert(r.error); return; }
+  alert(r.status==='ready' ? 'Saved. It goes out with the thank-you.' : 'Saved as a draft. Notes under 20 characters are not sent.');
+  adminApprovals();
+}
 async function sendFollowup(id){
+  const ta=$('#fa'+id);
+  if(ta){ const s=await api('/api/classes/'+id+'/followup-note','POST',{note:ta.value, admin_edit:true}); if(s.error){ alert(s.error); return; } }
+  if(!confirm('Send the after-class email to the students now?')) return;
   const r = await api('/api/classes/'+id+'/followup-send','POST',{});
   if(!r.ok){ alert('Not sent.\n\n'+r.reason); return; }
   alert(`Sent to ${r.sent_to} student${r.sent_to===1?'':'s'}.\n\n`
