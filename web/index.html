@@ -2821,7 +2821,7 @@ function calendarPickerHTML(slots){
 
 /* Classes other teaching artists have opened up: resident teaching artists take them free,
    no paying seat used. Populated by the yes/no question on the class form. */
-let EB={template:'before', class_id:null, audience:'class', features:[]};
+let EB={template:'before', class_id:null, audience:'class', features:[], touched:false};
 async function instrEmail(){
   const mine=(await api('/api/classes/mine')).classes.filter(c=>c.status==='approved');
   if(!mine.length){ alert('You need an approved class first.'); return; }
@@ -2829,16 +2829,18 @@ async function instrEmail(){
   const t=await api('/api/instructor-emails/template?class_id='+EB.class_id+'&template='+EB.template);
   if(t.error){ alert(t.error); return; }
   const cnt=t.audience_counts||{};
+  if(!EB.touched) EB.features=(t.auto_ids||[]).slice();   // next three classes, ticked by default
   const seg=(id,opts,cur,fn)=>`<div class="seg" id="${id}">${opts.map(([v,l])=>`<button class="${v===cur?'on':''}" onclick="${fn}('${v}')">${l}</button>`).join('')}</div>`;
-  const tick=(c,who)=>`<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" class="ebfeat" value="${c.id}" ${EB.features.includes(c.id)?'checked':''}><span>${esc(c.title)} <span class="meta">${esc(c.slot_date||'')}${who?' · '+esc(who):''}${c.price?' · $'+c.price:''}</span></span></label>`;
+  const tick=(c,who)=>`<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" class="ebfeat" value="${c.id}" ${EB.features.includes(c.id)?'checked':''} onchange="EB.touched=true;EB.features=[...document.querySelectorAll('.ebfeat:checked')].map(x=>+x.value)"><span>${esc(c.title)} <span class="meta">${esc(c.slot_date||'')}${who?' · '+esc(who):''}${c.price?' · $'+c.price:''}</span></span></label>`;
   $('#tab').innerHTML=`<h2>Email your <em>students</em></h2>
     <p class="sub">It goes out from The Gibby in your name, one copy per person, and replies come to you. The Gibby gets a copy too.</p>
     <label>Which email</label>${seg('ebt',[['before','Before class'],['daybefore','Day before'],['photos','Photos'],['comeback','Come back']],EB.template,'ebTemplate')}
-    <label>Which class</label><select id="ebc" onchange="EB.class_id=+this.value;instrEmail()">${mine.map(c=>`<option value="${c.id}" ${c.id===EB.class_id?'selected':''}>${esc(c.title)} · ${esc(c.slot_date||'')}</option>`).join('')}</select>
+    <label>Which class</label><select id="ebc" onchange="EB.class_id=+this.value;EB.touched=false;instrEmail()">${mine.map(c=>`<option value="${c.id}" ${c.id===EB.class_id?'selected':''}>${esc(c.title)} · ${esc(c.slot_date||'')}</option>`).join('')}</select>
     <label>Who gets it</label>${seg('eba',[['class','This class ('+(cnt.class||0)+')'],['present','Checked in ('+(cnt.present||0)+')'],['past','All my past students ('+(cnt.past||0)+')']],EB.audience,'ebAudience')}
     <label>Subject</label><input id="ebs" value="${esc(t.subject||'')}">
     <label>Your message</label><textarea id="ebb" rows="9">${esc(t.body||'')}</textarea>
     <label>Coming up: tick the classes to link at the bottom</label>
+    <div class="hint">Your next ${Math.min(3,(t.auto_ids||[]).length)||''} ${(t.auto_ids||[]).length===1?'class is':'classes are'} ticked for you. Untick any, or add others.</div>
     <div class="card">${(t.mine||[]).map(c=>tick(c,'')).join('')||'<div class="meta">No upcoming classes of yours yet.</div>'}
       ${(t.others||[]).length?`<details style="margin-top:8px"><summary class="meta">Other Gibby classes (${t.others.length})</summary>${t.others.map(c=>tick(c,c.instructor)).join('')}</details>`:''}</div>
     <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="ebl" ${t.has_links?'checked':''} ${t.has_links?'':'disabled'}> Add my sign-off and links${t.has_links?'':' <span class="meta">(add your links on your profile first)</span>'}</label>

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.56.0-instructor-email-builder"
+VERSION = "10.56.1-auto-next-three"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3043,7 +3043,12 @@ class H(http.server.BaseHTTPRequestHandler):
             others = [{"id": x["id"], "title": x["title"], "slot_date": x["slot_date"], "instructor": x.get("instructor_name")}
                       for x in self._classes("WHERE c.instructor_id!=? AND c.status='approved' ", (instr["id"],)) if (_class_date(x) or today) >= today][:40]
             c.close()
+            # The instructor's next three classes (not counting this one) are
+            # ticked by default, so every email quietly sells what comes next.
+            mine.sort(key=lambda x: (parse_day(x["slot_date"]) or datetime.date.max))
+            auto_ids = [x["id"] for x in mine if x["id"] != cls["id"]][:3]
             return self.send_json({"subject": subj, "body": body, "audience_counts": counts, "mine": mine, "others": others,
+                                   "auto_ids": auto_ids,
                                    "has_links": any(instr.get("social_" + k) for k in ("instagram","facebook","tiktok","website")),
                                    "footer": instructor_footer(instr, True)})
         if p == "/api/reimbursements":
