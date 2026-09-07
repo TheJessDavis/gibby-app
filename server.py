@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.55.0-admin-edits-notes"
+VERSION = "10.56.0-instructor-email-builder"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,13 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff"):
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
+        id INTEGER PRIMARY KEY, user_id INTEGER, class_id INTEGER, template TEXT, audience TEXT,
+        subject TEXT, body TEXT, feature_ids TEXT, add_links INTEGER DEFAULT 1, status TEXT DEFAULT 'scheduled',
+        scheduled_for TEXT, sent_at TEXT, recipients INTEGER DEFAULT 0, error TEXT, created TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS reimbursements(
         id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, amount REAL, note TEXT,
         receipt_link TEXT, receipt_thumb TEXT, status TEXT DEFAULT 'requested', created TEXT,
@@ -1380,6 +1387,141 @@ def class_ratings(c, class_ids):
         del d["sum"]
     return out
 
+EMAIL_TEMPLATES = {
+    "comeback":  "I'm teaching again at The Gibby",
+    "before":    "Getting ready for {title}",
+    "daybefore": "See you tomorrow: {title}",
+    "photos":    "Look what we made: {title}",
+}
+
+def instructor_footer(instr, add_links=True):
+    """Sign-off plus the instructor's links, from their profile."""
+    first = (instr.get("name") or "").split(" ")[0]
+    lines = [instr.get("signoff") or f"See you in the studio,\n{first}"]
+    if add_links:
+        links = [(lbl, instr.get("social_" + k)) for lbl, k in
+                 (("Instagram","instagram"),("Facebook","facebook"),("TikTok","tiktok"),("Website","website")) if instr.get("social_" + k)]
+        if links:
+            lines.append("")
+            lines.append(f"Follow {first}: " + "  ·  ".join(f"{lbl} {url}" for lbl, url in links))
+    return "\n".join(lines)
+
+def coming_up_block(c, feature_ids):
+    """The 'Coming up' list: title, when, price, Eventbrite link, for the classes ticked."""
+    ids = [int(x) for x in (feature_ids or []) if str(x).isdigit()]
+    if not ids: return ""
+    q = ",".join("?" * len(ids))
+    rows = [dict(r) for r in c.execute(f"SELECT * FROM classes WHERE id IN ({q}) AND deleted_at IS NULL AND status='approved'", ids)]
+    rows.sort(key=lambda x: (_class_date(x) or datetime.date.max))
+    out = ["Coming up at The Gibby:", ""]
+    for cl in rows:
+        try: ext = json.loads(cl.get("external_ids") or "{}")
+        except Exception: ext = {}
+        link = ext.get("eventbrite_url") or (f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=instructor" if ext.get("eventbrite_id") else "")
+        when = f"{cl.get('slot_date','')} {cl.get('class_time') or cl.get('slot_time') or ''}".strip()
+        try: n = len(json.loads(cl.get("session_dates") or "[]")) if cl.get("is_series") else 1
+        except Exception: n = 1
+        if n > 1: when = f"{n} sessions starting {when}"
+        price = "Free" if not cl.get("ticket_price") else "$%g" % cl["ticket_price"]
+        out.append(f"  • {cl.get('title')} — {when} — {price}" + (f"\n    Register: {link}" if link else ""))
+    return "\n".join(out)
+
+def instructor_email_template(c, cls, instr, template):
+    """Pre-filled subject and body for the builder; the instructor edits from here."""
+    title = cls.get("title") or "your class"
+    when = f"{cls.get('slot_date','')} at {cls.get('class_time') or cls.get('slot_time') or ''}".strip()
+    room = cls.get("room") or "the studio"
+    ts = thanks_settings()
+    try: sup = json.loads(cls.get("supplies") or "[]")
+    except Exception: sup = []
+    bring = ("Please bring: " + ", ".join(str(x) for x in sup)) if cls.get("own_materials") and sup else "All materials are provided; just bring yourself."
+    subj = EMAIL_TEMPLATES.get(template, "{title}").format(title=title)
+    if template == "comeback":
+        body = (f"Hi there,\n\nThank you again for taking {title} with me. I have new classes coming up at The Gibby "
+                f"and would love to see you back in the studio.\n\nUse code {ts['promo_code']} for {ts['promo_pct']}% off your next class.")
+    elif template == "before":
+        body = (f"Hi,\n\nI'm looking forward to seeing you for {title} on {when} in the {room}. A few things before we start:\n\n"
+                f"  • Please arrive about 10 minutes early. Free parking is in the lot behind the building.\n  • {bring}\n\n"
+                f"Reply to this email if you have any questions.")
+    elif template == "daybefore":
+        body = f"Hi,\n\nJust a quick note to say I'm excited for tomorrow: {title}, {when}, {room}. See you there!"
+    elif template == "photos":
+        c2 = db(); fl = c2.execute("SELECT folder_link FROM class_photos WHERE class_id=? ORDER BY id DESC LIMIT 1", (cls["id"],)).fetchone(); c2.close()
+        body = (f"Hi,\n\nWhat a great class that was. Here are a few photos from our session"
+                + (f": {fl['folder_link']}" if fl and fl["folder_link"] else " (attached to the class in the app)") + "\n\nThank you for coming.")
+    else:
+        body = "Hi,\n\n"
+    return subj, body
+
+def instructor_email_audience(c, instr_id, cls, audience):
+    """[(name, email)] with refunds, opt-outs and duplicates removed."""
+    if audience == "past":
+        today = datetime.date.today()
+        past_ids = {cl["id"] for cl in c.execute("SELECT * FROM classes WHERE instructor_id=? AND deleted_at IS NULL AND status='approved'", (instr_id,)) if (_class_end_date(dict(cl)) or today) < today}
+        rows = [r for r in c.execute("SELECT name, email, class_id FROM registrations WHERE refunded=0 AND email LIKE '%@%'") if r["class_id"] in past_ids]
+        optout = {r["email"].lower() for r in c.execute("SELECT email FROM marketing_optout")}
+        rows = [r for r in rows if r["email"].lower() not in optout]
+    elif audience == "present":
+        rows = c.execute("SELECT name, email FROM registrations WHERE class_id=? AND refunded=0 AND checked_in=1 AND email LIKE '%@%'", (cls["id"],)).fetchall()
+    else:
+        rows = c.execute("SELECT name, email FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'", (cls["id"],)).fetchall()
+    seen, out = set(), []
+    for r in rows:
+        e = r["email"].strip().lower()
+        if e in seen: continue
+        seen.add(e); out.append((r["name"] or "", r["email"].strip()))
+    return out
+
+def build_instructor_email(c, em, instr, cls):
+    body = (em["body"] or "").rstrip()
+    try: fids = json.loads(em.get("feature_ids") or "[]")
+    except Exception: fids = []
+    block = coming_up_block(c, fids)
+    if block: body += "\n\n" + block
+    body += "\n\n" + instructor_footer(instr, bool(em.get("add_links")))
+    return body
+
+def send_instructor_email(em_id):
+    """Deliver one saved instructor email: one copy per student, plus a copy to
+    the Gibby's inbox. Returns (sent_count, error)."""
+    c = db()
+    em = c.execute("SELECT * FROM instructor_emails WHERE id=?", (em_id,)).fetchone()
+    if not em: c.close(); return 0, "not found"
+    em = dict(em)
+    instr = c.execute("SELECT * FROM users WHERE id=?", (em["user_id"],)).fetchone()
+    cls = c.execute("SELECT * FROM classes WHERE id=?", (em["class_id"],)).fetchone()
+    if not instr or not cls: c.close(); return 0, "class or instructor missing"
+    instr, cls = dict(instr), dict(cls)
+    people = instructor_email_audience(c, instr["id"], cls, em["audience"])
+    body = build_instructor_email(c, em, instr, cls)
+    c.close()
+    cfg = mailer.load_email_config()
+    first_name = (instr.get("name") or "").split(" ")[0]
+    ok = 0
+    for name, email in people:
+        greet_body = body
+        if em["audience"] == "past":
+            greet_body += f"\n\nYou are getting this because you took a class with {first_name} at The Gibby. Unsubscribe: {unsub_link(email)}"
+        if mailer.send(email, em["subject"], greet_body, cfg, reply_to=instr["email"], from_name=f"{instr['name']} via The Gibby"):
+            ok += 1
+    copy_to = thanks_settings().get("instructor_copy") or ""
+    if copy_to:
+        mailer.send(copy_to, f"[Copy] {instr['name']} emailed {ok} student{'s' if ok != 1 else ''}: {em['subject']}",
+            f"Sent by {instr['name']} to {ok} of {len(people)} recipient(s) ({em['audience']}) for \"{cls.get('title')}\".\n\n----\n\n{body}", cfg)
+    c = db()
+    c.execute("UPDATE instructor_emails SET status=?, sent_at=?, recipients=?, error=? WHERE id=?",
+              ("sent" if ok or not people else "failed", now(), ok, ("" if ok or not people else mailer.LAST_ERROR), em_id))
+    c.commit(); c.close()
+    return ok, ("" if ok or not people else mailer.LAST_ERROR)
+
+def send_due_instructor_emails():
+    c = db()
+    due = [r["id"] for r in c.execute("SELECT id FROM instructor_emails WHERE status='scheduled' AND scheduled_for<=?", (now(),))]
+    c.close()
+    for i in due:
+        try: n, err = send_instructor_email(i); print(f"[instructor-email] #{i} sent to {n}" + (f" ({err})" if err else ""))
+        except Exception as e: print(f"[instructor-email] #{i} failed: {e}")
+
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
     moment failing, and backfills contracts signed before this feature existed."""
@@ -1770,7 +1912,8 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
     return cid
 
 THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
-                   "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933"}
+                   "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933",
+                   "instructor_copy": "jdavis@theeverett.org"}
 
 def thanks_settings():
     """The after-class thank-you's links and discount, editable under Connections."""
@@ -2154,6 +2297,8 @@ def scheduler_loop():
             except Exception as e: print("[contract] sweep error:", e)
             try: sweep_contract_reminders()
             except Exception as e: print("[contract] reminder error:", e)
+            try: send_due_instructor_emails()
+            except Exception as e: print("[instructor-email] error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
@@ -2596,6 +2741,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 "tour_seen":u.get("tour_seen",0),
                 "photo":u.get("photo") or "", "skills":json.loads(u.get("skills") or "[]"),
                 "address":u.get("address") or "",
+                "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
+                "signoff":u.get("signoff") or "",
                 "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
@@ -2867,6 +3014,38 @@ class H(http.server.BaseHTTPRequestHandler):
                 r["photos"] = [dict(x) for x in c.execute("SELECT id, thumb, filename FROM class_photos WHERE class_id=? ORDER BY id", (r["class_id"],))]
             c.close()
             return self.send_json({"posts": rows, "live": bool(integrations.load_config().get("live"))})
+        if p == "/api/instructor-emails":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            where = "" if u["role"] == "admin" else "WHERE e.user_id=?"
+            rows = [dict(r) for r in c.execute(f"""SELECT e.*, us.name AS instructor_name, cl.title AS class_title
+                FROM instructor_emails e JOIN users us ON us.id=e.user_id LEFT JOIN classes cl ON cl.id=e.class_id
+                {where} ORDER BY e.id DESC LIMIT 100""", (() if not where else (u["id"],))).fetchall()]
+            c.close()
+            return self.send_json({"emails": rows})
+        if p.startswith("/api/instructor-emails/template"):
+            u = self.require("instructor")
+            if not u: return
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            cid = int((qs.get("class_id") or ["0"])[0] or 0); tpl = (qs.get("template") or ["before"])[0]
+            c = db()
+            cls = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not cls: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(cls)
+            if u["role"] != "admin" and cls["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"forbidden"},403)
+            instr = dict(c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone())
+            subj, body = instructor_email_template(c, cls, instr, tpl)
+            counts = {a: len(instructor_email_audience(c, instr["id"], cls, a)) for a in ("class","present","past")}
+            today = datetime.date.today()
+            mine = [{"id": x["id"], "title": x["title"], "slot_date": x["slot_date"], "price": x.get("ticket_price")}
+                    for x in self._classes("WHERE c.instructor_id=? AND c.status='approved' ", (instr["id"],)) if (_class_date(x) or today) >= today]
+            others = [{"id": x["id"], "title": x["title"], "slot_date": x["slot_date"], "instructor": x.get("instructor_name")}
+                      for x in self._classes("WHERE c.instructor_id!=? AND c.status='approved' ", (instr["id"],)) if (_class_date(x) or today) >= today][:40]
+            c.close()
+            return self.send_json({"subject": subj, "body": body, "audience_counts": counts, "mine": mine, "others": others,
+                                   "has_links": any(instr.get("social_" + k) for k in ("instagram","facebook","tiktok","website")),
+                                   "footer": instructor_footer(instr, True)})
         if p == "/api/reimbursements":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3464,6 +3643,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET skills=? WHERE id=?",(json.dumps(skills),u["id"]))
             if address is not None:
                 c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
+            soc = b.get("socials")
+            if isinstance(soc, dict):
+                for k in ("instagram","facebook","tiktok","website"):
+                    v = str(soc.get(k) or "").strip()[:200]
+                    if v and not v.startswith("http"):
+                        v = {"instagram":"https://instagram.com/","facebook":"https://facebook.com/","tiktok":"https://tiktok.com/@"}.get(k, "https://") + v.lstrip("@/")
+                    c.execute(f"UPDATE users SET social_{k}=? WHERE id=?", (v or None, u["id"]))
+            if b.get("signoff") is not None:
+                c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/upload-video":
@@ -3712,6 +3900,49 @@ class H(http.server.BaseHTTPRequestHandler):
             c.commit(); c.close()
             print(f"[social] {u['email']} approved photo post for class #{row['class_id']}: {res.get('status')}")
             return self.send_json({"ok":True, "status":"posted", "facebook": res})
+        if p in ("/api/instructor-emails", "/api/instructor-emails/preview"):
+            # The instructor's email builder. Everything is saved; 'now' sends in
+            # the background, 'morning' waits for 9 AM tomorrow. Admins get a copy.
+            u = self.require("instructor")
+            if not u: return
+            b = self.read_json(); c = db()
+            cid = int(b.get("class_id") or 0)
+            cls = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not cls: c.close(); return self.send_json({"error":"Pick a class."},400)
+            cls = dict(cls)
+            if u["role"] != "admin" and cls["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"That is not your class."},403)
+            instr = dict(c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone())
+            template = (b.get("template") or "before")
+            audience = b.get("audience") if b.get("audience") in ("class","present","past") else "class"
+            subject = (b.get("subject") or "").strip()[:150]
+            body = (b.get("body") or "").strip()[:6000]
+            fids = [int(x) for x in (b.get("feature_ids") or []) if str(x).isdigit()][:12]
+            em = {"body": body, "feature_ids": json.dumps(fids), "add_links": 1 if b.get("add_links", True) else 0}
+            people = instructor_email_audience(c, instr["id"], cls, audience)
+            if p.endswith("/preview"):
+                final = build_instructor_email(c, em, instr, cls)
+                if audience == "past": final += "\n\nYou are getting this because you took a class with " + (instr.get("name") or "").split(" ")[0] + " at The Gibby. Unsubscribe: [link]"
+                c.close()
+                return self.send_json({"subject": subject, "body": final, "recipients": len(people),
+                                       "from": f"{instr['name']} via The Gibby", "reply_to": instr["email"]})
+            if len(subject) < 3: c.close(); return self.send_json({"error":"Give it a subject."},400)
+            if len(body) < 20: c.close(); return self.send_json({"error":"Write a little more before sending."},400)
+            if not people: c.close(); return self.send_json({"error":"Nobody to send to yet for that choice."},400)
+            month_ago = (datetime.datetime.now() - datetime.timedelta(days=30)).isoformat(timespec="seconds")
+            if audience == "past" and c.execute("SELECT 1 FROM instructor_emails WHERE user_id=? AND audience='past' AND status IN ('sent','scheduled') AND created>=?", (instr["id"], month_ago)).fetchone():
+                c.close(); return self.send_json({"error":"One email to your past students per month, so it stays welcome. Try again next month."},429)
+            if audience != "past" and c.execute("SELECT 1 FROM instructor_emails WHERE class_id=? AND template=? AND status IN ('sent','scheduled')", (cid, template)).fetchone():
+                c.close(); return self.send_json({"error":"You already sent that one to this class."},409)
+            when = b.get("when") or "now"
+            sched = now() if when == "now" else (datetime.datetime.now() + datetime.timedelta(days=1)).replace(hour=9, minute=0, second=0).isoformat(timespec="seconds")
+            c.execute("""INSERT INTO instructor_emails(user_id,class_id,template,audience,subject,body,feature_ids,add_links,status,scheduled_for,created)
+                         VALUES(?,?,?,?,?,?,?,?,'scheduled',?,?)""",
+                      (instr["id"], cid, template, audience, subject, body, json.dumps(fids), em["add_links"], sched, now()))
+            eid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            c.commit(); c.close()
+            if when == "now":
+                threading.Thread(target=send_instructor_email, args=(eid,), daemon=True).start()
+            return self.send_json({"ok":True, "id":eid, "recipients":len(people), "when":when, "scheduled_for":sched})
         mrb = re.match(r"^/api/classes/(\d+)/reimburse$", p)
         if mrb:
             # Instructor asks to be paid back for supplies: amount, what for, receipt photo.

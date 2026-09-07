@@ -546,6 +546,12 @@ function renderProfile(){
     <label>Your name</label><input id="pf_name" value="${esc(ME&&ME.name||'')}">
     <label>Your address</label><input id="pf_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
     <div class="hint">Only The Gibby's admins see this (for payments and paperwork).</div>
+    <label style="margin-top:14px">Your links (added to the bottom of emails you send students)</label>
+    <input id="pf_ig" value="${esc((ME&&ME.socials&&ME.socials.instagram)||'')}" placeholder="Instagram (handle or link)">
+    <input id="pf_fb" value="${esc((ME&&ME.socials&&ME.socials.facebook)||'')}" placeholder="Facebook page" style="margin-top:6px">
+    <input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="TikTok" style="margin-top:6px">
+    <input id="pf_web" value="${esc((ME&&ME.socials&&ME.socials.website)||'')}" placeholder="Website or shop" style="margin-top:6px">
+    <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
     <label style="margin-top:18px">Your skills</label>
     <div class="skillcloud">${PF_SKILLS.length
       ? PF_SKILLS.map(k=>`<button class="skill mine" onclick="pfRemoveSkill('${esc(k)}')">${esc(k)} <b>\u00d7</b></button>`).join('')
@@ -858,7 +864,8 @@ async function saveProfile(){
   const name=$('#pf_name').value.trim();
   if(!name) return showErr('perr','Name is required.');
   try{
-    await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value});
+    await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value});
     await api('/api/me').then(r=>ME=r.user);
     PF_PHOTO=null; PF_SKILLS=null; boot();
   }
@@ -1565,6 +1572,7 @@ async function adminConnections(){
       <input id="th_fb" placeholder="Facebook page or review link" value="${esc((d.thanks||{}).facebook_url||'')}" style="margin-top:6px">
       <div class="two" style="margin-top:6px"><input id="th_code" placeholder="Promo code" value="${esc((d.thanks||{}).promo_code||'')}"><input id="th_pct" placeholder="% off" value="${esc((d.thanks||{}).promo_pct||'')}"></div>
       <input id="th_up" placeholder="Upcoming classes link" value="${esc((d.thanks||{}).upcoming_url||'')}" style="margin-top:6px">
+      <input id="th_copy" placeholder="Who gets a copy of every instructor email" value="${esc((d.thanks||{}).instructor_copy||'')}" style="margin-top:6px">
       <button class="btn ghost" style="margin-top:8px" onclick="saveThanks()">Save thank-you settings</button>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
       <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
@@ -1655,7 +1663,7 @@ async function reimbAct(id, action){
 }
 async function saveThanks(){
   const r=await api('/api/admin/thanks-settings','POST',{google_url:$('#th_google').value, facebook_url:$('#th_fb').value,
-    promo_code:$('#th_code').value, promo_pct:$('#th_pct').value, upcoming_url:$('#th_up').value});
+    promo_code:$('#th_code').value, promo_pct:$('#th_pct').value, upcoming_url:$('#th_up').value, instructor_copy:$('#th_copy').value});
   alert(r.error||'Saved. Every after-class thank-you from now on uses these.');
 }
 async function saveMailBridge(){
@@ -1741,8 +1749,12 @@ async function adminMarketing(){
   }).join('\n\n');
   const draft = `Hi from the Gibby Center for the Arts!\n\nNew art workshops are open for registration:\n\n${lines}\n\nSee everything coming up: https://theeverett.org/artworkshops\n\nSee you at The Gibby!`;
   let social={posts:[],live:false}; try{ social=await api('/api/social'); }catch(_){}
+  let iem={emails:[]}; try{ iem=await api('/api/instructor-emails'); }catch(_){}
   const drafts=(social.posts||[]).filter(p=>p.status==='draft'), done=(social.posts||[]).filter(p=>p.status!=='draft');
   $('#tab').innerHTML = `<h2>Class <em>announcements</em></h2>
+    ${(iem.emails||[]).length?`<label>Emails instructors sent their students (${iem.emails.length})</label>
+      ${iem.emails.slice(0,20).map(e=>`<div class="card"><b>${esc(e.subject)}</b><div class="meta">${esc(e.instructor_name)} · ${esc(e.class_title||'')} · ${({class:'this class',present:'checked in',past:'past students'})[e.audience]||''} · ${e.status==='sent'?'sent to '+e.recipients+' on '+esc((e.sent_at||'').slice(0,16).replace('T',' ')):e.status==='scheduled'?'scheduled for '+esc((e.scheduled_for||'').slice(0,16).replace('T',' ')):'failed: '+esc(e.error||'')}</div>
+        <details><summary class="meta">Read it</summary><div style="white-space:pre-wrap" class="meta">${esc(e.body)}</div></details></div>`).join('')}`:''}
     ${drafts.length?`<label>Photo posts waiting for your approval (${drafts.length})</label>
       <p class="sub" style="margin-top:2px">Instructors uploaded photos. Nothing goes to Facebook until you press Approve.${social.live?'':' Posting is in dry-run right now, so Approve only records it.'}</p>
       ${drafts.map(p=>`<div class="card" id="sp${p.id}"><div class="row"><div><h3 style="font-size:1rem">${esc(p.class_title)}</h3>
@@ -2809,6 +2821,49 @@ function calendarPickerHTML(slots){
 
 /* Classes other teaching artists have opened up: resident teaching artists take them free,
    no paying seat used. Populated by the yes/no question on the class form. */
+let EB={template:'before', class_id:null, audience:'class', features:[]};
+async function instrEmail(){
+  const mine=(await api('/api/classes/mine')).classes.filter(c=>c.status==='approved');
+  if(!mine.length){ alert('You need an approved class first.'); return; }
+  if(!EB.class_id || !mine.some(c=>c.id===EB.class_id)) EB.class_id=mine[0].id;
+  const t=await api('/api/instructor-emails/template?class_id='+EB.class_id+'&template='+EB.template);
+  if(t.error){ alert(t.error); return; }
+  const cnt=t.audience_counts||{};
+  const seg=(id,opts,cur,fn)=>`<div class="seg" id="${id}">${opts.map(([v,l])=>`<button class="${v===cur?'on':''}" onclick="${fn}('${v}')">${l}</button>`).join('')}</div>`;
+  const tick=(c,who)=>`<label style="display:flex;gap:8px;align-items:flex-start;margin:6px 0"><input type="checkbox" class="ebfeat" value="${c.id}" ${EB.features.includes(c.id)?'checked':''}><span>${esc(c.title)} <span class="meta">${esc(c.slot_date||'')}${who?' · '+esc(who):''}${c.price?' · $'+c.price:''}</span></span></label>`;
+  $('#tab').innerHTML=`<h2>Email your <em>students</em></h2>
+    <p class="sub">It goes out from The Gibby in your name, one copy per person, and replies come to you. The Gibby gets a copy too.</p>
+    <label>Which email</label>${seg('ebt',[['before','Before class'],['daybefore','Day before'],['photos','Photos'],['comeback','Come back']],EB.template,'ebTemplate')}
+    <label>Which class</label><select id="ebc" onchange="EB.class_id=+this.value;instrEmail()">${mine.map(c=>`<option value="${c.id}" ${c.id===EB.class_id?'selected':''}>${esc(c.title)} · ${esc(c.slot_date||'')}</option>`).join('')}</select>
+    <label>Who gets it</label>${seg('eba',[['class','This class ('+(cnt.class||0)+')'],['present','Checked in ('+(cnt.present||0)+')'],['past','All my past students ('+(cnt.past||0)+')']],EB.audience,'ebAudience')}
+    <label>Subject</label><input id="ebs" value="${esc(t.subject||'')}">
+    <label>Your message</label><textarea id="ebb" rows="9">${esc(t.body||'')}</textarea>
+    <label>Coming up: tick the classes to link at the bottom</label>
+    <div class="card">${(t.mine||[]).map(c=>tick(c,'')).join('')||'<div class="meta">No upcoming classes of yours yet.</div>'}
+      ${(t.others||[]).length?`<details style="margin-top:8px"><summary class="meta">Other Gibby classes (${t.others.length})</summary>${t.others.map(c=>tick(c,c.instructor)).join('')}</details>`:''}</div>
+    <label style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="ebl" ${t.has_links?'checked':''} ${t.has_links?'':'disabled'}> Add my sign-off and links${t.has_links?'':' <span class="meta">(add your links on your profile first)</span>'}</label>
+    ${t.has_links?`<div class="meta" style="white-space:pre-wrap;border-left:3px solid var(--line);padding-left:10px;margin-top:4px">${esc(t.footer||'')}</div>`:''}
+    <div class="two" style="margin-top:12px"><button class="btn ghost" onclick="ebPreview()">Preview</button><button class="btn ghost" onclick="ebSend('morning')">Send tomorrow 9 AM</button></div>
+    <button class="btn dark" style="margin-top:8px" onclick="ebSend('now')">Send now</button>
+    <div id="ebp"></div>
+    <button class="btn ghost" style="margin-top:12px" onclick="renderInstr('mine')">Back to My classes</button>`;
+}
+function ebTemplate(v){ EB.template=v; instrEmail(); }
+function ebAudience(v){ EB.audience=v; document.querySelectorAll('#eba button').forEach(b=>b.classList.toggle('on', b.textContent.startsWith({class:'This',present:'Checked',past:'All'}[v]))); }
+function ebPayload(){ EB.features=[...document.querySelectorAll('.ebfeat:checked')].map(x=>+x.value);
+  return {class_id:EB.class_id, template:EB.template, audience:EB.audience, subject:$('#ebs').value, body:$('#ebb').value, feature_ids:EB.features, add_links:$('#ebl').checked}; }
+async function ebPreview(){
+  const r=await api('/api/instructor-emails/preview','POST',ebPayload()); if(r.error){ alert(r.error); return; }
+  $('#ebp').innerHTML=`<div class="card" style="margin-top:10px"><div class="meta">From: ${esc(r.from)} · Reply-To: ${esc(r.reply_to)} · to ${r.recipients} ${r.recipients===1?'person':'people'}</div>
+    <div style="margin-top:6px"><b>${esc(r.subject)}</b></div><div style="white-space:pre-wrap;margin-top:6px">${esc(r.body)}</div></div>`;
+}
+async function ebSend(when){
+  const p=ebPayload();
+  if(!confirm((when==='now'?'Send now':'Send tomorrow at 9 AM')+' to '+({class:'this class',present:'the people who checked in',past:'all your past students'}[EB.audience])+'?')) return;
+  const r=await api('/api/instructor-emails','POST',{...p, when}); if(r.error){ alert(r.error); return; }
+  alert(when==='now' ? 'Sending to '+r.recipients+' now. The Gibby gets a copy.' : 'Scheduled for tomorrow at 9 AM to '+r.recipients+'.');
+  renderInstr('mine');
+}
 async function instrAudit(){
   const {classes} = await api('/api/classes/auditable');
   if(!$('#tab')) return;
@@ -2980,6 +3035,7 @@ async function instrMine(){
   const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
+    ${classes.some(c=>c.status==='approved')?`<button class="btn dark" style="margin-bottom:12px" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:''}
     ${reqs.length?`<label>The Gibby is looking for (${reqs.length})</label>
       <p class="sub" style="margin-top:2px">Classes the Gibby would love to run. Claim one and the proposal is pre-filled; you just pick the time.</p>
       ${reqs.map(r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
