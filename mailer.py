@@ -62,7 +62,7 @@ def text_to_html(body):
             flush_para(); flush_list(); continue
         if s in ("----", "---", "***"):
             flush_para(); flush_list(); out.append('<hr style="border:0;border-top:1px solid #E7DECB;margin:18px 0">'); continue
-        mbtn = _re.match(r"^([A-Za-z][^:]{1,48}):\s*(https?://\S+)$", s)
+        mbtn = _re.match(r"^([A-Za-z][^:]{1,90}):\s*(https?://\S+)$", s)
         if mbtn and "•" not in s:
             flush_para(); flush_list()
             out.append(f'<p style="margin:6px 0 18px"><a href="{mbtn.group(2)}" style="display:inline-block;background:#171512;color:#fff;text-decoration:none;'
