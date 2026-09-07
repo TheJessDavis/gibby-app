@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.58.1-shorter-debrief"
+VERSION = "10.58.2-admin-focused-debrief"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -5045,8 +5045,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"Please say whether you would teach it again."},400)
             try: overall = int(b.get("overall") or 0)
             except (TypeError, ValueError): overall = 0
-            if not 1 <= overall <= 5:
-                c.close(); return self.send_json({"error":"Please give the class an overall star rating."},400)
+            overall = overall if 1 <= overall <= 5 else None
             txt = lambda k, n=2000: (b.get(k) or "").strip()[:n]
             c.execute("""INSERT INTO class_feedback(class_id,instructor_id,enrollment,materials,teach_again,notes,submitted_at,
                          overall,room,room_notes,length,engagement,support,highlight,concern)
