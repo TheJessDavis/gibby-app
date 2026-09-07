@@ -111,7 +111,19 @@ def _check_bridge_reply(raw):
                "paste the current scripts/gcal-webhook.gs and deploy a new version")
     raise RuntimeError(err)
 
-def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None):
+COPY_TO = ""      # every outgoing email is copied here (set by the server from Connections > Email)
+
+def _copy(subject, body, recips, cfg, from_name=None):
+    """One copy of an outgoing email to the Gibby's watch address."""
+    if not COPY_TO or any(r.lower() == COPY_TO.lower() for r in recips) or subject.startswith("[Copy"):
+        return
+    try:
+        send(COPY_TO, f"[Copy to {', '.join(recips)}] {subject}",
+             f"(Sent{' as ' + from_name if from_name else ''} to {', '.join(recips)})\n\n{body}", cfg, copy=False)
+    except Exception as e:
+        print("[email] copy failed:", e)
+
+def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
@@ -123,7 +135,8 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
         body = body.rstrip() + f"\n\nOpen the Gibby Class Manager: {APP_URL}"
     if not (cfg["email_live"] and (cfg["smtp_host"] or bridge_available())):
         print(f"[email] DRY-RUN from={cfg['mail_from']} to={recips} subject={subject!r}"
-              + (f" attachments={[a[0] for a in attachments]}" if attachments else ""))
+              + (f" attachments={[a[0] for a in attachments]}" if attachments else "")
+              + (f" (+copy to {COPY_TO})" if copy and COPY_TO and not subject.startswith("[Copy") else ""))
         return True
     global LAST_ERROR, LAST_ROUTE
     errors = []
@@ -132,6 +145,7 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
             if send_via_bridge(recips, subject, body, cfg, attachments, reply_to, from_name):
                 LAST_ERROR = ""; LAST_ROUTE = "bridge"
                 print(f"[email] SENT via bridge to={recips} subject={subject!r}")
+                if copy: _copy(subject, body, recips, cfg, from_name)
                 return True
         except Exception as e:
             errors.append(f"Google bridge: {e}")
@@ -159,6 +173,7 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
                 s.send_message(msg)
             LAST_ERROR = ""; LAST_ROUTE = "smtp"
             print(f"[email] SENT via smtp to={recips} subject={subject!r}")
+            if copy: _copy(subject, body, recips, cfg, from_name)
             return True
         except Exception as e:
             errors.append(f"SMTP: {type(e).__name__}: {e}")

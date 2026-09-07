@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.56.1-auto-next-three"
+VERSION = "10.57.0-copy-every-email"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1502,7 +1502,7 @@ def send_instructor_email(em_id):
         greet_body = body
         if em["audience"] == "past":
             greet_body += f"\n\nYou are getting this because you took a class with {first_name} at The Gibby. Unsubscribe: {unsub_link(email)}"
-        if mailer.send(email, em["subject"], greet_body, cfg, reply_to=instr["email"], from_name=f"{instr['name']} via The Gibby"):
+        if mailer.send(email, em["subject"], greet_body, cfg, reply_to=instr["email"], from_name=f"{instr['name']} via The Gibby", copy=False):
             ok += 1
     copy_to = thanks_settings().get("instructor_copy") or ""
     if copy_to:
@@ -1913,7 +1913,7 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
 
 THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
                    "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933",
-                   "instructor_copy": "jdavis@theeverett.org"}
+                   "instructor_copy": "jdavis@theeverett.org", "copy_all": "jdavis@theeverett.org"}
 
 def thanks_settings():
     """The after-class thank-you's links and discount, editable under Connections."""
@@ -2001,7 +2001,10 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
             body = body.replace("\n\nSee you at The Gibby,",
                 f"\n\nHow was it? Tap a star to tell us (takes ten seconds): {feedback_link(cid, p['email'])}\n\nSee you at The Gibby,", 1)
         kw = {"reply_to": instr["email"], "from_name": f"{iname} via The Gibby"} if (note.strip() and instr and instr["email"]) else {}
-        if mailer.send(p["email"], subj, body, cfg, **kw): ok += 1
+        if mailer.send(p["email"], subj, body, cfg, copy=False, **kw): ok += 1; last = (subj, body)
+    if ok and mailer.COPY_TO:
+        mailer.send(mailer.COPY_TO, f"[Copy to {ok} students of {title}] {last[0]}",
+                    f"(Sent to {ok} student(s); this is one student's copy)\n\n{last[1]}", cfg, copy=False)
     c.execute("UPDATE email_log SET delivered=? WHERE class_id=? AND email_type=?",
               (1 if ok else 0, cid, email_type))
     new_status = ("sent_late" if email_type == "followup_late" else ("sent" if note.strip() else "sent_generic"))
@@ -4126,6 +4129,7 @@ class H(http.server.BaseHTTPRequestHandler):
             b = self.read_json()
             for k in THANKS_DEFAULTS:
                 if k in b: _meta_set("thanks_" + k, (str(b.get(k) or "")).strip())
+            mailer.COPY_TO = thanks_settings().get("copy_all") or ""
             return self.send_json({"ok": True, "thanks": thanks_settings()})
         if p == "/api/admin/mail-bridge":
             # Save the Gibby Mail Bridge (Apps Script on the gibby@ mailbox) the app sends through.
@@ -4172,8 +4176,10 @@ class H(http.server.BaseHTTPRequestHandler):
                             f"Resident teaching artists can take them free, as full participants:\n\n{listing}\n\n"
                             f"Open the app, tap Learn, and press \"I'm coming\" on any class you want to join. "
                             f"That emails the instructor so they can plan for you.\n\nThanks,\nThe Gibby")
-                    if mailer.send(email, "New classes you can take free on the Learn tab", body): n += 1
+                    if mailer.send(email, "New classes you can take free on the Learn tab", body, copy=False): n += 1; last = body
                 print(f"[learn] announcement delivered to {n} of {len(people)}")
+                if n and mailer.COPY_TO:
+                    mailer.send(mailer.COPY_TO, f"[Copy to {n} accounts] New classes you can take free on the Learn tab", last, copy=False)
             threading.Thread(target=go, daemon=True).start()
             return self.send_json({"ok":True,"started":True,"recipients":len(people),"classes":len(rows)})
         if p == "/api/test-eventbrite":
@@ -5755,6 +5761,7 @@ class Threaded(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 if __name__ == "__main__":
     try:
+        mailer.COPY_TO = thanks_settings().get("copy_all") or ""
         mailer.RUNTIME_BRIDGE = {"url": _meta_get("mail_bridge_url"), "key": _meta_get("mail_bridge_key")}
     except Exception as e:
         print("[email] could not load the saved mail bridge:", e)
