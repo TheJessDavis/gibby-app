@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.58.2-admin-focused-debrief"
+VERSION = "10.59.0-next-three-in-thankyou"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1935,7 +1935,15 @@ def thanks_block(ts=None):
               f"See what's coming up: {ts['upcoming_url']}"]
     return "\n".join(lines)
 
-def after_class_email(cls, first, attended, note="", instructor_name=""):
+def instructor_next_classes(c, instructor_id, exclude_id=None, n=3):
+    """Ids of the instructor's next N upcoming approved classes."""
+    today = datetime.date.today()
+    rows = [dict(r) for r in c.execute("SELECT * FROM classes WHERE instructor_id=? AND status='approved' AND deleted_at IS NULL", (instructor_id,))]
+    rows = [r for r in rows if r["id"] != exclude_id and (_class_date(r) or today) >= today]
+    rows.sort(key=lambda r: (_class_date(r) or datetime.date.max))
+    return [r["id"] for r in rows[:n]]
+
+def after_class_email(cls, first, attended, note="", instructor_name="", upcoming=""):
     """The email students get after a class. With a note it opens in the
     instructor's voice (sent 'via The Gibby', replies go to them); without one
     it is The Gibby's own thank-you. Attendance wording is careful: a no-show
@@ -1951,12 +1959,13 @@ def after_class_email(cls, first, attended, note="", instructor_name=""):
         subject = f"Thank you from The Gibby: {title}"
         opening = (f"{title} has wrapped up. Thank you for being part of it, and we hope to see you "
                    f"at The Gibby again soon.")
+    up = (f"\n\n{upcoming}" if upcoming else "")
     if note.strip():
-        body = (f"Hi {first},\n\n{note.strip()}\n\n{ifirst or 'Your instructor'}\n\n"
+        body = (f"Hi {first},\n\n{note.strip()}\n\n{ifirst or 'Your instructor'}{up}\n\n"
                 f"----\n\nA note from The Gibby:\n\n{opening}\n\n{block}\n\n"
                 f"See you at The Gibby,\nThe Gibby Center for the Arts")
     else:
-        body = (f"Hi {first},\n\n{opening}\n\n{block}\n\n"
+        body = (f"Hi {first},\n\n{opening}{up}\n\n{block}\n\n"
                 f"See you at The Gibby,\nThe Gibby Center for the Arts")
     return subject, body
 
@@ -1984,6 +1993,10 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
     instr = c.execute("SELECT name,email FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
     iname = (instr["name"] if instr else "") or ""
     note = (cls.get("followup_note") or "") if note is None else note
+    # The instructor's next three classes ride along on every after-class email.
+    upcoming = coming_up_block(c, instructor_next_classes(c, cls["instructor_id"], cls["id"]))
+    if upcoming:
+        upcoming = upcoming.replace("Coming up at The Gibby:", f"Coming up with {iname.split(' ')[0] or 'your instructor'} at The Gibby:", 1)
     if email_type == "followup" and cls.get("followup_status") not in ("ready", "sent", "sent_late"):
         note = ""            # only a note the instructor actually submitted rides along
     try:
@@ -1997,10 +2010,11 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
         first = (p.get("name") or "").split(" ")[0] or "there"
         if email_type == "followup_late":
             subj = f"A note from {iname.split(' ')[0] or 'your instructor'} about {title}"
-            body = (f"Hi {first},\n\n{note.strip()}\n\n{iname.split(' ')[0] or 'Your instructor'}\n\n"
-                    f"----\nSent through The Gibby Class Manager. Reply to reach your instructor directly.")
+            body = (f"Hi {first},\n\n{note.strip()}\n\n{iname.split(' ')[0] or 'Your instructor'}"
+                    + (f"\n\n{upcoming}" if upcoming else "") +
+                    f"\n\n----\nSent through The Gibby Class Manager. Reply to reach your instructor directly.")
         else:
-            subj, body = after_class_email(cls, first, attended, note, iname)
+            subj, body = after_class_email(cls, first, attended, note, iname, upcoming)
         if email_type == "followup":
             body = body.replace("\n\nSee you at The Gibby,",
                 f"\n\nHow was it? Tap a star to tell us (takes ten seconds): {feedback_link(cid, p['email'])}\n\nSee you at The Gibby,", 1)
