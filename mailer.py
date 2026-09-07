@@ -38,6 +38,63 @@ def load_email_config():
 
 APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
 
+LOGO_URL = APP_URL + "/icon-192.png"
+
+def text_to_html(body):
+    """Turn the app's plain-text email into tidy HTML: paragraphs, bullet lists,
+    links, and a button for any 'Label: https://…' line. The plain text stays
+    as the alternative part, so nothing is lost for old mail apps."""
+    import html as _h, re as _re
+    url_re = _re.compile(r"(https?://[^\s<>\"']+)")
+    def linkify(t):
+        return url_re.sub(lambda mm: f'<a href="{mm.group(1)}" style="color:#2B4C7E">{mm.group(1)}</a>', t)
+    out, para, lst = [], [], []
+    def flush_para():
+        if para:
+            out.append('<p style="margin:0 0 14px;line-height:1.55">' + "<br>".join(para) + "</p>"); para.clear()
+    def flush_list():
+        if lst:
+            out.append('<ul style="margin:0 0 14px 18px;padding:0;line-height:1.5">' + "".join(f"<li style='margin:0 0 6px'>{x}</li>" for x in lst) + "</ul>"); lst.clear()
+    for raw in body.split("\n"):
+        line = raw.rstrip()
+        s = line.strip()
+        if not s:
+            flush_para(); flush_list(); continue
+        if s in ("----", "---", "***"):
+            flush_para(); flush_list(); out.append('<hr style="border:0;border-top:1px solid #E7DECB;margin:18px 0">'); continue
+        mbtn = _re.match(r"^([A-Za-z][^:]{1,48}):\s*(https?://\S+)$", s)
+        if mbtn and "•" not in s:
+            flush_para(); flush_list()
+            out.append(f'<p style="margin:6px 0 18px"><a href="{mbtn.group(2)}" style="display:inline-block;background:#171512;color:#fff;text-decoration:none;'
+                       f'padding:12px 20px;border-radius:999px;font-weight:700">{_h.escape(mbtn.group(1))}</a></p>')
+            continue
+        mb = _re.match(r"^(?:[•\-–]|\d+\.)\s+(.*)$", s)
+        if mb and (raw.startswith(" ") or s.startswith("•") or s.startswith("- ")):
+            flush_para(); lst.append(linkify(_h.escape(mb.group(1)))); continue
+        if lst and raw.startswith("    "):        # continuation line of a bullet ("Register: …")
+            lst[-1] += "<br>" + linkify(_h.escape(s)); continue
+        flush_list(); para.append(linkify(_h.escape(s)))
+    flush_para(); flush_list()
+    return "".join(out)
+
+def html_email(subject, body, from_name=None):
+    import html as _h
+    who = _h.escape(from_name or "The Gibby")
+    return f"""<!doctype html><html><body style="margin:0;padding:0;background:#F5EFE3;font-family:'Helvetica Neue',Arial,'Segoe UI',sans-serif;color:#171512">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F5EFE3"><tr><td align="center" style="padding:24px 12px">
+<table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%">
+<tr><td style="padding:0 8px 14px"><table role="presentation" cellspacing="0" cellpadding="0"><tr>
+<td style="vertical-align:middle;padding-right:12px"><img src="{LOGO_URL}" width="44" height="44" alt="" style="display:block;border-radius:12px"></td>
+<td style="vertical-align:middle;font-family:Georgia,serif;font-size:22px;letter-spacing:.2px"><b>The Gibby</b><div style="font-family:'Helvetica Neue',Arial,sans-serif;font-size:12px;color:#6b665c;margin-top:2px">Gibby Center for the Arts · Middletown, DE</div></td>
+</tr></table></td></tr>
+<tr><td style="background:#FBF7EF;border:1px solid #E7DECB;border-radius:18px;padding:26px 28px;font-size:16px">
+<h1 style="font-family:Georgia,serif;font-size:22px;line-height:1.3;margin:0 0 16px">{_h.escape(subject)}</h1>
+{text_to_html(body)}
+</td></tr>
+<tr><td style="padding:16px 10px 0;font-size:12px;color:#6b665c;line-height:1.5">Sent by {who} through the Gibby Class Manager · Gibby Center for the Arts, 51 W Main St, Middletown, DE<br>
+<a href="{APP_URL}" style="color:#6b665c">{APP_URL}</a></td></tr>
+</table></td></tr></table></body></html>"""
+
 LAST_ERROR = ""   # the most recent send failure, so the app can show it; cleared on success
 LAST_ROUTE = ""   # "bridge" or "smtp": which route carried the last delivered email
 
@@ -72,8 +129,8 @@ def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from
     # One message per recipient: students must never see each other's addresses.
     for one in recips:
         payload = {"key": b["key"], "action": "email", "to": [one], "subject": subject,
-                   "body": body, "from": cfg["mail_from"], "name": from_name or "The Gibby",
-                   "attachments": atts}
+                   "body": body, "html": html_email(subject, body, from_name), "from": cfg["mail_from"],
+                   "name": from_name or "The Gibby", "attachments": atts}
         if reply_to: payload["replyTo"] = reply_to
         req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
@@ -162,6 +219,7 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
             if reply_to: msg["Reply-To"] = reply_to
             msg["Subject"] = subject
             msg.set_content(body)
+            msg.add_alternative(html_email(subject, body, from_name), subtype="html")
             for fn, data, mime in (attachments or []):
                 mt, _, st = (mime or "application/octet-stream").partition("/")
                 msg.add_attachment(data, maintype=mt, subtype=st or "octet-stream", filename=fn)

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.57.0-copy-every-email"
+VERSION = "10.58.0-html-emails-debrief"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,10 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    for col, typ in (("overall","INTEGER"),("room","TEXT"),("room_notes","TEXT"),("length","TEXT"),("engagement","TEXT"),
+                     ("support","TEXT"),("highlight","TEXT"),("concern","TEXT")):
+        try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
+        except Exception: pass
     for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
@@ -3354,7 +3358,9 @@ class H(http.server.BaseHTTPRequestHandler):
         rows = c.execute(f"""SELECT c.*, u.name AS instructor_name, ra.name AS reviewing_admin_name,
                              f.enrollment AS fb_enrollment, f.materials AS fb_materials,
                              f.teach_again AS fb_teach_again, f.notes AS fb_notes,
-                             f.submitted_at AS fb_submitted_at
+                             f.submitted_at AS fb_submitted_at, f.overall AS fb_overall, f.room AS fb_room,
+                             f.room_notes AS fb_room_notes, f.length AS fb_length, f.engagement AS fb_engagement,
+                             f.support AS fb_support, f.highlight AS fb_highlight, f.concern AS fb_concern
                              FROM classes c
                              JOIN users u ON u.id=c.instructor_id
                              LEFT JOIN users ra ON ra.id=c.reviewing_admin_id
@@ -5021,22 +5027,44 @@ class H(http.server.BaseHTTPRequestHandler):
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             if u["role"] != "admin" and row["instructor_id"] != u["id"]:
                 c.close(); return self.send_json({"error":"That is not your class."},403)
+            # The instructor's debrief: how the class went for THEM. Overall and
+            # teach-again are required; everything else is optional but stored.
             valid = {"enrollment": {"too_few","about_right","too_many"},
                      "materials":  {"enough","short","too_much"},
+                     "length":     {"too_short","right","too_long"},
+                     "room":       {"great","fine","problems"},
+                     "engagement": {"low","ok","high"},
+                     "support":    {"great","ok","needs_work"},
                      "teach_again":{"yes","maybe","no"}}
             answers = {}
             for k, allowed in valid.items():
                 v = (b.get(k) or "").strip()
-                if v not in allowed:
-                    c.close(); return self.send_json({"error":f"Please answer all three questions."},400)
+                if v and v not in allowed: c.close(); return self.send_json({"error":f"Unexpected answer for {k}."},400)
                 answers[k] = v
-            c.execute("""INSERT INTO class_feedback(class_id,instructor_id,enrollment,materials,
-                         teach_again,notes,submitted_at) VALUES(?,?,?,?,?,?,?)
+            if not answers["teach_again"]:
+                c.close(); return self.send_json({"error":"Please say whether you would teach it again."},400)
+            try: overall = int(b.get("overall") or 0)
+            except (TypeError, ValueError): overall = 0
+            if not 1 <= overall <= 5:
+                c.close(); return self.send_json({"error":"Please give the class an overall star rating."},400)
+            txt = lambda k, n=2000: (b.get(k) or "").strip()[:n]
+            c.execute("""INSERT INTO class_feedback(class_id,instructor_id,enrollment,materials,teach_again,notes,submitted_at,
+                         overall,room,room_notes,length,engagement,support,highlight,concern)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                          ON CONFLICT(class_id) DO UPDATE SET enrollment=excluded.enrollment,
-                         materials=excluded.materials, teach_again=excluded.teach_again,
-                         notes=excluded.notes, submitted_at=excluded.submitted_at""",
-                      (cid, row["instructor_id"], answers["enrollment"], answers["materials"],
-                       answers["teach_again"], (b.get("notes") or "").strip()[:2000], now()))
+                         materials=excluded.materials, teach_again=excluded.teach_again, notes=excluded.notes,
+                         submitted_at=excluded.submitted_at, overall=excluded.overall, room=excluded.room,
+                         room_notes=excluded.room_notes, length=excluded.length, engagement=excluded.engagement,
+                         support=excluded.support, highlight=excluded.highlight, concern=excluded.concern""",
+                      (cid, row["instructor_id"], answers["enrollment"], answers["materials"], answers["teach_again"],
+                       txt("notes"), now(), overall, answers["room"], txt("room_notes", 500), answers["length"],
+                       answers["engagement"], answers["support"], txt("highlight", 1000), txt("concern", 2000)))
+            if txt("concern"):
+                admins = emails_for(c, "WHERE role='admin'")
+                if admins:
+                    mailer.send(admins, f"Instructor flagged something after {row['title']}",
+                        f"{u['name']} answered \"Anything The Gibby should know?\" after \"{row['title']}\":\n\n{txt('concern')}\n\n"
+                        f"The full debrief is on the class in Approvals > After-class emails: {mailer.APP_URL}")
             c.commit(); c.close()
             print(f"[feedback] class #{cid}: enrollment={answers['enrollment']} "
                   f"materials={answers['materials']} again={answers['teach_again']}")

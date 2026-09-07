@@ -2085,6 +2085,13 @@ async function adminApprovals(){
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}.`
           : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
       </div>
+      ${c.fb_submitted_at?`<div class="meta" style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">
+        <b>${esc(c.instructor_name||'Instructor')}'s debrief:</b> ${c.fb_overall?'\u2605'.repeat(c.fb_overall)+' ':''}
+        ${[['enrollment',c.fb_enrollment],['length',c.fb_length],['materials',c.fb_materials],['room',c.fb_room],['students',c.fb_engagement],['support',c.fb_support],['teach again',c.fb_teach_again]].filter(x=>x[1]).map(x=>x[0]+': '+esc(String(x[1]).replace(/_/g,' '))).join(' \u00b7 ')}
+        ${c.fb_room_notes?`<div style="margin-top:4px">Room: ${esc(c.fb_room_notes)}</div>`:''}
+        ${c.fb_highlight?`<div style="margin-top:4px">Went best: ${esc(c.fb_highlight)}</div>`:''}
+        ${c.fb_notes?`<div style="margin-top:4px">Change next time: ${esc(c.fb_notes)}</div>`:''}
+        ${c.fb_concern?`<div style="margin-top:4px;color:#B45309;font-weight:800">Flagged: ${esc(c.fb_concern)}</div>`:''}</div>`:''}
       ${c.thanks_sent_at
         ? (c.note_written?`<div class="meta" style="margin-top:8px;white-space:pre-wrap;border-left:3px solid var(--line);padding-left:10px">${esc(c.followup_note||'')}</div>`:'')
         : `<label style="margin-top:10px">${c.note_written?"The instructor's note (edit if you need to)":"No note yet. Write one here, or leave it blank and The Gibby's thank-you goes alone"}</label>
@@ -2107,9 +2114,13 @@ async function adminApprovals(){
 }
 async function sendFeedback(id){
   const pick = k => { const el=$('#'+k+id); const on=el&&el.querySelector('.on'); return on?on.dataset.v:''; };
-  await api('/api/classes/'+id+'/feedback','POST',{
-    enrollment: pick('fbe'), materials: pick('fbm'), teach_again: pick('fba'),
-    notes: $('#fbn'+id).value});
+  let r;
+  try{ r = await api('/api/classes/'+id+'/feedback','POST',{
+    overall: pick('fbo'), enrollment: pick('fbe'), length: pick('fbl'), materials: pick('fbm'), room: pick('fbr'),
+    room_notes: $('#fbrn'+id).value, engagement: pick('fbg'), support: pick('fbs'), teach_again: pick('fba'),
+    highlight: $('#fbh'+id).value, notes: $('#fbn'+id).value, concern: $('#fbc'+id).value}); }
+  catch(e){ alert(e.message); return; }
+  if(r&&r.error){ alert(r.error); return; }
   alert('Thank you. That goes straight to The Gibby and helps shape next season.');
   instrMine();
 }
@@ -3064,27 +3075,34 @@ async function instrMine(){
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
       </div>`).join('')}`:''}
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
-      <p class="sub" style="margin-top:2px">Three quick questions, just for The Gibby. Students never see these.</p>
+      <p class="sub" style="margin-top:2px">Your debrief, just for The Gibby. Students never see this. Two minutes, and it shapes the room, the supplies and next season.</p>
       ${feedbackDue.map(c=>`<div class="card">
         <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
           <div class="meta">${esc(c.slot_date||'')} &middot; ${c.enrolled} of ${c.max_p} booked</div></div></div>
-        <label style="margin-top:10px">How did enrollment feel?</label>
-        <div class="seg" id="fbe${c.id}">
-          <button data-v="too_few" onclick="segPick(this)">Too quiet</button>
-          <button class="on" data-v="about_right" onclick="segPick(this)">About right</button>
-          <button data-v="too_many" onclick="segPick(this)">Too full</button></div>
-        <label>Were materials sufficient?</label>
-        <div class="seg" id="fbm${c.id}">
-          <button data-v="short" onclick="segPick(this)">Ran short</button>
-          <button class="on" data-v="enough" onclick="segPick(this)">Just right</button>
-          <button data-v="too_much" onclick="segPick(this)">Too much left</button></div>
+        <label style="margin-top:10px">Overall, how did it go for you?</label>
+        <div class="seg" id="fbo${c.id}">${[1,2,3,4,5].map(n=>`<button data-v="${n}" onclick="segPick(this)" aria-label="${n} of 5">${'\u2605'.repeat(n)}</button>`).join('')}</div>
+        <div class="hint">1 = rough, 5 = one of the good ones.</div>
+        <label>How did enrollment feel?</label>
+        <div class="seg" id="fbe${c.id}"><button data-v="too_few" onclick="segPick(this)">Too quiet</button><button class="on" data-v="about_right" onclick="segPick(this)">About right</button><button data-v="too_many" onclick="segPick(this)">Too full</button></div>
+        <label>Was the class length right?</label>
+        <div class="seg" id="fbl${c.id}"><button data-v="too_short" onclick="segPick(this)">Too short</button><button class="on" data-v="right" onclick="segPick(this)">Just right</button><button data-v="too_long" onclick="segPick(this)">Too long</button></div>
+        <label>Materials and supplies</label>
+        <div class="seg" id="fbm${c.id}"><button data-v="short" onclick="segPick(this)">Ran short</button><button class="on" data-v="enough" onclick="segPick(this)">Just right</button><button data-v="too_much" onclick="segPick(this)">Too much left</button></div>
+        <label>The room and setup</label>
+        <div class="seg" id="fbr${c.id}"><button data-v="problems" onclick="segPick(this)">Had problems</button><button class="on" data-v="fine" onclick="segPick(this)">Fine</button><button data-v="great" onclick="segPick(this)">Great</button></div>
+        <input id="fbrn${c.id}" placeholder="If something was off: tables, sink, lighting, heat, cleanliness…" style="margin-top:6px">
+        <label>The students</label>
+        <div class="seg" id="fbg${c.id}"><button data-v="low" onclick="segPick(this)">Hard to engage</button><button class="on" data-v="ok" onclick="segPick(this)">Fine</button><button data-v="high" onclick="segPick(this)">Really into it</button></div>
+        <label>Support from The Gibby, before and on the day</label>
+        <div class="seg" id="fbs${c.id}"><button data-v="needs_work" onclick="segPick(this)">Needs work</button><button class="on" data-v="ok" onclick="segPick(this)">OK</button><button data-v="great" onclick="segPick(this)">Great</button></div>
         <label>Would you teach this again?</label>
-        <div class="seg" id="fba${c.id}">
-          <button data-v="no" onclick="segPick(this)">No</button>
-          <button data-v="maybe" onclick="segPick(this)">Maybe</button>
-          <button class="on" data-v="yes" onclick="segPick(this)">Yes</button></div>
-        <label>Anything else? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+        <div class="seg" id="fba${c.id}"><button data-v="no" onclick="segPick(this)">No</button><button data-v="maybe" onclick="segPick(this)">Maybe</button><button class="on" data-v="yes" onclick="segPick(this)">Yes</button></div>
+        <label>What went best? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+        <input id="fbh${c.id}" placeholder="e.g. The pre-sketched canvases meant everyone finished.">
+        <label>What would you change next time? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
         <textarea id="fbn${c.id}" placeholder="e.g. Two hours was tight for this one. Three would let the glaze dry properly."></textarea>
+        <label>Anything The Gibby should know? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+        <textarea id="fbc${c.id}" placeholder="A safety issue, a student who needs follow-up, an accessibility need, a payment question. This one goes straight to the admins."></textarea>
         <button class="btn dark" style="margin-top:10px" onclick="sendFeedback(${c.id})">Send to The Gibby</button>
       </div>`).join('')}`:''}
     ${drafts.length?`<label>Drafts (${drafts.length})</label>
