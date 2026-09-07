@@ -2116,9 +2116,9 @@ async function sendFeedback(id){
   const pick = k => { const el=$('#'+k+id); const on=el&&el.querySelector('.on'); return on?on.dataset.v:''; };
   let r;
   try{ r = await api('/api/classes/'+id+'/feedback','POST',{
-    overall: pick('fbo'), enrollment: pick('fbe'), length: pick('fbl'), materials: pick('fbm'), room: pick('fbr'),
-    room_notes: $('#fbrn'+id).value, engagement: pick('fbg'), support: pick('fbs'), teach_again: pick('fba'),
-    highlight: $('#fbh'+id).value, notes: $('#fbn'+id).value, concern: $('#fbc'+id).value}); }
+    overall: pick('fbo'), length: pick('fbl'), materials: pick('fbm'), room: pick('fbr'),
+    room_notes: $('#fbrn'+id).value, support: pick('fbs'), teach_again: pick('fba'),
+    notes: $('#fbn'+id).value, concern: $('#fbc'+id).value}); }
   catch(e){ alert(e.message); return; }
   if(r&&r.error){ alert(r.error); return; }
   alert('Thank you. That goes straight to The Gibby and helps shape next season.');
@@ -3075,15 +3075,13 @@ async function instrMine(){
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
       </div>`).join('')}`:''}
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
-      <p class="sub" style="margin-top:2px">Your debrief, just for The Gibby. Students never see this. Two minutes, and it shapes the room, the supplies and next season.</p>
+      <p class="sub" style="margin-top:2px">Six quick taps, just for The Gibby. Students never see this.</p>
       ${feedbackDue.map(c=>`<div class="card">
         <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
           <div class="meta">${esc(c.slot_date||'')} &middot; ${c.enrolled} of ${c.max_p} booked</div></div></div>
         <label style="margin-top:10px">Overall, how did it go for you?</label>
         <div class="seg" id="fbo${c.id}">${[1,2,3,4,5].map(n=>`<button data-v="${n}" onclick="segPick(this)" aria-label="${n} of 5">${'\u2605'.repeat(n)}</button>`).join('')}</div>
         <div class="hint">1 = rough, 5 = one of the good ones.</div>
-        <label>How did enrollment feel?</label>
-        <div class="seg" id="fbe${c.id}"><button data-v="too_few" onclick="segPick(this)">Too quiet</button><button class="on" data-v="about_right" onclick="segPick(this)">About right</button><button data-v="too_many" onclick="segPick(this)">Too full</button></div>
         <label>Was the class length right?</label>
         <div class="seg" id="fbl${c.id}"><button data-v="too_short" onclick="segPick(this)">Too short</button><button class="on" data-v="right" onclick="segPick(this)">Just right</button><button data-v="too_long" onclick="segPick(this)">Too long</button></div>
         <label>Materials and supplies</label>
@@ -3091,14 +3089,10 @@ async function instrMine(){
         <label>The room and setup</label>
         <div class="seg" id="fbr${c.id}"><button data-v="problems" onclick="segPick(this)">Had problems</button><button class="on" data-v="fine" onclick="segPick(this)">Fine</button><button data-v="great" onclick="segPick(this)">Great</button></div>
         <input id="fbrn${c.id}" placeholder="If something was off: tables, sink, lighting, heat, cleanliness…" style="margin-top:6px">
-        <label>The students</label>
-        <div class="seg" id="fbg${c.id}"><button data-v="low" onclick="segPick(this)">Hard to engage</button><button class="on" data-v="ok" onclick="segPick(this)">Fine</button><button data-v="high" onclick="segPick(this)">Really into it</button></div>
         <label>Support from The Gibby, before and on the day</label>
         <div class="seg" id="fbs${c.id}"><button data-v="needs_work" onclick="segPick(this)">Needs work</button><button class="on" data-v="ok" onclick="segPick(this)">OK</button><button data-v="great" onclick="segPick(this)">Great</button></div>
         <label>Would you teach this again?</label>
         <div class="seg" id="fba${c.id}"><button data-v="no" onclick="segPick(this)">No</button><button data-v="maybe" onclick="segPick(this)">Maybe</button><button class="on" data-v="yes" onclick="segPick(this)">Yes</button></div>
-        <label>What went best? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
-        <input id="fbh${c.id}" placeholder="e.g. The pre-sketched canvases meant everyone finished.">
         <label>What would you change next time? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
         <textarea id="fbn${c.id}" placeholder="e.g. Two hours was tight for this one. Three would let the glaze dry properly."></textarea>
         <label>Anything The Gibby should know? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
