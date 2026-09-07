@@ -38,7 +38,7 @@ def load_email_config():
 
 APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
 
-LOGO_URL = APP_URL + "/icon-192.png"
+LOGO_URL = os.environ.get("EMAIL_LOGO_URL", APP_URL + "/gibby-logo.jpg")   # the Gibby Center for the Arts logo
 
 def text_to_html(body):
     """Turn the app's plain-text email into tidy HTML: paragraphs, bullet lists,
@@ -84,7 +84,7 @@ def html_email(subject, body, from_name=None):
 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#F5EFE3"><tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%">
 <tr><td style="padding:0 8px 14px"><table role="presentation" cellspacing="0" cellpadding="0"><tr>
-<td style="vertical-align:middle;padding-right:12px"><img src="{LOGO_URL}" width="44" height="44" alt="" style="display:block;border-radius:12px"></td>
+{('<td style="vertical-align:middle;padding-right:14px"><img src="' + LOGO_URL + '" width="64" height="64" alt="Gibby Center for the Arts" style="display:block;border-radius:14px;background:#fff"></td>') if LOGO_URL else ''}
 <td style="vertical-align:middle;font-family:Georgia,serif;font-size:22px;letter-spacing:.2px"><b>The Gibby</b><div style="font-family:'Helvetica Neue',Arial,sans-serif;font-size:12px;color:#6b665c;margin-top:2px">Gibby Center for the Arts · Middletown, DE</div></td>
 </tr></table></td></tr>
 <tr><td style="background:#FBF7EF;border:1px solid #E7DECB;border-radius:18px;padding:26px 28px;font-size:16px">
