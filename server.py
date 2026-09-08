@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.60.0-gibby-logo-emails"
+VERSION = "10.61.0-click-tracking"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,9 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
+        id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
+        clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
     for col, typ in (("overall","INTEGER"),("room","TEXT"),("room_notes","TEXT"),("length","TEXT"),("engagement","TEXT"),
                      ("support","TEXT"),("highlight","TEXT"),("concern","TEXT")):
         try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
@@ -1410,7 +1413,21 @@ def instructor_footer(instr, add_links=True):
             lines.append(f"Follow {first}: " + "  ·  ".join(f"{lbl} {url}" for lbl, url in links))
     return "\n".join(lines)
 
-def coming_up_block(c, feature_ids):
+def tracked_url(c, url, kind, ref_id, target_class_id=None):
+    """Wrap a link so the app can count clicks: /go/<token> -> url."""
+    if not url: return url
+    row = c.execute("SELECT token FROM tracked_links WHERE url=? AND kind=? AND ref_id=?", (url, kind, ref_id)).fetchone()
+    if row: return f"{mailer.APP_URL}/go/{row['token']}"
+    tok = secrets.token_urlsafe(9)
+    c.execute("INSERT INTO tracked_links(token,url,kind,ref_id,target_class_id,created) VALUES(?,?,?,?,?,?)",
+              (tok, url, kind, ref_id, target_class_id, now()))
+    return f"{mailer.APP_URL}/go/{tok}"
+
+def link_clicks(c, kind, ref_id):
+    r = c.execute("SELECT COALESCE(SUM(clicks),0) AS n FROM tracked_links WHERE kind=? AND ref_id=?", (kind, ref_id)).fetchone()
+    return r["n"] if r else 0
+
+def coming_up_block(c, feature_ids, track=None):
     """The 'Coming up' list: title, when, price, Eventbrite link, for the classes ticked."""
     ids = [int(x) for x in (feature_ids or []) if str(x).isdigit()]
     if not ids: return ""
@@ -1422,6 +1439,7 @@ def coming_up_block(c, feature_ids):
         try: ext = json.loads(cl.get("external_ids") or "{}")
         except Exception: ext = {}
         link = ext.get("eventbrite_url") or (f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=instructor" if ext.get("eventbrite_id") else "")
+        if link and track: link = tracked_url(c, link, track[0], track[1], cl["id"])
         when = f"{cl.get('slot_date','')} {cl.get('class_time') or cl.get('slot_time') or ''}".strip()
         try: n = len(json.loads(cl.get("session_dates") or "[]")) if cl.get("is_series") else 1
         except Exception: n = 1
@@ -1476,11 +1494,11 @@ def instructor_email_audience(c, instr_id, cls, audience):
         seen.add(e); out.append((r["name"] or "", r["email"].strip()))
     return out
 
-def build_instructor_email(c, em, instr, cls):
+def build_instructor_email(c, em, instr, cls, track=None):
     body = (em["body"] or "").rstrip()
     try: fids = json.loads(em.get("feature_ids") or "[]")
     except Exception: fids = []
-    block = coming_up_block(c, fids)
+    block = coming_up_block(c, fids, track)
     if block: body += "\n\n" + block
     body += "\n\n" + instructor_footer(instr, bool(em.get("add_links")))
     return body
@@ -1497,8 +1515,8 @@ def send_instructor_email(em_id):
     if not instr or not cls: c.close(); return 0, "class or instructor missing"
     instr, cls = dict(instr), dict(cls)
     people = instructor_email_audience(c, instr["id"], cls, em["audience"])
-    body = build_instructor_email(c, em, instr, cls)
-    c.close()
+    body = build_instructor_email(c, em, instr, cls, ("instructor_email", em_id))
+    c.commit(); c.close()
     cfg = mailer.load_email_config()
     first_name = (instr.get("name") or "").split(" ")[0]
     ok = 0
@@ -1994,7 +2012,7 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
     iname = (instr["name"] if instr else "") or ""
     note = (cls.get("followup_note") or "") if note is None else note
     # The instructor's next three classes ride along on every after-class email.
-    upcoming = coming_up_block(c, instructor_next_classes(c, cls["instructor_id"], cls["id"]))
+    upcoming = coming_up_block(c, instructor_next_classes(c, cls["instructor_id"], cls["id"]), ("after_class", cls["id"]))
     if upcoming:
         upcoming = upcoming.replace("Coming up at The Gibby:", f"Coming up with {iname.split(' ')[0] or 'your instructor'} at The Gibby:", 1)
     if email_type == "followup" and cls.get("followup_status") not in ("ready", "sent", "sent_late"):
@@ -2420,6 +2438,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/notify": return self.notify_page()
         if p == "/feedback": return self.feedback_page()
         if p == "/unsubscribe": return self.unsubscribe_page()
+        if p.startswith("/go/"): return self.go_redirect(p)
         if p.startswith("/class-ics/"): return self.class_ics_dl(p)
         if p.startswith("/class-photo/"): return self.class_photo(p)
         if p.startswith("/class-poster/"): return self.class_poster(p)
@@ -2658,6 +2677,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 except (BrokenPipeError, ConnectionResetError): return
                 remaining -= len(chunk)
         return
+
+    def go_redirect(self, p):
+        """Counted redirect for links in emails (Register buttons)."""
+        tok = p.split("/")[2].split("?")[0] if len(p.split("/")) > 2 else ""
+        c = db(); row = c.execute("SELECT id, url FROM tracked_links WHERE token=?", (tok,)).fetchone()
+        if not row: c.close(); return self.send_error(404)
+        c.execute("UPDATE tracked_links SET clicks=clicks+1, last_click=? WHERE id=?", (now(), row["id"])); c.commit(); c.close()
+        self.send_response(302); self.send_header("Location", row["url"]); self.send_header("Cache-Control", "no-store"); self.end_headers()
 
     def class_ics_dl(self, p):
         u = self.current_user()
@@ -3043,6 +3070,7 @@ class H(http.server.BaseHTTPRequestHandler):
             rows = [dict(r) for r in c.execute(f"""SELECT e.*, us.name AS instructor_name, cl.title AS class_title
                 FROM instructor_emails e JOIN users us ON us.id=e.user_id LEFT JOIN classes cl ON cl.id=e.class_id
                 {where} ORDER BY e.id DESC LIMIT 100""", (() if not where else (u["id"],))).fetchall()]
+            for r in rows: r["clicks"] = link_clicks(c, "instructor_email", r["id"])
             c.close()
             return self.send_json({"emails": rows})
         if p.startswith("/api/instructor-emails/template"):
@@ -3153,6 +3181,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 cl["followup_recipients"] = len(who)
                 cl["attendance_known"] = known
                 cl["thanks_sent_at"] = email_sent_at(c, cl["id"], "followup")
+                cl["register_clicks"] = link_clicks(c, "after_class", cl["id"])
                 cl["late_sent_at"] = email_sent_at(c, cl["id"], "followup_late")
                 cl["note_written"] = bool((cl.get("followup_note") or "").strip()) and cl.get("followup_status") in ("ready","sent","sent_late")
                 cl["end_date"] = end.isoformat()

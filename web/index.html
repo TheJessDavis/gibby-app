@@ -1755,7 +1755,7 @@ async function adminMarketing(){
   const drafts=(social.posts||[]).filter(p=>p.status==='draft'), done=(social.posts||[]).filter(p=>p.status!=='draft');
   $('#tab').innerHTML = `<h2>Class <em>announcements</em></h2>
     ${(iem.emails||[]).length?`<label>Emails instructors sent their students (${iem.emails.length})</label>
-      ${iem.emails.slice(0,20).map(e=>`<div class="card"><b>${esc(e.subject)}</b><div class="meta">${esc(e.instructor_name)} · ${esc(e.class_title||'')} · ${({class:'this class',present:'checked in',past:'past students'})[e.audience]||''} · ${e.status==='sent'?'sent to '+e.recipients+' on '+esc((e.sent_at||'').slice(0,16).replace('T',' ')):e.status==='scheduled'?'scheduled for '+esc((e.scheduled_for||'').slice(0,16).replace('T',' ')):'failed: '+esc(e.error||'')}</div>
+      ${iem.emails.slice(0,20).map(e=>`<div class="card"><b>${esc(e.subject)}</b><div class="meta">${esc(e.instructor_name)} · ${esc(e.class_title||'')} · ${({class:'this class',present:'checked in',past:'past students'})[e.audience]||''} · ${e.status==='sent'?'sent to '+e.recipients+' on '+esc((e.sent_at||'').slice(0,16).replace('T',' '))+' · <b>'+(e.clicks||0)+' Register click'+(e.clicks===1?'':'s')+'</b>':e.status==='scheduled'?'scheduled for '+esc((e.scheduled_for||'').slice(0,16).replace('T',' ')):'failed: '+esc(e.error||'')}</div>
         <details><summary class="meta">Read it</summary><div style="white-space:pre-wrap" class="meta">${esc(e.body)}</div></details></div>`).join('')}`:''}
     ${drafts.length?`<label>Photo posts waiting for your approval (${drafts.length})</label>
       <p class="sub" style="margin-top:2px">Instructors uploaded photos. Nothing goes to Facebook until you press Approve.${social.live?'':' Posting is in dry-run right now, so Approve only records it.'}</p>
@@ -2082,7 +2082,7 @@ async function adminApprovals(){
         ${c.note_written?'<span class="pill appr">note written</span>':'<span class="pill inc">no note</span>'}</div>
       <div class="meta" style="margin-top:8px">
         ${c.thanks_sent_at
-          ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}.`
+          ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}. <b>${c.register_clicks||0} Register click${c.register_clicks===1?'':'s'}</b> on the next-classes links.`
           : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
       </div>
       ${c.fb_submitted_at?`<div class="meta" style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">
@@ -2860,7 +2860,9 @@ async function instrEmail(){
     <div class="two" style="margin-top:12px"><button class="btn ghost" onclick="ebPreview()">Preview</button><button class="btn ghost" onclick="ebSend('morning')">Send tomorrow 9 AM</button></div>
     <button class="btn dark" style="margin-top:8px" onclick="ebSend('now')">Send now</button>
     <div id="ebp"></div>
+    <div id="ebhist"></div>
     <button class="btn ghost" style="margin-top:12px" onclick="renderInstr('mine')">Back to My classes</button>`;
+  try{ const h=(await api('/api/instructor-emails')).emails||[]; if(h.length) $('#ebhist').innerHTML=`<label style="margin-top:16px">Your recent emails</label>`+h.slice(0,8).map(e=>`<div class="card"><b>${esc(e.subject)}</b><div class="meta">${esc(e.class_title||'')} · ${e.status==='sent'?'sent to '+e.recipients+' · '+(e.clicks||0)+' Register click'+(e.clicks===1?'':'s'):e.status}</div></div>`).join(''); }catch(_){}
 }
 function ebTemplate(v){ EB.template=v; instrEmail(); }
 function ebAudience(v){ EB.audience=v; document.querySelectorAll('#eba button').forEach(b=>b.classList.toggle('on', b.textContent.startsWith({class:'This',present:'Checked',past:'All'}[v]))); }
