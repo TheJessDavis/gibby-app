@@ -544,6 +544,7 @@ function renderProfile(){
     </div>
     <input type="file" id="pf_file" accept="image/*" style="display:none" onchange="pfPickPhoto(event)">
     <label>Your name</label><input id="pf_name" value="${esc(ME&&ME.name||'')}">
+    <label>Your phone</label><input id="pf_phone" type="tel" value="${esc(ME&&ME.phone||'')}" placeholder="So the Gibby can reach you on class day">
     <label>Your address</label><input id="pf_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
     <div class="hint">Only The Gibby's admins see this (for payments and paperwork).</div>
     <label style="margin-top:14px">Your links (added to the bottom of emails you send students)</label>
@@ -571,7 +572,7 @@ function renderProfile(){
   </div>`;
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['requests','\u{1F4CC}','Requests'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
+const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['requests','\u{1F4CC}','Requests'],['supplies','\u{1F9FA}','Supplies'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
   document.body.classList.remove('formopen'); closeMore();
@@ -865,7 +866,7 @@ async function saveProfile(){
   if(!name) return showErr('perr','Name is required.');
   try{
     await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value});
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value});
     await api('/api/me').then(r=>ME=r.user);
     PF_PHOTO=null; PF_SKILLS=null; boot();
   }
@@ -977,7 +978,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1005,6 +1006,9 @@ async function adminDashboard(){
         <div class="meta">The last email the app tried to send was rejected, so instructors and admins are not getting notifications, invitations or contracts.</div></div></div>
       <div class="meta" style="margin-top:8px;color:#B4442C">${esc(d.email_error)}</div>
       <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Open Connections to send a test</button></div>`:''}
+    ${d.supplies_waiting?`<div class="card"><div class="row"><div><h3>Supplies requested</h3>
+        <div class="meta">${d.supplies_waiting} request${d.supplies_waiting===1?'':'s'} from instructors waiting to be ordered.</div></div></div>
+      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('supplies')">Open Supplies \u2192</button></div>`:''}
     ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
       <div class="row"><div><h3>⚠ Publishing needs attention</h3>
         <div class="meta">${d.publish_failures.length} step${d.publish_failures.length===1?'':'s'} could not be posted after ${5} tries. The class itself is still approved.</div></div></div>
@@ -1380,7 +1384,7 @@ async function adminPeople(){
     (u.email||'').toLowerCase().includes(ql) ||
     (u.skills||[]).some(k=>k.toLowerCase().includes(ql)));
   const row=u=>`<div class="card"><div class="row">
-      <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.address?' · '+esc(u.address):''}</div>
+      <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.phone?' · <a href="tel:'+esc(u.phone)+'">'+esc(u.phone)+'</a>':''}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       </div>
       <div style="text-align:right">${u.role==='admin'?'<span class="pill appr">admin</span>':''}
@@ -1448,6 +1452,34 @@ async function reinvite(email,name,role){
 }
 
 /* ---------------- connections ---------------- */
+async function adminSupplies(){
+  const d=await api('/api/supplies'); const rs=d.supplies||[];
+  const open=rs.filter(s=>s.status==='requested'), ordered=rs.filter(s=>s.status==='ordered'), done=rs.filter(s=>s.status==='ready'||s.status==='declined');
+  const list=rs.filter(s=>s.status==='requested'||s.status==='ordered').flatMap(s=>(s.items||'').split('\n').map(i=>({i, who:s.instructor_name, cls:s.class_title, by:s.needed_by})));
+  const card=s=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(s.class_title)} · by ${esc(s.needed_by||'?')}</h3>
+      <div class="meta">${esc(s.instructor_name)}${s.instructor_phone?' · <a href="tel:'+esc(s.instructor_phone)+'">'+esc(s.instructor_phone)+'</a>':''}${s.notes?' · '+esc(s.notes):''}</div>
+      <div class="meta" style="margin-top:6px;white-space:pre-wrap">${esc(s.items||'')}</div>${s.admin_note?`<div class="meta">Note: ${esc(s.admin_note)}</div>`:''}</div>
+      ${({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready</span>',declined:'<span class="pill inc">declined</span>'})[s.status]}</div>
+    <div class="two" style="margin-top:10px">
+      ${s.status==='requested'?`<button class="btn warn" onclick="supplyAct(${s.id},'declined')">Decline</button><button class="btn dark" onclick="supplyAct(${s.id},'ordered')">Ordered</button>`
+       :s.status==='ordered'?`<span></span><button class="btn green" onclick="supplyAct(${s.id},'ready')">Ready at the Gibby</button>`
+       :`<button class="btn ghost" onclick="supplyAct(${s.id},'requested')">Reopen</button><span></span>`}</div></div>`;
+  $('#tab').innerHTML=`<h2>Supply <em>requests</em></h2>
+    <p class="sub">Instructors ask from their class card. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
+    ${list.length?`<div class="card"><h3 style="font-size:1rem">Shopping list (${list.length} lines)</h3>${list.map(x=>`<div class="meta">\\u2610 ${esc(x.i)} <span style="opacity:.7">· ${esc(x.who)}, ${esc(x.cls)}, by ${esc(x.by||'?')}</span></div>`).join('')}</div>`:''}
+    <label style="margin-top:12px">Waiting (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
+    <label style="margin-top:16px">Ordered (${ordered.length})</label>${ordered.map(card).join('')||'<div class="muted">None.</div>'}
+    ${done.length?`<label style="margin-top:16px">Done (${done.length})</label>${done.slice(0,20).map(card).join('')}`:''}`;
+}
+async function supplyAct(id, status){
+  let note='';
+  if(status==='declined'){ note=prompt('Why? (the instructor sees this)'); if(note===null) return; }
+  const r=await api('/api/supplies/'+id+'/'+status,'POST',{note}); if(r.error){ alert(r.error); return; }
+  adminSupplies();
+}
+async function sendDigestNow(){
+  const r=await api('/api/admin/send-digest','POST',{}); alert(r.ok?'Sent to every admin.':'Could not send: '+(r.error||''));
+}
 async function adminRequests(){
   const d=await api('/api/requests'); const rs=d.requests||[];
   const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
@@ -1579,6 +1611,8 @@ async function adminConnections(){
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
       <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
       <button class="btn ghost" style="margin-top:8px" onclick="resendContracts()">Re-send unsigned contract emails</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="sendDigestNow()">Send the Monday digest now</button>
+      <div class="hint">The week-ahead digest goes to every admin each Monday at 7 AM on its own: this week's sessions, under-minimum classes, unsigned contracts, flags, supply requests, and what is waiting for approval.</div>
       <div class="hint">Every instructor with a contract waiting gets the "ready to sign" email again. Unsigned contracts also get one reminder 3 days after they are sent.</div>
       <div class="hint">Sends one email to every account listing the classes currently open on the Learn tab.</div></div>
     <div class="card"><div class="row"><div><h3>Backups</h3><div class="meta">${d.backup&&d.backup.ok
@@ -2388,6 +2422,8 @@ function cardCls(c){
       ${c.rating_n?`<div class="meta" style="margin-top:6px"><b style="color:#B4761A">\u2605 ${c.rating_avg}</b> from ${c.rating_n} student${c.rating_n===1?'':'s'}${(c.rating_comments||[]).length?`<div style="margin-top:4px">${c.rating_comments.slice(0,3).map(x=>`<div style="border-left:3px solid var(--line);padding-left:8px;margin-top:4px">\u201c${esc(x.text)}\u201d</div>`).join('')}${c.rating_comments.length>3?`<div class="hint">and ${c.rating_comments.length-3} more</div>`:''}</div>`:''}</div>`:''}
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="supplyForm(${c.id})">\u{1F9FA} Ask the Gibby for supplies</button>
+      <div id="sq${c.id}"></div>
       <button class="btn ghost" style="margin-top:8px" onclick="reimburseForm(${c.id})">\u{1F9FE} Get paid back for supplies</button>
       <div id="rb${c.id}"></div>
       ${c.cal_start?`<div class="two" style="margin-top:8px">
@@ -2628,6 +2664,26 @@ async function emailClass(id,kind){
 // Registration view: its own boundary, scoped to this class's roster container, so a
 // bad registration record cannot take down the class card or the list around it.
 function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
+async function supplyForm(id){
+  const box=$('#sq'+id); if(!box) return;
+  if(box.innerHTML){ box.innerHTML=''; return; }
+  let mine=[]; try{ mine=((await api('/api/supplies')).supplies||[]).filter(s=>s.class_id===id); }catch(_){}
+  const c=(window.__classes||[]).find(x=>x.id===id)||{};
+  const pill=s=>({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready at the Gibby</span>',declined:'<span class="pill inc">not this time</span>'})[s]||s;
+  box.innerHTML=`<div class="card" style="margin-top:8px">
+    ${mine.length?mine.map(s=>`<div class="meta" style="margin-bottom:8px">${pill(s.status)} by ${esc(s.needed_by||'')}: ${esc((s.items||'').split('\n').join(', '))}${s.admin_note?' · '+esc(s.admin_note):''}</div>`).join(''):''}
+    <label>What do you need? One item per line, with amounts</label>
+    <textarea id="sqi${id}" rows="4" placeholder="12 x 11x14 canvases&#10;2 bottles white acrylic&#10;paper towels"></textarea>
+    <div class="two"><div><label>Needed by</label><input id="sqd${id}" value="${esc(c.slot_date||'')}"></div><div><label>Notes</label><input id="sqn${id}" placeholder="brand, where to buy, optional"></div></div>
+    <button class="btn dark" style="margin-top:8px" onclick="sendSupply(${id})">Send the request</button>
+    <div class="hint">The admins are emailed. You will hear when it is ordered and when it is ready at the Gibby.</div>
+    <div id="sqs${id}" class="meta"></div></div>`;
+}
+async function sendSupply(id){
+  const r=await api('/api/classes/'+id+'/supplies','POST',{items:$('#sqi'+id).value, needed_by:$('#sqd'+id).value, notes:$('#sqn'+id).value});
+  if(r.error){ $('#sqs'+id).textContent=r.error; return; }
+  alert('Sent. The Gibby has it.'); $('#sq'+id).innerHTML=''; supplyForm(id);
+}
 function reimburseForm(id){
   const box=$('#rb'+id); if(!box) return;
   if(box.innerHTML){ box.innerHTML=''; return; }

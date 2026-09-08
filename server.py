@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.61.0-click-tracking"
+VERSION = "10.62.0-phone-supplies-digest"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -185,6 +185,11 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS marketing_optout(
         email TEXT PRIMARY KEY, created TEXT)""")
     c.execute("CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT)")
+    try: c.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+    except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS supply_requests(
+        id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, items TEXT, needed_by TEXT, notes TEXT,
+        status TEXT DEFAULT 'requested', admin_note TEXT, decided_by INTEGER, created TEXT, updated TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
@@ -1526,6 +1531,11 @@ def send_instructor_email(em_id):
             greet_body += f"\n\nYou are getting this because you took a class with {first_name} at The Gibby. Unsubscribe: {unsub_link(email)}"
         if mailer.send(email, em["subject"], greet_body, cfg, reply_to=instr["email"], from_name=f"{instr['name']} via The Gibby", copy=False):
             ok += 1
+    # The instructor gets their own copy, exactly as a student saw it.
+    if ok and instr.get("email"):
+        mailer.send(instr["email"], f"[Your copy] {em['subject']}",
+            f"(Sent to {ok} student{'s' if ok != 1 else ''}. This is how it looked to them.)\n\n{body}", cfg,
+            from_name="The Gibby Class Manager", copy=False)
     copy_to = thanks_settings().get("instructor_copy") or ""
     if copy_to:
         mailer.send(copy_to, f"[Copy] {instr['name']} emailed {ok} student{'s' if ok != 1 else ''}: {em['subject']}",
@@ -1543,6 +1553,64 @@ def send_due_instructor_emails():
     for i in due:
         try: n, err = send_instructor_email(i); print(f"[instructor-email] #{i} sent to {n}" + (f" ({err})" if err else ""))
         except Exception as e: print(f"[instructor-email] #{i} failed: {e}")
+
+def admin_digest_text(c):
+    """The Monday morning email: everything that needs a hand this week."""
+    today = datetime.date.today()
+    week_end = today + datetime.timedelta(days=7)
+    L = []
+    classes = [dict(r) for r in c.execute("""SELECT cl.*, u.name AS instr_name FROM classes cl LEFT JOIN users u ON u.id=cl.instructor_id
+                                             WHERE cl.status='approved' AND cl.deleted_at IS NULL""")]
+    counts = {r["class_id"]: r["n"] for r in c.execute("SELECT class_id, COUNT(*) AS n FROM registrations WHERE refunded=0 GROUP BY class_id")}
+    this_week = []
+    for cl in classes:
+        d = _class_date(cl)
+        if not d: continue
+        try: sess = [parse_day(x.get("date")) for x in json.loads(cl.get("session_dates") or "[]")]
+        except Exception: sess = []
+        days = [x for x in (sess or [d]) if x and today <= x <= week_end]
+        for x in days: this_week.append((x, cl))
+    this_week.sort(key=lambda t: t[0])
+    L.append(f"THIS WEEK ({today.strftime('%b %d')} to {week_end.strftime('%b %d')}): {len(this_week)} session(s)")
+    for x, cl in this_week:
+        n = counts.get(cl["id"], 0); mn = cl.get("min_p") or 0; mx = cl.get("max_p") or 0
+        flag = "  <- under minimum" if mn and n < mn else ("  <- FULL" if mx and n >= mx else "")
+        L.append(f"  {x.strftime('%a %b %d')}  {cl.get('class_time') or cl.get('slot_time') or ''}  {cl['title']} ({cl.get('instr_name') or '?'})  {n}/{mx} booked{flag}")
+    low = [cl for cl in classes if (cl.get("min_p") or 0) and counts.get(cl["id"], 0) < cl["min_p"] and (_class_date(cl) or today) >= today and (_class_date(cl) - today).days <= 14]
+    L.append(""); L.append(f"UNDER MINIMUM IN THE NEXT TWO WEEKS: {len(low)}")
+    for cl in low: L.append(f"  {cl.get('slot_date','')}  {cl['title']}  {counts.get(cl['id'],0)}/{cl.get('min_p')} needed")
+    unsigned = [cl for cl in classes if cl.get("contract_status") == "sent"]
+    L.append(""); L.append(f"CONTRACTS NOT YET SIGNED: {len(unsigned)}")
+    for cl in unsigned: L.append(f"  {cl['title']} ({cl.get('instr_name') or '?'}), sent {(cl.get('contract_sent_at') or '')[:10]}")
+    pend = c.execute("SELECT COUNT(*) FROM classes WHERE status IN ('pending','graphic_review') AND deleted_at IS NULL").fetchone()[0]
+    L.append(""); L.append(f"WAITING FOR YOUR APPROVAL: {pend} class(es)")
+    week_ago = (datetime.datetime.now() - datetime.timedelta(days=7)).isoformat(timespec="seconds")
+    flagged = [dict(r) for r in c.execute("""SELECT f.concern, cl.title FROM class_feedback f JOIN classes cl ON cl.id=f.class_id
+                                            WHERE f.submitted_at>=? AND f.concern IS NOT NULL AND f.concern!=''""", (week_ago,))]
+    L.append(""); L.append(f"FLAGGED BY INSTRUCTORS THIS WEEK: {len(flagged)}")
+    for f in flagged: L.append(f"  {f['title']}: {f['concern'][:160]}")
+    sp = [dict(r) for r in c.execute("""SELECT s.items, s.needed_by, cl.title, u.name FROM supply_requests s JOIN classes cl ON cl.id=s.class_id
+                                       JOIN users u ON u.id=s.user_id WHERE s.status='requested' ORDER BY s.needed_by""")]
+    L.append(""); L.append(f"SUPPLY REQUESTS WAITING: {len(sp)}")
+    for x in sp: L.append(f"  {x['name']} for {x['title']} by {x['needed_by'] or '?'}: {' / '.join((x['items'] or '').splitlines())[:140]}")
+    photos = c.execute("SELECT COUNT(*) FROM social_posts WHERE status='draft'").fetchone()[0]
+    reqs = c.execute("SELECT COUNT(*) FROM class_requests WHERE status='open'").fetchone()[0]
+    reimb = c.execute("SELECT COUNT(*) FROM reimbursements WHERE status='requested'").fetchone()[0]
+    L.append(""); L.append(f"ALSO WAITING: {photos} photo post(s) to approve, {reimb} reimbursement(s), {reqs} open class request(s)")
+    L.append(""); L.append(f"Open the app: {mailer.APP_URL}")
+    return "\n".join(L)
+
+def send_admin_digest(force=False):
+    """Every Monday from 7 AM (once), or on demand from Connections."""
+    today = datetime.date.today().isoformat()
+    if not force:
+        if datetime.date.today().weekday() != 0 or datetime.datetime.now().hour < 7: return False
+        if _meta_get("last_digest_day") == today: return False
+    c = db(); text = admin_digest_text(c); admins = emails_for(c, "WHERE role='admin'"); c.close()
+    if not admins: return False
+    ok = mailer.send(admins, f"Gibby week ahead: {datetime.date.today().strftime('%A, %B %d')}", text)
+    if ok: _meta_set("last_digest_day", today)
+    return ok
 
 def sweep_contracts_to_drive():
     """Hourly: any signed contract not yet on Drive gets filed. Covers the signing
@@ -2338,6 +2406,8 @@ def scheduler_loop():
             except Exception as e: print("[contract] reminder error:", e)
             try: send_due_instructor_emails()
             except Exception as e: print("[instructor-email] error:", e)
+            try: send_admin_digest()
+            except Exception as e: print("[digest] error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
@@ -2789,6 +2859,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "tour_seen":u.get("tour_seen",0),
                 "photo":u.get("photo") or "", "skills":json.loads(u.get("skills") or "[]"),
                 "address":u.get("address") or "",
+                "phone":u.get("phone") or "",
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
                 "signoff":u.get("signoff") or "",
                 "contracts_to_sign":n_contracts},
@@ -2800,8 +2871,8 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             rows = [{"id":r["id"],"name":r["name"],"email":r["email"],"role":r["role"],
                      "pending":bool(r["must_change_pw"]), "photo":r["photo"] or "",
-                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or ""}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address FROM users
+                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or ""}
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             c.close(); return self.send_json({"users":rows})
         if p == "/api/slots":
@@ -3100,6 +3171,16 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "auto_ids": auto_ids,
                                    "has_links": any(instr.get("social_" + k) for k in ("instagram","facebook","tiktok","website")),
                                    "footer": instructor_footer(instr, True)})
+        if p == "/api/supplies":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            where = "" if u["role"] == "admin" else "WHERE s.user_id=?"
+            rows = [dict(r) for r in c.execute(f"""SELECT s.*, cl.title AS class_title, cl.slot_date, u.name AS instructor_name, u.phone AS instructor_phone
+                FROM supply_requests s JOIN classes cl ON cl.id=s.class_id JOIN users u ON u.id=s.user_id
+                {where} ORDER BY s.status='requested' DESC, s.needed_by, s.id DESC LIMIT 300""", (() if not where else (u["id"],))).fetchall()]
+            c.close()
+            return self.send_json({"supplies": rows})
         if p == "/api/reimbursements":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -3305,6 +3386,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({
                 "publish_failures": self._publish_failures(),
                 "email_error": mailer.LAST_ERROR,
+                "supplies_waiting": db().execute("SELECT COUNT(*) FROM supply_requests WHERE status='requested'").fetchone()[0],
                 "pending": self._classes("WHERE c.status='pending' "),
                 "graphic": self._classes("WHERE c.status='graphic_review' "),
                 "returned": self._classes("WHERE c.status='incomplete' "),
@@ -3709,6 +3791,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.execute(f"UPDATE users SET social_{k}=? WHERE id=?", (v or None, u["id"]))
             if b.get("signoff") is not None:
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
+            if b.get("phone") is not None:
+                c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/upload-video":
@@ -4000,6 +4084,54 @@ class H(http.server.BaseHTTPRequestHandler):
             if when == "now":
                 threading.Thread(target=send_instructor_email, args=(eid,), daemon=True).start()
             return self.send_json({"ok":True, "id":eid, "recipients":len(people), "when":when, "scheduled_for":sched})
+        msr = re.match(r"^/api/classes/(\d+)/supplies$", p)
+        if msr:
+            # Instructor asks the Gibby to buy or set out supplies for a class.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(msr.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            items = "\n".join(x.strip() for x in (b.get("items") or "").splitlines() if x.strip())[:2000]
+            if len(items) < 3: c.close(); return self.send_json({"error":"List what you need, one item per line."},400)
+            needed = (b.get("needed_by") or "").strip()[:40] or (row["slot_date"] or "")
+            notes = (b.get("notes") or "").strip()[:500]
+            c.execute("""INSERT INTO supply_requests(class_id,user_id,items,needed_by,notes,status,created,updated) VALUES(?,?,?,?,?,'requested',?,?)""",
+                      (cid, u["id"], items, needed, notes, now(), now()))
+            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            admins = [a for a in emails_for(c, "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()]
+            c.commit(); c.close()
+            if admins:
+                mailer.send(admins, f"Supply request from {u['name']} for {row['title']} (by {needed})",
+                    f"{u['name']} needs these for \"{row['title']}\" by {needed}:\n\n" + "\n".join("  • " + x for x in items.splitlines())
+                    + (f"\n\nNotes: {notes}" if notes else "") + f"\n\nMark it ordered or ready under More > Supplies: {mailer.APP_URL}")
+            return self.send_json({"ok":True, "id":rid})
+        mss = re.match(r"^/api/supplies/(\d+)/(ordered|ready|declined|requested)$", p)
+        if mss:
+            u = self.require("admin")
+            if not u: return
+            rid, status = int(mss.group(1)), mss.group(2); b = self.read_json(); c = db()
+            row = c.execute("""SELECT s.*, cl.title AS class_title, us.email AS instr_email, us.name AS instr_name
+                               FROM supply_requests s JOIN classes cl ON cl.id=s.class_id JOIN users us ON us.id=s.user_id WHERE s.id=?""",(rid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            note = (b.get("note") or "").strip()[:300]
+            c.execute("UPDATE supply_requests SET status=?, admin_note=?, decided_by=?, updated=? WHERE id=?", (status, note, u["id"], now(), rid))
+            c.commit(); c.close()
+            first = (row["instr_name"] or "").split(" ")[0] or "there"
+            word = {"ordered": "Ordered", "ready": "Ready at the Gibby", "declined": "Not this time"}.get(status)
+            if word:
+                mailer.send(row["instr_email"], f"{word}: your supplies for {row['class_title']}",
+                    f"Hi {first},\n\nYour supply request for \"{row['class_title']}\" is now: {word}.\n\n"
+                    + "\n".join("  • " + x for x in (row["items"] or "").splitlines())
+                    + (f"\n\nNote from the Gibby: {note}" if note else "") + "\n\nThanks,\nThe Gibby")
+            return self.send_json({"ok":True, "status":status})
+        if p == "/api/admin/send-digest":
+            u = self.require("admin")
+            if not u: return
+            ok = send_admin_digest(force=True)
+            return self.send_json({"ok":bool(ok), "error": ("" if ok else mailer.LAST_ERROR)})
         mrb = re.match(r"^/api/classes/(\d+)/reimburse$", p)
         if mrb:
             # Instructor asks to be paid back for supplies: amount, what for, receipt photo.
