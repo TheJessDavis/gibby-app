@@ -1,6 +1,8 @@
 /* Gibby site embed v3 — renders approved classes onto theeverett.org:
    1. the Art Workshops page list (as before), and
-   2. the homepage "What's Next" carousel, as real slides in date order.
+   2. the homepage "Art Workshops" carousel, as real slides in date order.
+      (The "What's Next" strip is hand-curated by the site editors; the app
+      stays out of it.)
    Both obey an editor-authored GIBBY OVERRIDES text block (see below).
 
    Squarespace loads this via a single header-injection line:
@@ -247,9 +249,11 @@ function renderHomeCarousels(classes){
     var carOld=sec.querySelector('[data-controller="UserItemsListCarousel"]');
     if(!carOld)continue;
     var head=(sec.textContent||'').slice(0,400);
+    /* Only the Art Workshops carousel gets app classes. The What's Next strip
+       is left to the website editors (Jess, 2026-09-11: classes should not
+       post there). */
     var prefix=null;
-    if(/what.?s next/i.test(head)) prefix='Art Workshop: ';
-    else if(/art workshops/i.test(head)) prefix='';
+    if(/art workshops/i.test(head) && !/what.?s next/i.test(head)) prefix='';
     if(prefix===null)continue;
     total+=renderCarousel(classes, carOld, prefix);
   }
@@ -268,7 +272,7 @@ function ginit(){
     fetch(APP+'/embed.json').then(function(r){return r.json()}).then(function(d){
       var rules=readOverrides();
       var classes=applyOverrides(d.classes||[],rules);
-      var msg='v3';
+      var msg='v4';
       if(onWorkshops){
         var list=document.querySelector('.user-items-list-simple');
         if(list){
