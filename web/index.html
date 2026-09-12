@@ -3060,6 +3060,34 @@ function toggleSlot(id){
   if(CLASSKIND==='series' && SEL.length) return previewSeries();   // re-checks open weeks, then redraws
   instrOpen();
 }
+function sessionCardHTML(slot){
+  const skipped=slot.skip||[];
+  return `<h3 style="font-size:.95rem">${slot.sessions.length} sessions</h3>
+    <div class="sessionlist">${slot.sessions.map((s,i)=>`<div class="sessrow" style="display:flex;align-items:center;gap:10px">
+      ${i?`<input type="checkbox" checked onchange="dropSession('${esc(s.date)}')" aria-label="Keep ${esc(s.date)}">`:'<span style="width:16px;display:inline-block"></span>'}<b>${i+1}</b> ${esc(s.date)}</div>`).join('')}</div>
+    ${skipped.length?`<div class="meta" style="margin-top:8px">No class on: ${skipped.map(d=>`${esc(d)} <a href="#" onclick="undoDrop('${esc(d)}');return false">undo</a>`).join(' · ')}</div>`:''}
+    <div class="meta" style="margin-top:8px">Students pay once and are enrolled in every session. Untick a date to skip it.</div>`;
+}
+async function reflowSessions(weeks){
+  const r=await api('/api/series-preview','POST',{slot_ids:SUBMIT_SLOT.ids, weeks, skip:SUBMIT_SLOT.skip||[], for_class:RESCHED?RESCHED.id:undefined});
+  if(r.error||!r.sessions||r.sessions.length<2){ alert(r.error||'Could not rebuild the run with that date skipped.'); return false; }
+  SUBMIT_SLOT.sessions=r.sessions; SUBMIT_SLOT.weeks=r.sessions.length;
+  const card=$('#fsessions'); if(card) card.innerHTML=sessionCardHTML(SUBMIT_SLOT);
+  const sp=$('#fbook-span'); if(sp) sp.textContent=`${SUBMIT_SLOT.weeks} weeks · ${SUBMIT_SLOT.sessions[0].date} – ${SUBMIT_SLOT.sessions[SUBMIT_SLOT.sessions.length-1].date}`;
+  if(typeof classTimeChanged==='function') try{ classTimeChanged(); }catch(_){}
+  return true;
+}
+async function dropSession(label){
+  const keep=confirm('Skip '+label+'?\n\nOK: add a week at the end so the course keeps '+SUBMIT_SLOT.sessions.length+' sessions.\nCancel: just drop it and run one week shorter.');
+  const before=SUBMIT_SLOT.skip?SUBMIT_SLOT.skip.slice():[];
+  SUBMIT_SLOT.skip=[...before, label];
+  const ok=await reflowSessions(keep?SUBMIT_SLOT.sessions.length:Math.max(2,SUBMIT_SLOT.sessions.length-1));
+  if(!ok){ SUBMIT_SLOT.skip=before; const card=$('#fsessions'); if(card) card.innerHTML=sessionCardHTML(SUBMIT_SLOT); }
+}
+async function undoDrop(label){
+  SUBMIT_SLOT.skip=(SUBMIT_SLOT.skip||[]).filter(x=>x!==label);
+  await reflowSessions(SUBMIT_SLOT.sessions.length);
+}
 function confirmSelRoom(r){ return r || ROOM_PICK || 'Large Room'; }
 function confirmSel(){
   const sel=SEL.map(id=>DAYSLOTS.find(s=>s.id===id)).sort((a,b)=>tmin(a.start)-tmin(b.start));
@@ -3286,7 +3314,7 @@ function openForm(slot, draftPayload){
     <div class="bookbanner">
       <div class="bb-label">Your booking</div>
       <div class="bb-main">${slot.series
-        ? `${slot.weeks} weeks · ${esc(slot.sessions[0].date)} – ${esc(slot.sessions[slot.sessions.length-1].date)}`
+        ? `<span id="fbook-span">${slot.weeks} weeks · ${esc(slot.sessions[0].date)} – ${esc(slot.sessions[slot.sessions.length-1].date)}</span>`
         : esc(slot.date)} · ${esc(slot.start)} – ${esc(slot.end)}</div>
       <div class="bb-sub">${slot.room?esc(slot.room)+' · ':''}this window includes your setup and cleanup time</div>
     </div>
@@ -3298,9 +3326,7 @@ function openForm(slot, draftPayload){
       <div><select id="f_cend" onchange="classTimeChanged()">${timeOpts(slot.start, slot.end, 'end')}</select></div></div>
     <div class="hint">This is what students are told and what goes on Eventbrite. The time either side
       of it is yours for setting up and clearing away.</div>
-    ${slot.series?`<div class="card" style="margin-bottom:14px"><h3 style="font-size:.95rem">${slot.weeks} sessions</h3>
-      <div class="sessionlist">${slot.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)}</div>`).join('')}</div>
-      <div class="meta" style="margin-top:8px">Students pay once and are enrolled in every session.</div></div>`:''}
+    ${slot.series?`<div class="card" style="margin-bottom:14px" id="fsessions">${sessionCardHTML(slot)}</div>`:''}
     <div class="err" id="ferr"></div>
     <div class="two">
       <div><label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select></div>
