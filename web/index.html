@@ -1606,6 +1606,8 @@ async function adminConnections(){
       <input id="th_up" placeholder="Upcoming classes link" value="${esc((d.thanks||{}).upcoming_url||'')}" style="margin-top:6px">
       <input id="th_copy" placeholder="Who gets a copy of every instructor email" value="${esc((d.thanks||{}).instructor_copy||'')}" style="margin-top:6px">
       <input id="th_copyall" placeholder="Who gets a copy of EVERY email the app sends" value="${esc((d.thanks||{}).copy_all||'')}" style="margin-top:6px">
+      <input id="th_skip" placeholder="No thank-you for classes whose title contains… (comma separated)" value="${esc((d.thanks||{}).skip_keywords||'')}" style="margin-top:6px">
+      <div class="hint">Open studios and classes with no registrations never get the automatic after-class email or the instructor note nudge. Add more words here, e.g. "social club".</div>
       <div class="hint">Bulk sends (a whole class, everyone on Learn) arrive as one summary copy, not one per person. Leave blank to turn copies off.</div>
       <button class="btn ghost" style="margin-top:8px" onclick="saveThanks()">Save thank-you settings</button>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
@@ -1699,7 +1701,7 @@ async function reimbAct(id, action){
 }
 async function saveThanks(){
   const r=await api('/api/admin/thanks-settings','POST',{google_url:$('#th_google').value, facebook_url:$('#th_fb').value,
-    promo_code:$('#th_code').value, promo_pct:$('#th_pct').value, upcoming_url:$('#th_up').value, instructor_copy:$('#th_copy').value, copy_all:$('#th_copyall').value});
+    promo_code:$('#th_code').value, promo_pct:$('#th_pct').value, upcoming_url:$('#th_up').value, instructor_copy:$('#th_copy').value, copy_all:$('#th_copyall').value, skip_keywords:$('#th_skip').value});
   alert(r.error||'Saved. Every after-class thank-you from now on uses these.');
 }
 async function saveMailBridge(){
@@ -2113,7 +2115,7 @@ async function adminApprovals(){
     ${fu.classes.map(c=>`<div class="card">
       <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
         <div class="meta">${esc(c.instructor_name)} &middot; ended ${esc(c.end_date||'')}</div></div>
-        ${c.note_written?'<span class="pill appr">note written</span>':'<span class="pill inc">no note</span>'}</div>
+        ${c.exempt?`<span class="pill pend">no email: ${esc(c.exempt)}</span>`:c.note_written?'<span class="pill appr">note written</span>':'<span class="pill inc">no note</span>'}</div>
       <div class="meta" style="margin-top:8px">
         ${c.thanks_sent_at
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}. <b>${c.register_clicks||0} Register click${c.register_clicks===1?'':'s'}</b> on the next-classes links.`

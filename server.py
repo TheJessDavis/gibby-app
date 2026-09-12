@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.64.0-skip-weeks-room-fix"
+VERSION = "10.65.0-no-thankyou-open-studio"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2019,7 +2019,8 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
 
 THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
                    "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933",
-                   "instructor_copy": "jdavis@theeverett.org", "copy_all": "jdavis@theeverett.org"}
+                   "instructor_copy": "jdavis@theeverett.org", "copy_all": "jdavis@theeverett.org",
+                   "skip_keywords": "open studio"}
 
 def thanks_settings():
     """The after-class thank-you's links and discount, editable under Connections."""
@@ -2070,6 +2071,17 @@ def after_class_email(cls, first, attended, note="", instructor_name="", upcomin
         body = (f"Hi {first},\n\n{opening}{up}\n\n{block}\n\n"
                 f"See you at The Gibby,\nThe Gibby Center for the Arts")
     return subject, body
+
+def followup_exempt(c, cls):
+    """Classes that never get the automatic after-class email or the note nudge:
+    open studios (title keywords, editable under Connections) and anything with
+    no registrations. Returns the reason, or ''."""
+    kws = [k.strip().lower() for k in (thanks_settings().get("skip_keywords") or "").split(",") if k.strip()]
+    title = (cls.get("title") or "").lower()
+    for k in kws:
+        if k in title: return f"'{k}' class"
+    if enrollment(c, cls["id"]) == 0: return "no registrations"
+    return ""
 
 def followup_people(c, class_id):
     """Like followup_audience, but with names so each email can be personal."""
@@ -2252,7 +2264,9 @@ def run_scheduler(asof=None):
                         f"This list is just for you; students are not copied on it.\n\n"
                         f"Have a great class,\nThe Gibby", today, cfg)
                     if sent: actions.append(f"day-before roster to {instr_row['name']}: {cls['title']}")
-        if end_days == -1:      # the day after the LAST session, not the first
+        if end_days in (-1, -2, -3, -4) and followup_exempt(c, cls):
+            if end_days == -1: actions.append(f"no after-class email for {cls['title']}: {followup_exempt(c, cls)}")
+        elif end_days == -1:      # the day after the LAST session, not the first
             # Ask the instructor for their note. It goes to students tomorrow
             # morning in their name (no admin approval), or The Gibby's own
             # thank-you goes alone if they skip it.
@@ -2288,7 +2302,7 @@ def run_scheduler(asof=None):
                     if sent:
                         c.execute("UPDATE classes SET followup_reminded_at=? WHERE id=?", (now(), cls["id"]))
                         actions.append(f"follow-up reminder to {instr_row['name']}: {cls['title']}")
-        if -4 <= end_days <= -2 and not email_sent_at(c, cls["id"], "followup"):
+        if -4 <= end_days <= -2 and not email_sent_at(c, cls["id"], "followup") and not followup_exempt(c, cls):
             # Two mornings after the last session: the students' thank-you, with
             # the instructor's note on top when they wrote one.
             sent, why = send_after_class(c, cls, "followup", today, cfg)
@@ -3281,6 +3295,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 cl["register_clicks"] = link_clicks(c, "after_class", cl["id"])
                 cl["late_sent_at"] = email_sent_at(c, cl["id"], "followup_late")
                 cl["note_written"] = bool((cl.get("followup_note") or "").strip()) and cl.get("followup_status") in ("ready","sent","sent_late")
+                cl["exempt"] = followup_exempt(c, cl)
                 cl["end_date"] = end.isoformat()
                 out.append(cl)
             c.close()
