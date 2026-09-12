@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.66.0-untick-session-dates"
+VERSION = "10.66.1-resubmit-series"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4551,10 +4551,21 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"available": False})
             ph = ",".join("?" * len(ids))
             c = db()
-            n = c.execute(f"SELECT COUNT(*) FROM slots WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL",
-                          ids).fetchone()[0]
+            # Slots still held by the sent-back class being fixed are that
+            # instructor's own: they count as free for the resubmission.
+            own = set()
+            if b.get("for_class"):
+                try:
+                    orow = c.execute("SELECT * FROM classes WHERE id=? AND status='incomplete' AND deleted_at IS NULL",
+                                     (int(b["for_class"]),)).fetchone()
+                    if orow and (u.get("role") == "admin" or orow["instructor_id"] == u["id"]):
+                        own = set(_class_slot_ids(dict(orow)))
+                except (TypeError, ValueError):
+                    pass
+            rows = c.execute(f"SELECT id, status FROM slots WHERE id IN ({ph}) AND deleted_at IS NULL", ids).fetchall()
             c.close()
-            return self.send_json({"available": n == len(ids)})
+            ok = {r["id"] for r in rows if r["status"] == "available" or (r["status"] == "claimed" and r["id"] in own)}
+            return self.send_json({"available": all(i in ok for i in ids)})
         if p == "/api/slots":  # admin create
             u = self.require("admin");
             if not u: return
@@ -4676,6 +4687,22 @@ class H(http.server.BaseHTTPRequestHandler):
             c=db()
             ids = b.get("slot_ids") or ([b["slot_id"]] if b.get("slot_id") else [])
             ids = [int(x) for x in ids]
+            # Fixing a sent-back class: its old copy still holds the slots. Free them
+            # first (they are this instructor's own) so the same window can be re-used.
+            old_ids = []
+            if b.get("resubmit_of"):
+                try:
+                    oc = db(); orow = oc.execute("SELECT * FROM classes WHERE id=? AND status='incomplete' AND deleted_at IS NULL",
+                                                 (int(b["resubmit_of"]),)).fetchone()
+                    if orow and (u.get("role") == "admin" or orow["instructor_id"] == u["id"]):
+                        old_ids = _class_slot_ids(dict(orow))
+                        if old_ids:
+                            oc.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(old_ids))}) AND status='claimed'", old_ids)
+                            oc.execute("UPDATE classes SET slot_ids='[]' WHERE id=?", (orow["id"],))
+                            oc.commit()
+                    oc.close()
+                except Exception as e:
+                    print("[resubmit] could not free the old slots:", e)
             slot_date, slot_time, room = b.get("slot_date"), b.get("slot_time"), b.get("room")
             is_series = 1 if b.get("is_series") else 0
             weeks = max(2, min(int(b.get("session_count") or 2), 26)) if is_series else 1
@@ -4689,6 +4716,13 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.close(); return self.send_json({"error":"One of those slots no longer exists."},400)
                 # The FIRST session is always one day, one room, back-to-back. A series
                 # then repeats that shape on later weeks.
+                if is_series and len({r["date"] for r in rows}) > 1:
+                    # A resubmitted series arrives with every session's slots. Only
+                    # the first week describes the shape; the search finds the rest.
+                    d0 = min(rows, key=lambda r: (parse_day(r["date"]) or datetime.date.max, tmin(r["start"])))["date"]
+                    rows = [r for r in rows if r["date"] == d0]
+                    ids = [r["id"] for r in rows]
+                    ph = ",".join("?"*len(ids))
                 if len({r["date"] for r in rows}) != 1 or len({r["room"] for r in rows if r["room"]}) > 1:
                     c.close(); return self.send_json({"error":"Slots must be the same day and same room."},400)
                 rows.sort(key=lambda r: tmin(r["start"]))
@@ -4696,7 +4730,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     if tmin(a["end"]) != tmin(nxt["start"]):
                         c.close(); return self.send_json({"error":"Slots must be back-to-back (consecutive)."},400)
                 if is_series:
-                    sessions, _skipped = find_series_sessions(c, ids, weeks, skip=b.get("skip_dates") or [])
+                    sessions, _skipped = find_series_sessions(c, ids, weeks, skip=b.get("skip_dates") or [], own_ids=old_ids)
                     if not sessions:
                         c.close(); return self.send_json({"error":"Those slots are no longer available."},400)
                     if len(sessions) < 2:

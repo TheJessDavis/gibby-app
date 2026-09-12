@@ -760,15 +760,19 @@ async function startResubmit(id){
   try{
     let ids=RESUB.slot_ids; if(typeof ids==='string') ids=JSON.parse(ids||'[]');
     if(ids && ids.length){
-      const chk=await api('/api/slots/check','POST',{ids});
+      const chk=await api('/api/slots/check','POST',{ids, for_class:RESUB.id});
       const series=!!RESUB.is_series;
       let sessions=null;
       if(series){ try{ sessions=typeof RESUB.session_dates==='string'?JSON.parse(RESUB.session_dates||'[]'):(RESUB.session_dates||[]); }catch(_){ sessions=[]; } }
       if(chk.available && (!series || (sessions&&sessions.length))){
         const tp=(RESUB.slot_time||'').split(/\s+[–—-]\s+/);
+        // A series is described by its FIRST week only: the server re-finds the
+        // rest (and honours any date they untick). Sending every week's slots
+        // used to trip the "same day" check and block the submit.
+        const firstIds = (series && sessions[0] && sessions[0].slot_ids && sessions[0].slot_ids.length) ? sessions[0].slot_ids.slice() : ids.slice();
         openForm({ date:RESUB.slot_date, room:RESUB.room||'Large Room',
           start:tp[0]||'', end:tp[1]||tp[0]||'', time:RESUB.slot_time||'',
-          ids:ids.slice(), series, sessions: series?sessions:null,
+          ids:firstIds, series, sessions: series?sessions:null,
           weeks: series?sessions.length:1 });
         return;
       }
@@ -3783,7 +3787,14 @@ async function submitClassNow(){
   closeReview();
   const body = {...collectForm(), draft_id: DRAFT_ID || undefined};
   try{ await api('/api/classes','POST',body); SEL=[]; DRAFT_ID=null; renderInstr('mine'); }
-  catch(e){ const x=$('#ferr'); x.textContent=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message); x.classList.add('show'); window.scrollTo(0,0); }
+  catch(e){
+    const msg=(e.data&&e.data.fields?('Missing: '+e.data.fields.join(', ')):e.message)||'Something went wrong. Please try again.';
+    const x=$('#ferr'); x.textContent=msg; x.classList.add('show');
+    // Say it out loud too: on a phone the banner sits above the fold and a
+    // silent failure looks like the button did nothing.
+    alert("Not submitted yet: "+msg);
+    x.scrollIntoView({behavior:'smooth',block:'center'});
+  }
 }
 
 /* Actions are not sections: a failure here should report itself, not repaint a
