@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.67.0-my-classes-compact"
+VERSION = "10.67.1-questionnaire-optional"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -197,8 +197,6 @@ def init_db():
                      ("support","TEXT"),("highlight","TEXT"),("concern","TEXT"),("skipped","INTEGER")):
         try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
         except Exception: pass
-    try: c.execute("ALTER TABLE users ADD COLUMN no_debrief INTEGER DEFAULT 0")   # opted out of the after-class questionnaire
-    except Exception: pass
     for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
@@ -2276,12 +2274,11 @@ def run_scheduler(asof=None):
                 c.execute("""UPDATE classes SET followup_status='awaiting_instructor',
                              followup_requested_at=? WHERE id=?""", (now(), cls["id"]))
                 cls["followup_status"] = "awaiting_instructor"
-            instr_row = c.execute("SELECT name,email,no_debrief FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
+            instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
             if instr_row:
                 first = (instr_row["name"] or "").split(" ")[0] or "there"
-                ask_q = ("" if instr_row["no_debrief"] else
-                         "\n\nWhile you are there, there are three quick questions about how the class went. "
-                         "Those are just for us and help us plan next season.")
+                ask_q = ("\n\nWhile you are there, there are three quick questions about how the class went. "
+                         "They are optional, just for us, and help us plan next season.")
                 sent, why = send_class_email(c, {**cls, "followup_status": "awaiting_instructor"},
                     "followup_request", [instr_row["email"]],
                     f"Write your note to students: {cls['title']}",
@@ -2907,7 +2904,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 "phone":u.get("phone") or "",
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
                 "signoff":u.get("signoff") or "",
-                "no_debrief":1 if u.get("no_debrief") else 0,
                 "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
@@ -3841,8 +3837,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
-            if b.get("no_debrief") is not None:
-                c.execute("UPDATE users SET no_debrief=? WHERE id=?", (1 if b.get("no_debrief") else 0, u["id"]))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/upload-video":

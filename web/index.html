@@ -566,9 +566,7 @@ function renderProfile(){
     <input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="TikTok" style="margin-top:6px">
     <input id="pf_web" value="${esc((ME&&ME.socials&&ME.socials.website)||'')}" placeholder="Website or shop" style="margin-top:6px">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
-    <label style="margin-top:14px">After a class, ask me how it went?</label>
-    <div class="seg" id="pf_debrief"><button class="${ME&&ME.no_debrief?'':'on'}" data-v="yes" onclick="segPick(this)">Yes, ask me</button><button class="${ME&&ME.no_debrief?'on':''}" data-v="no" onclick="segPick(this)">No thanks</button></div>
-    <div class="hint">The short questionnaire on My classes. Turn it off and it never appears for you; your thank-you emails to students still go out as normal.</div>
+
     <label style="margin-top:18px">Your skills</label>
     <div class="skillcloud">${PF_SKILLS.length
       ? PF_SKILLS.map(k=>`<button class="skill mine" onclick="pfRemoveSkill('${esc(k)}')">${esc(k)} <b>\u00d7</b></button>`).join('')
@@ -886,8 +884,7 @@ async function saveProfile(){
   if(!name) return showErr('perr','Name is required.');
   try{
     await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value,
-      no_debrief: ($('#pf_debrief')&&$('#pf_debrief').querySelector('.on')&&$('#pf_debrief').querySelector('.on').dataset.v==='no') ? 1 : 0});
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value});
     await api('/api/me').then(r=>ME=r.user);
     PF_PHOTO=null; PF_SKILLS=null; boot();
   }
@@ -2187,7 +2184,7 @@ async function skipFeedback(id){
   instrMine();
 }
 async function skipAllFeedback(){
-  if(!confirm('Skip every questionnaire that is waiting? You can still turn them off for good in your profile.')) return;
+  if(!confirm('Skip every questionnaire that is waiting?')) return;
   try{ await api('/api/feedback/skip-all','POST',{}); }
   catch(e){ alert(e.message); return; }
   instrMine();
@@ -3171,7 +3168,7 @@ async function instrMine(){
   const todo = classes.filter(c=>c.followup_status==='awaiting_instructor'||c.followup_status==='ready'
                               ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
   // asked once the class has finished, and only until they answer
-  const feedbackDue = (ME&&ME.no_debrief) ? [] : classes.filter(c=>c.followup_status && !c.fb_submitted_at);
+  const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     ${classes.some(c=>c.status==='approved')?`<button class="btn dark" style="margin-bottom:12px" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:''}
@@ -3199,8 +3196,7 @@ async function instrMine(){
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
       </div></details>`).join('')}`:''}
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
-      <p class="sub" style="margin-top:2px">Three taps and two boxes, just for The Gibby. Students never see this. It goes straight into planning next season.
-        Not for you? ${feedbackDue.length>1?`<a href="#" onclick="skipAllFeedback();return false">Skip all ${feedbackDue.length}</a> &middot; `:''}<a href="#" onclick="renderProfile();return false">turn these off in your profile</a>.</p>
+      <p class="sub" style="margin-top:2px">Optional, and a big help. Three taps and two boxes, just for The Gibby. Students never see this. It goes straight into planning next season.${feedbackDue.length>1?` <a href="#" onclick="skipAllFeedback();return false">Skip all ${feedbackDue.length}</a>`:''}</p>
       ${feedbackDue.map((c,i)=>`<details class="clsrow"${i===0&&feedbackDue.length===1?' open':''}>
         <summary><div class="rowt"><b>${esc(c.title)}</b><span>${esc(c.slot_date||'')} · ${c.enrolled} of ${c.max_p} booked</span></div><span class="rowchev">\u203A</span></summary>
         <div class="card">
