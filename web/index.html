@@ -714,7 +714,7 @@ async function submitReschedule(){
   if(tmin(en)<=tmin(st)) return alert('The class has to end after it starts.');
   try{
     const r=await api('/api/classes/'+RESCHED.id+'/reschedule','POST',
-      {slot_ids:window.__RS_IDS, class_start:st, class_end:en,
+      {slot_ids:window.__RS_IDS, class_start:st, class_end:en, skip_dates:SERIES_SKIP,
        notify_students: !!($('#r_notify')&&$('#r_notify').checked)});
     closeResched();
     alert(`Moved!\n\nOld: ${r.old}\nNew: ${r.new}\n\nEventbrite: ${r.eventbrite}\nCalendar: ${r.calendar}`
@@ -2832,9 +2832,11 @@ function classTimeChanged(){
   if(typeof updateTodo==='function') updateTodo();
 }
 let ROOM_PICK=null;          // chosen before anything else: which room to browse
-function setRoomPick(r){ ROOM_PICK=r; SEL=[]; SLOTDAY=null; CAL_PAGE=null; SERIES_PREVIEW=null; instrOpen(); }
+function setRoomPick(r){ ROOM_PICK=r; SEL=[]; SLOTDAY=null; CAL_PAGE=null; SERIES_PREVIEW=null; SERIES_SKIP=[]; instrOpen(); }
 let CLASSKIND='single';      // 'single' = one-day class, 'series' = multi-week course
-let SERIES_WEEKS=6, CAL_PAGE=null, SERIES_PREVIEW=null;
+let SERIES_WEEKS=6, CAL_PAGE=null, SERIES_PREVIEW=null, SERIES_SKIP=[];
+function skipWeek(label){ if(!SERIES_SKIP.includes(label)) SERIES_SKIP.push(label); previewSeries(); }
+function unskipWeek(label){ SERIES_SKIP=SERIES_SKIP.filter(x=>x!==label); previewSeries(); }
 function setKind(k){ CLASSKIND=k; SERIES_PREVIEW=null; instrOpen(); }
 function setCalPage(m){ CAL_PAGE=m; instrOpen(); }
 function setWeeks(n){ SERIES_WEEKS=Math.max(2,Math.min(+n||6,26)); SERIES_PREVIEW=null;
@@ -2842,7 +2844,7 @@ function setWeeks(n){ SERIES_WEEKS=Math.max(2,Math.min(+n||6,26)); SERIES_PREVIE
 
 async function previewSeries(){
   try{
-    const r=await api('/api/series-preview','POST',{slot_ids:SEL, weeks:SERIES_WEEKS});
+    const r=await api('/api/series-preview','POST',{slot_ids:SEL, weeks:SERIES_WEEKS, skip:SERIES_SKIP, for_class:RESCHED?RESCHED.id:undefined});
     SERIES_PREVIEW=r;
   }catch(e){ SERIES_PREVIEW={error:e.message}; }
   instrOpen();
@@ -3023,8 +3025,10 @@ async function instrOpen(){
       ${!p ? `<div class="meta" style="margin-top:6px">Checking which weeks are open…</div>`
         : p.error ? `<div class="meta" style="margin-top:6px;color:#B4442C">${esc(p.error)}</div>`
         : `<div class="meta" style="margin-top:6px">${p.found} of ${p.requested} weeks${p.found<p.requested?' (that is all that is open)':''}</div>
-           <div class="sessionlist">${p.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div>
-           ${p.skipped&&p.skipped.length?`<div class="meta" style="margin-top:8px;color:#B45309">Skipped (already booked): ${p.skipped.map(esc).join(', ')}</div>`:''}`}
+           <div class="sessionlist">${p.sessions.map((s,i)=>`<div class="sessrow" style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</span>${i?`<button type="button" class="btn ghost" style="padding:4px 10px;font-size:.8rem" onclick="skipWeek('${esc(s.date)}')">Skip this week</button>`:''}</div>`).join('')}</div>
+           ${SERIES_SKIP.length?`<div class="meta" style="margin-top:8px">No class on: ${SERIES_SKIP.map(d=>`${esc(d)} <a href="#" onclick="unskipWeek('${esc(d)}');return false">undo</a>`).join(' · ')}. The run extends a week for each.</div>`:''}
+           ${p.skipped&&p.skipped.filter(x=>!SERIES_SKIP.includes(x)).length?`<div class="meta" style="margin-top:8px;color:#B45309">Skipped (already booked): ${p.skipped.filter(x=>!SERIES_SKIP.includes(x)).map(esc).join(', ')}</div>`:''}
+           <div class="hint">Holiday coming up? Tap Skip this week on that date and the course simply runs one week longer.</div>`}
     </div>`:''}
 
     ${sel.length?`<div class="selbar"><div><div class="a">${series&&p&&p.found?`${p.found}-week course`:`${sel.length} slot${sel.length>1?'s':''} · ${esc(range)}`}</div><div class="b">${esc(sel[0].room)}${series?' · weekly':(sel.length>1?' · consecutive':'')}</div></div><button onclick="confirmSel()">Continue →</button></div>`:''}`;
@@ -3095,7 +3099,7 @@ function confirmSel(){
   PENDING_DRAFT = null;
   openForm({ date:sel[0].date, room:confirmSelRoom(sel[0].room), start:sel[0].start, end:sel[sel.length-1].end,
     time:sel[0].start+' – '+sel[sel.length-1].end, ids:SEL.slice(),
-    series, sessions: series?SERIES_PREVIEW.sessions:null, weeks: series?SERIES_PREVIEW.sessions.length:1 }, carry);
+    series, sessions: series?SERIES_PREVIEW.sessions:null, weeks: series?SERIES_PREVIEW.sessions.length:1, skip: series?SERIES_SKIP.slice():[] }, carry);
 }
 async function instrMine(){
   const [mine, dr] = await Promise.all([api('/api/classes/mine'), api('/api/drafts')]);
@@ -3655,7 +3659,7 @@ function collectForm(){
     class_start:($('#f_cstart')?$('#f_cstart').value:''), class_end:($('#f_cend')?$('#f_cend').value:''),
     slot_ids:SUBMIT_SLOT.ids, slot_date:SUBMIT_SLOT.date,
     room:($('#f_room')?$('#f_room').value:SUBMIT_SLOT.room),
-    is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1,
+    is_series: !!SUBMIT_SLOT.series, session_count: SUBMIT_SLOT.weeks||1, skip_dates: SUBMIT_SLOT.skip||[],
     instructor_id: ($('#f_instr')&&$('#f_instr').value&&$('#f_instr').value!=='new') ? +$('#f_instr').value : undefined,
     instructor_email: ($('#f_instr')&&$('#f_instr').value==='new') ? ($('#f_ni_email').value||'').trim() : undefined,
     instructor_name: ($('#f_instr')&&$('#f_instr').value==='new') ? ($('#f_ni_name').value||'').trim() : undefined,

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.63.0-no-whats-next"
+VERSION = "10.64.0-skip-weeks-room-fix"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1751,7 +1751,17 @@ def _class_end_date(cls, year=None):
         pass
     return _class_date(cls, year)
 
-def find_series_sessions(c, first_ids, weeks, year=None):
+def _class_slot_ids(cls):
+    ids = []
+    try: ids += [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
+    except Exception: pass
+    try:
+        for sd in json.loads(cls.get("session_dates") or "[]"):
+            ids += [int(x) for x in (sd.get("slot_ids") or [])]
+    except Exception: pass
+    return sorted(set(ids))
+
+def find_series_sessions(c, first_ids, weeks, year=None, skip=None, own_ids=None):
     """Given the slot ids for the FIRST session, find the same weekday+time+room on
     following weeks. Weeks that are already taken are skipped and the search keeps
     going forward, so a 6-week course still gets 6 sessions around a busy Saturday.
@@ -1762,8 +1772,10 @@ def find_series_sessions(c, first_ids, weeks, year=None):
     rows.sort(key=lambda r: tmin(r["start"]))
     d0 = parse_day(rows[0]["date"], year)
     if not d0: return None, None
-    room  = rows[0]["room"]
+    room  = next((r["room"] for r in rows if r["room"]), "")     # '' slots fit either room
     times = [(r["start"], r["end"]) for r in rows]
+    skip = {str(x).strip() for x in (skip or []) if str(x).strip()}   # weeks the instructor marked off
+    own = {int(x) for x in (own_ids or [])}                             # this class's own booked slots
     sessions = [{"date": rows[0]["date"], "start": rows[0]["start"], "end": rows[-1]["end"],
                  "slot_ids": [r["id"] for r in rows]}]
     skipped = []
@@ -1772,11 +1784,15 @@ def find_series_sessions(c, first_ids, weeks, year=None):
     while len(sessions) < weeks and week <= weeks * 3 + 8:
         d = d0 + datetime.timedelta(days=7*week); week += 1
         label = day_label(d)
+        if label in skip:
+            skipped.append((week, label)); continue
         ids = []
         for (st, en) in times:
-            r = c.execute("""SELECT id FROM slots WHERE date=? AND start=? AND end=?
-                             AND status='available' AND deleted_at IS NULL AND (room=? OR room='')""",
-                          (label, st, en, room)).fetchone()
+            r = c.execute("""SELECT id, status FROM slots WHERE date=? AND start=? AND end=?
+                             AND deleted_at IS NULL AND (room=? OR room='' OR ?='')
+                             AND (status='available' OR (status='claimed' AND id IN ({})))
+                             ORDER BY (room=?) DESC LIMIT 1""".format(",".join(str(i) for i in own) or "-1"),
+                          (label, st, en, room, room, room)).fetchone()
             if not r: break
             ids.append(r["id"])
         if len(ids) == len(times):
@@ -4540,7 +4556,13 @@ class H(http.server.BaseHTTPRequestHandler):
             ids = [int(x) for x in (b.get("slot_ids") or [])]
             weeks = max(2, min(int(b.get("weeks") or 2), 26))
             if not ids: return self.send_json({"error":"Pick the first session first."},400)
-            c = db(); sessions, skipped = find_series_sessions(c, ids, weeks); c.close()
+            c = db()
+            own = []
+            if b.get("for_class"):
+                row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (int(b["for_class"]),)).fetchone()
+                if row and (u["role"] == "admin" or row["instructor_id"] == u["id"]):
+                    own = _class_slot_ids(dict(row))
+            sessions, skipped = find_series_sessions(c, ids, weeks, skip=b.get("skip") or [], own_ids=own); c.close()
             if sessions is None:
                 return self.send_json({"error":"Those slots are no longer available."},400)
             return self.send_json({"ok":True, "sessions":sessions, "skipped":skipped,
@@ -4652,14 +4674,14 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.close(); return self.send_json({"error":"One of those slots no longer exists."},400)
                 # The FIRST session is always one day, one room, back-to-back. A series
                 # then repeats that shape on later weeks.
-                if len({r["date"] for r in rows}) != 1 or len({r["room"] for r in rows}) != 1:
+                if len({r["date"] for r in rows}) != 1 or len({r["room"] for r in rows if r["room"]}) > 1:
                     c.close(); return self.send_json({"error":"Slots must be the same day and same room."},400)
                 rows.sort(key=lambda r: tmin(r["start"]))
                 for a, nxt in zip(rows, rows[1:]):
                     if tmin(a["end"]) != tmin(nxt["start"]):
                         c.close(); return self.send_json({"error":"Slots must be back-to-back (consecutive)."},400)
                 if is_series:
-                    sessions, _skipped = find_series_sessions(c, ids, weeks)
+                    sessions, _skipped = find_series_sessions(c, ids, weeks, skip=b.get("skip_dates") or [])
                     if not sessions:
                         c.close(); return self.send_json({"error":"Those slots are no longer available."},400)
                     if len(sessions) < 2:
@@ -5023,7 +5045,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 # same weekday/time/room forward, exactly like booking one.
                 try: weeks = len(json.loads(cls.get("session_dates") or "[]")) or int(cls.get("session_count") or 2)
                 except Exception: weeks = int(cls.get("session_count") or 2)
-                sessions, _skipped = find_series_sessions(c, ids, max(2, weeks))
+                sessions, _skipped = find_series_sessions(c, ids, max(2, weeks), skip=b.get("skip_dates") or [], own_ids=old_ids)
                 if not sessions or len(sessions) < 2:
                     c.execute("ROLLBACK"); c.close()
                     return self.send_json({"error":"Could not find enough open weeks from that start date."},400)
