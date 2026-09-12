@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.67.1-questionnaire-optional"
+VERSION = "10.68.0-order-requests"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -193,6 +193,10 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
+    try: c.execute("ALTER TABLE email_log ADD COLUMN copies INTEGER DEFAULT 0")     # copies sent to the watch address
+    except Exception: pass
+    try: c.execute("ALTER TABLE supply_requests ADD COLUMN lines TEXT")               # [{name, qty, link}]
+    except Exception: pass
     for col, typ in (("overall","INTEGER"),("room","TEXT"),("room_notes","TEXT"),("length","TEXT"),("engagement","TEXT"),
                      ("support","TEXT"),("highlight","TEXT"),("concern","TEXT"),("skipped","INTEGER")):
         try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
@@ -1589,7 +1593,7 @@ def admin_digest_text(c):
                                             WHERE f.submitted_at>=? AND f.concern IS NOT NULL AND f.concern!=''""", (week_ago,))]
     L.append(""); L.append(f"FLAGGED BY INSTRUCTORS THIS WEEK: {len(flagged)}")
     for f in flagged: L.append(f"  {f['title']}: {f['concern'][:160]}")
-    sp = [dict(r) for r in c.execute("""SELECT s.items, s.needed_by, cl.title, u.name FROM supply_requests s JOIN classes cl ON cl.id=s.class_id
+    sp = [dict(r) for r in c.execute("""SELECT s.items, s.needed_by, COALESCE(cl.title,'studio stock') AS title, u.name FROM supply_requests s LEFT JOIN classes cl ON cl.id=s.class_id
                                        JOIN users u ON u.id=s.user_id WHERE s.status='requested' ORDER BY s.needed_by""")]
     L.append(""); L.append(f"SUPPLY REQUESTS WAITING: {len(sp)}")
     for x in sp: L.append(f"  {x['name']} for {x['title']} by {x['needed_by'] or '?'}: {' / '.join((x['items'] or '').splitlines())[:140]}")
@@ -2017,6 +2021,8 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
     cid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
     return cid
 
+SUPPLY_TO_DEFAULT = "mtruban@theeverett.com"    # who orders: every new request is emailed here (plus admins)
+
 THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
                    "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933",
                    "instructor_copy": "jdavis@theeverett.org", "copy_all": "jdavis@theeverett.org",
@@ -2119,7 +2125,7 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
     except sqlite3.IntegrityError:
         return False, "already sent (another job claimed it first)"
     cfg = cfg or mailer.load_email_config()
-    ok = 0
+    ok = 0; copies = 0
     for p in people:
         first = (p.get("name") or "").split(" ")[0] or "there"
         if email_type == "followup_late":
@@ -2133,12 +2139,15 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
             body = body.replace("\n\nSee you at The Gibby,",
                 f"\n\nHow was it? Tap a star to tell us (takes ten seconds): {feedback_link(cid, p['email'])}\n\nSee you at The Gibby,", 1)
         kw = {"reply_to": instr["email"], "from_name": f"{iname} via The Gibby"} if (note.strip() and instr and instr["email"]) else {}
-        if mailer.send(p["email"], subj, body, cfg, copy=False, **kw): ok += 1; last = (subj, body)
-    if ok and mailer.COPY_TO:
-        mailer.send(mailer.COPY_TO, f"[Copy to {ok} students of {title}] {last[0]}",
-                    f"(Sent to {ok} student(s); this is one student's copy)\n\n{last[1]}", cfg, copy=False)
-    c.execute("UPDATE email_log SET delivered=? WHERE class_id=? AND email_type=?",
-              (1 if ok else 0, cid, email_type))
+        if mailer.send(p["email"], subj, body, cfg, copy=False, **kw):
+            ok += 1
+            # Jess wants every single one, not a one-per-class summary.
+            if mailer.COPY_TO and mailer.COPY_TO.lower() != p["email"].lower():
+                if mailer.send(mailer.COPY_TO, f"[Copy to {p['email']}] {subj}",
+                               f"(Sent to {p.get('name') or ''} {p['email']})\n\n{body}", cfg, copy=False):
+                    copies += 1
+    c.execute("UPDATE email_log SET delivered=?, copies=? WHERE class_id=? AND email_type=?",
+              (1 if ok else 0, copies, cid, email_type))
     new_status = ("sent_late" if email_type == "followup_late" else ("sent" if note.strip() else "sent_generic"))
     c.execute("UPDATE classes SET followup_status=?, followed_up=1 WHERE id=?", (new_status, cid))
     return True, f"{rule['label']} sent to {ok} of {len(people)}" + (" (with the instructor's note)" if note.strip() else "")
@@ -3218,11 +3227,16 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return self.send_json({"error":"not signed in"},401)
             c = db()
             where = "" if u["role"] == "admin" else "WHERE s.user_id=?"
-            rows = [dict(r) for r in c.execute(f"""SELECT s.*, cl.title AS class_title, cl.slot_date, u.name AS instructor_name, u.phone AS instructor_phone
-                FROM supply_requests s JOIN classes cl ON cl.id=s.class_id JOIN users u ON u.id=s.user_id
+            rows = [dict(r) for r in c.execute(f"""SELECT s.*, COALESCE(cl.title,'Studio stock') AS class_title, cl.slot_date, u.name AS instructor_name, u.phone AS instructor_phone
+                FROM supply_requests s LEFT JOIN classes cl ON cl.id=s.class_id JOIN users u ON u.id=s.user_id
                 {where} ORDER BY s.status='requested' DESC, s.needed_by, s.id DESC LIMIT 300""", (() if not where else (u["id"],))).fetchall()]
+            for r in rows:
+                try: r["lines"] = json.loads(r.get("lines") or "[]")
+                except Exception: r["lines"] = []
             c.close()
-            return self.send_json({"supplies": rows})
+            out = {"supplies": rows}
+            if u["role"] == "admin": out["to"] = _meta_get("supply_to") or SUPPLY_TO_DEFAULT
+            return self.send_json(out)
         if p == "/api/reimbursements":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -4129,36 +4143,71 @@ class H(http.server.BaseHTTPRequestHandler):
                 threading.Thread(target=send_instructor_email, args=(eid,), daemon=True).start()
             return self.send_json({"ok":True, "id":eid, "recipients":len(people), "when":when, "scheduled_for":sched})
         msr = re.match(r"^/api/classes/(\d+)/supplies$", p)
-        if msr:
-            # Instructor asks the Gibby to buy or set out supplies for a class.
+        if msr or p == "/api/supplies":
+            # Instructor asks the Gibby to ORDER something: which class (or studio
+            # stock), what, how many, and a link to the exact product. Goes to the
+            # ordering address (More > Supplies) plus the admins.
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
-            cid = int(msr.group(1)); b = self.read_json(); c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
-            if not row: c.close(); return self.send_json({"error":"not found"},404)
-            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
-                c.close(); return self.send_json({"error":"That is not your class."},403)
-            items = "\n".join(x.strip() for x in (b.get("items") or "").splitlines() if x.strip())[:2000]
-            if len(items) < 3: c.close(); return self.send_json({"error":"List what you need, one item per line."},400)
-            needed = (b.get("needed_by") or "").strip()[:40] or (row["slot_date"] or "")
+            b = self.read_json(); c = db()
+            try: cid = int(msr.group(1)) if msr else int(b.get("class_id") or 0)
+            except (TypeError, ValueError): cid = 0
+            row = None
+            if cid:
+                row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+                if not row: c.close(); return self.send_json({"error":"not found"},404)
+                if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                    c.close(); return self.send_json({"error":"That is not your class."},403)
+            lines = []
+            for x in (b.get("lines") or [])[:30]:
+                if not isinstance(x, dict): continue
+                name = str(x.get("name") or "").strip()[:160]
+                link = str(x.get("link") or "").strip()[:500]
+                try: qty = max(1, min(int(float(x.get("qty") or 1)), 9999))
+                except (TypeError, ValueError): qty = 1
+                if link and not link.lower().startswith(("http://", "https://")): link = "https://" + link
+                if name: lines.append({"name": name, "qty": qty, "link": link})
+            if not lines:      # the old free-text form still works
+                lines = [{"name": x.strip()[:160], "qty": 1, "link": ""} for x in (b.get("items") or "").splitlines() if x.strip()][:30]
+            if not lines: c.close(); return self.send_json({"error":"Add at least one item."},400)
+            items = "\n".join(f"{ln['qty']} x {ln['name']}" + (f" ({ln['link']})" if ln["link"] else "") for ln in lines)[:4000]
+            needed = (b.get("needed_by") or "").strip()[:40] or ((row["slot_date"] or "") if row else "")
             notes = (b.get("notes") or "").strip()[:500]
-            c.execute("""INSERT INTO supply_requests(class_id,user_id,items,needed_by,notes,status,created,updated) VALUES(?,?,?,?,?,'requested',?,?)""",
-                      (cid, u["id"], items, needed, notes, now(), now()))
+            c.execute("""INSERT INTO supply_requests(class_id,user_id,items,needed_by,notes,status,created,updated,lines)
+                         VALUES(?,?,?,?,?,'requested',?,?,?)""",
+                      (cid or None, u["id"], items, needed, notes, now(), now(), json.dumps(lines)))
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-            admins = [a for a in emails_for(c, "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()]
+            to = [a for a in emails_for(c, "WHERE role='admin'")]
+            for extra in (_meta_get("supply_to") or SUPPLY_TO_DEFAULT).replace(";", ",").split(","):
+                if extra.strip() and "@" in extra: to.append(extra.strip())
+            seen = set(); recips = []
+            for a in to:
+                k = a.lower()
+                if k != (u.get("email") or "").lower() and k not in seen: seen.add(k); recips.append(a)
             c.commit(); c.close()
-            if admins:
-                mailer.send(admins, f"Supply request from {u['name']} for {row['title']} (by {needed})",
-                    f"{u['name']} needs these for \"{row['title']}\" by {needed}:\n\n" + "\n".join("  • " + x for x in items.splitlines())
-                    + (f"\n\nNotes: {notes}" if notes else "") + f"\n\nMark it ordered or ready under More > Supplies: {mailer.APP_URL}")
+            what = f"for \"{row['title']}\"" if row else "for studio stock"
+            body = (f"{u['name']} would like these ordered {what}" + (f" by {needed}" if needed else "") + ":\n\n"
+                    + "\n".join(f"  • {ln['qty']} x {ln['name']}" + (f"\n    Link: {ln['link']}" if ln["link"] else "") for ln in lines)
+                    + (f"\n\nNotes: {notes}" if notes else "")
+                    + (f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else ""))
+                    + f"\n\nMark it ordered or ready under More > Supplies: {mailer.APP_URL}")
+            if recips:
+                mailer.send(recips, f"Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
             return self.send_json({"ok":True, "id":rid})
+        if p == "/api/admin/supply-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            to = ", ".join(x.strip() for x in str(b.get("to") or "").replace(";", ",").split(",") if x.strip() and "@" in x)[:300]
+            _meta_set("supply_to", to)
+            return self.send_json({"ok":True, "to": to})
         mss = re.match(r"^/api/supplies/(\d+)/(ordered|ready|declined|requested)$", p)
         if mss:
             u = self.require("admin")
             if not u: return
             rid, status = int(mss.group(1)), mss.group(2); b = self.read_json(); c = db()
-            row = c.execute("""SELECT s.*, cl.title AS class_title, us.email AS instr_email, us.name AS instr_name
-                               FROM supply_requests s JOIN classes cl ON cl.id=s.class_id JOIN users us ON us.id=s.user_id WHERE s.id=?""",(rid,)).fetchone()
+            row = c.execute("""SELECT s.*, COALESCE(cl.title,'studio stock') AS class_title, us.email AS instr_email, us.name AS instr_name
+                               FROM supply_requests s LEFT JOIN classes cl ON cl.id=s.class_id JOIN users us ON us.id=s.user_id WHERE s.id=?""",(rid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             note = (b.get("note") or "").strip()[:300]
             c.execute("UPDATE supply_requests SET status=?, admin_note=?, decided_by=?, updated=? WHERE id=?", (status, note, u["id"], now(), rid))
@@ -4166,8 +4215,8 @@ class H(http.server.BaseHTTPRequestHandler):
             first = (row["instr_name"] or "").split(" ")[0] or "there"
             word = {"ordered": "Ordered", "ready": "Ready at the Gibby", "declined": "Not this time"}.get(status)
             if word:
-                mailer.send(row["instr_email"], f"{word}: your supplies for {row['class_title']}",
-                    f"Hi {first},\n\nYour supply request for \"{row['class_title']}\" is now: {word}.\n\n"
+                mailer.send(row["instr_email"], f"{word}: your order request for {row['class_title']}",
+                    f"Hi {first},\n\nYour order request for \"{row['class_title']}\" is now: {word}.\n\n"
                     + "\n".join("  • " + x for x in (row["items"] or "").splitlines())
                     + (f"\n\nNote from the Gibby: {note}" if note else "") + "\n\nThanks,\nThe Gibby")
             return self.send_json({"ok":True, "status":status})

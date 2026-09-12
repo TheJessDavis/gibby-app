@@ -1473,21 +1473,31 @@ async function reinvite(email,name,role){
 async function adminSupplies(){
   const d=await api('/api/supplies'); const rs=d.supplies||[];
   const open=rs.filter(s=>s.status==='requested'), ordered=rs.filter(s=>s.status==='ordered'), done=rs.filter(s=>s.status==='ready'||s.status==='declined');
-  const list=rs.filter(s=>s.status==='requested'||s.status==='ordered').flatMap(s=>(s.items||'').split('\n').map(i=>({i, who:s.instructor_name, cls:s.class_title, by:s.needed_by})));
+  const lineHTML=l=>`${l.qty} x ${esc(l.name)}${l.link?` · <a href="${esc(l.link)}" target="_blank" rel="noopener noreferrer">open link</a>`:''}`;
+  const linesOf=s=>(s.lines&&s.lines.length)?s.lines.map(lineHTML):(s.items||'').split('\n').filter(Boolean).map(esc);
+  const list=rs.filter(s=>s.status==='requested'||s.status==='ordered').flatMap(s=>linesOf(s).map(i=>({i, who:s.instructor_name, cls:s.class_title, by:s.needed_by})));
   const card=s=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(s.class_title)} · by ${esc(s.needed_by||'?')}</h3>
       <div class="meta">${esc(s.instructor_name)}${s.instructor_phone?' · <a href="tel:'+esc(s.instructor_phone)+'">'+esc(s.instructor_phone)+'</a>':''}${s.notes?' · '+esc(s.notes):''}</div>
-      <div class="meta" style="margin-top:6px;white-space:pre-wrap">${esc(s.items||'')}</div>${s.admin_note?`<div class="meta">Note: ${esc(s.admin_note)}</div>`:''}</div>
+      <div class="meta" style="margin-top:6px">${linesOf(s).map(x=>`<div>\u2022 ${x}</div>`).join('')}</div>${s.admin_note?`<div class="meta">Note: ${esc(s.admin_note)}</div>`:''}</div>
       ${({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready</span>',declined:'<span class="pill inc">declined</span>'})[s.status]}</div>
     <div class="two" style="margin-top:10px">
       ${s.status==='requested'?`<button class="btn warn" onclick="supplyAct(${s.id},'declined')">Decline</button><button class="btn dark" onclick="supplyAct(${s.id},'ordered')">Ordered</button>`
        :s.status==='ordered'?`<span></span><button class="btn green" onclick="supplyAct(${s.id},'ready')">Ready at the Gibby</button>`
        :`<button class="btn ghost" onclick="supplyAct(${s.id},'requested')">Reopen</button><span></span>`}</div></div>`;
-  $('#tab').innerHTML=`<h2>Supply <em>requests</em></h2>
-    <p class="sub">Instructors ask from their class card. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
-    ${list.length?`<div class="card"><h3 style="font-size:1rem">Shopping list (${list.length} lines)</h3>${list.map(x=>`<div class="meta">\\u2610 ${esc(x.i)} <span style="opacity:.7">· ${esc(x.who)}, ${esc(x.cls)}, by ${esc(x.by||'?')}</span></div>`).join('')}</div>`:''}
+  $('#tab').innerHTML=`<h2>Order <em>requests</em></h2>
+    <p class="sub">Instructors ask from My classes: the class, a link to the exact item and how many. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
+    <div class="card"><label style="margin-top:0">New requests are emailed to</label>
+      <input id="sup_to" value="${esc(d.to||'')}" placeholder="mtruban@theeverett.com">
+      <div class="hint">Comma-separated. Admins are always included, and Jess gets her usual copy.</div>
+      <button class="btn ghost" style="padding:8px 14px;margin-top:8px" onclick="saveSupplyTo()">Save</button></div>
+    ${list.length?`<div class="card"><h3 style="font-size:1rem">Shopping list (${list.length} lines)</h3>${list.map(x=>`<div class="meta">\u2610 ${x.i} <span style="opacity:.7">· ${esc(x.who)}, ${esc(x.cls)}, by ${esc(x.by||'?')}</span></div>`).join('')}</div>`:''}
     <label style="margin-top:12px">Waiting (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
     <label style="margin-top:16px">Ordered (${ordered.length})</label>${ordered.map(card).join('')||'<div class="muted">None.</div>'}
     ${done.length?`<label style="margin-top:16px">Done (${done.length})</label>${done.slice(0,20).map(card).join('')}`:''}`;
+}
+async function saveSupplyTo(){
+  try{ const r=await api('/api/admin/supply-settings','POST',{to:$('#sup_to').value}); alert('Saved. New requests go to: '+(r.to||'the admins only')); }
+  catch(e){ alert(e.message); }
 }
 async function supplyAct(id, status){
   let note='';
@@ -1992,7 +2002,7 @@ async function renderEmailLog(){
   const {entries}=await api('/api/email-log');
   $('#emailrows').innerHTML = entries.map(e=>`<div class="card">
     <div class="row"><div><h3 style="font-size:1rem">${esc(e.class_title||(e.class_id?('Class #'+e.class_id):'System'))}</h3>
-      <div class="meta">${esc(ETYPE[e.email_type]||e.email_type)} · ${esc(e.sent_at)} · ${e.recipients} recipient${e.recipients===1?'':'s'}</div></div>
+      <div class="meta">${esc(ETYPE[e.email_type]||e.email_type)} · ${esc(e.sent_at)} · ${e.recipients} recipient${e.recipients===1?'':'s'}${e.copies?` · ${e.copies} cop${e.copies===1?'y':'ies'} to you`:''}</div></div>
       <span class="pill ${e.delivered?'appr':'inc'}">${e.delivered?'sent':'failed'}</span></div>
   </div>`).join('') || '<div class="muted">No automated emails have been sent yet.</div>';
 }
@@ -2454,7 +2464,7 @@ function cardCls(c){
       ${c.rating_n?`<div class="meta" style="margin-top:6px"><b style="color:#B4761A">\u2605 ${c.rating_avg}</b> from ${c.rating_n} student${c.rating_n===1?'':'s'}${(c.rating_comments||[]).length?`<div style="margin-top:4px">${c.rating_comments.slice(0,3).map(x=>`<div style="border-left:3px solid var(--line);padding-left:8px;margin-top:4px">\u201c${esc(x.text)}\u201d</div>`).join('')}${c.rating_comments.length>3?`<div class="hint">and ${c.rating_comments.length-3} more</div>`:''}</div>`:''}</div>`:''}
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
-      <button class="btn ghost" style="margin-top:8px" onclick="supplyForm(${c.id})">\u{1F9FA} Ask the Gibby for supplies</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="orderForm(${c.id})">\u{1F9FA} Ask the Gibby to order supplies</button>
       <div id="sq${c.id}"></div>
       <button class="btn ghost" style="margin-top:8px" onclick="reimburseForm(${c.id})">\u{1F9FE} Get paid back for supplies</button>
       <div id="rb${c.id}"></div>
@@ -2696,25 +2706,57 @@ async function emailClass(id,kind){
 // Registration view: its own boundary, scoped to this class's roster container, so a
 // bad registration record cannot take down the class card or the list around it.
 function viewRoster(id){ return boundary('registrations', '#roster'+id, ()=>rosterInner(id), false); }
-async function supplyForm(id){
-  const box=$('#sq'+id); if(!box) return;
-  if(box.innerHTML){ box.innerHTML=''; return; }
-  let mine=[]; try{ mine=((await api('/api/supplies')).supplies||[]).filter(s=>s.class_id===id); }catch(_){}
-  const c=(window.__classes||[]).find(x=>x.id===id)||{};
-  const pill=s=>({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready at the Gibby</span>',declined:'<span class="pill inc">not this time</span>'})[s]||s;
-  box.innerHTML=`<div class="card" style="margin-top:8px">
-    ${mine.length?mine.map(s=>`<div class="meta" style="margin-bottom:8px">${pill(s.status)} by ${esc(s.needed_by||'')}: ${esc((s.items||'').split('\n').join(', '))}${s.admin_note?' · '+esc(s.admin_note):''}</div>`).join(''):''}
-    <label>What do you need? One item per line, with amounts</label>
-    <textarea id="sqi${id}" rows="4" placeholder="12 x 11x14 canvases&#10;2 bottles white acrylic&#10;paper towels"></textarea>
-    <div class="two"><div><label>Needed by</label><input id="sqd${id}" value="${esc(c.slot_date||'')}"></div><div><label>Notes</label><input id="sqn${id}" placeholder="brand, where to buy, optional"></div></div>
-    <button class="btn dark" style="margin-top:8px" onclick="sendSupply(${id})">Send the request</button>
-    <div class="hint">The admins are emailed. You will hear when it is ordered and when it is ready at the Gibby.</div>
-    <div id="sqs${id}" class="meta"></div></div>`;
+/* Order request: which class (or studio stock), each item with how many and a
+   link to the exact product. Emailed to the ordering address and the admins. */
+async function orderForm(classId){
+  const classes=(window.__classes||[]).filter(c=>['approved','pending','graphic_review','instructor_review'].includes(c.status));
+  let mine=[]; try{ mine=((await api('/api/supplies')).supplies||[]); }catch(_){}
+  if(classId) mine=mine.filter(s=>s.class_id===classId);
+  const pill=s=>({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready at the Gibby</span>',declined:'<span class="pill inc">not this time</span>'})[s]||'';
+  const opt=c=>`<option value="${c.id}"${c.id===classId?' selected':''}>${esc(c.title)} · ${esc(c.slot_date||'')}</option>`;
+  const m=document.createElement('div'); m.id='ordmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow:auto';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:440px;width:100%;padding:20px 22px;margin:auto 0">
+    <h2 style="margin:0 0 2px">Ask the Gibby to <em>order</em></h2>
+    <p class="sub" style="margin:0 0 10px">Paste a link to the exact thing and say how many. It goes straight to the person who orders.</p>
+    ${mine.slice(0,4).map(s=>`<div class="meta" style="margin-bottom:6px">${pill(s.status)} ${esc(s.class_title)} · ${esc((s.lines&&s.lines.length)?s.lines.map(l=>l.qty+' x '+l.name).join(', '):(s.items||'').split('\n').join(', '))}</div>`).join('')}
+    <label>Which class is it for?</label>
+    <select id="ord_class"><option value="0"${classId?'':' selected'}>Not for one class (studio stock)</option>${classes.map(opt).join('')}</select>
+    <label style="margin-top:10px">What to order</label>
+    <div id="ord_lines"></div>
+    <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="ordAddLine()">+ Another item</button>
+    <div class="two" style="margin-top:10px"><div><label>Needed by</label><input id="ord_by" placeholder="e.g. Sat, Oct 3"></div>
+      <div><label>Notes</label><input id="ord_notes" placeholder="brand, color, optional"></div></div>
+    <div class="err" id="ord_err"></div>
+    <div class="two" style="margin-top:14px">
+      <button class="btn ghost" onclick="closeOrder()">Cancel</button>
+      <button class="btn dark" onclick="sendOrder()">Send the request</button></div>
+    <div class="hint" style="margin-top:8px">You will hear when it is ordered and when it is ready at the Gibby.</div></div>`;
+  m.addEventListener('click', e=>{ if(e.target===m) closeOrder(); });
+  document.body.appendChild(m);
+  ordAddLine();
+  const sel=$('#ord_class'); const pick=()=>{ const c=classes.find(x=>String(x.id)===sel.value); if(c && !$('#ord_by').value) $('#ord_by').value=c.slot_date||''; };
+  sel.addEventListener('change', pick); pick();
 }
-async function sendSupply(id){
-  const r=await api('/api/classes/'+id+'/supplies','POST',{items:$('#sqi'+id).value, needed_by:$('#sqd'+id).value, notes:$('#sqn'+id).value});
-  if(r.error){ $('#sqs'+id).textContent=r.error; return; }
-  alert('Sent. The Gibby has it.'); $('#sq'+id).innerHTML=''; supplyForm(id);
+function ordAddLine(){
+  const d=document.createElement('div'); d.className='ordline';
+  d.style.cssText='display:grid;grid-template-columns:76px 1fr 28px;gap:6px;align-items:center;margin-top:6px';
+  d.innerHTML=`<input class="ord_qty" type="number" min="1" value="1" inputmode="numeric" aria-label="How many" style="padding-left:10px;padding-right:4px;text-align:center">
+    <input class="ord_name" placeholder="What is it? e.g. 11x14 canvases">
+    <button class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove()" aria-label="Remove">\u00d7</button>
+    <input class="ord_link" placeholder="Link to the exact product (paste from Amazon, Blick, Michaels...)" style="grid-column:1 / span 3;margin-top:0">`;
+  $('#ord_lines').appendChild(d);
+}
+function closeOrder(){ const m=$('#ordmodal'); if(m) m.remove(); }
+async function sendOrder(){
+  const lines=[...document.querySelectorAll('#ordmodal .ordline')].map(d=>({
+    qty:d.querySelector('.ord_qty').value, name:d.querySelector('.ord_name').value.trim(), link:d.querySelector('.ord_link').value.trim()})).filter(l=>l.name);
+  const err=$('#ord_err');
+  if(!lines.length){ err.textContent='Add at least one item.'; err.classList.add('show'); return; }
+  const body={class_id:+$('#ord_class').value||0, lines, needed_by:$('#ord_by').value, notes:$('#ord_notes').value};
+  try{ await api('/api/supplies','POST',body); }
+  catch(e){ err.textContent=e.message; err.classList.add('show'); return; }
+  closeOrder(); alert('Sent. The Gibby has your order request.');
 }
 function reimburseForm(id){
   const box=$('#rb'+id); if(!box) return;
@@ -3171,7 +3213,9 @@ async function instrMine(){
   const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
-    ${classes.some(c=>c.status==='approved')?`<button class="btn dark" style="margin-bottom:12px" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:''}
+    <div class="two" style="margin-bottom:12px">
+      ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
+      <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
     ${reqs.length?`<label>The Gibby is looking for (${reqs.length})</label>
       <p class="sub" style="margin-top:2px">Classes the Gibby would love to run. Claim one and the proposal is pre-filled; you just pick the time.</p>
       ${reqs.map(r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
@@ -3877,7 +3921,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
