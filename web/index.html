@@ -77,6 +77,19 @@
   #tab .clscard.cls-back{background:var(--pink)}
   #tab .clscard.cls-off{background:#E9E4D8}
   .clstop{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .clsrow{border-radius:14px;margin-bottom:8px;overflow:hidden;background:#EFE9DC}
+  #tab .clsrow.cls-approved{background:#D9EFD0} #tab .clsrow.cls-off{background:#E9E4D8}
+  #tab .clsrow.cls-pending{background:var(--yellow)} #tab .clsrow.cls-review{background:var(--purple)} #tab .clsrow.cls-back{background:var(--pink)}
+  .clsrow>summary{list-style:none;display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer}
+  .clsrow>summary::-webkit-details-marker{display:none}
+  .clsrow .rowt{flex:1;min-width:0}
+  .clsrow .rowt b{display:block;font-size:14.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .clsrow .rowt span{font-size:12px;color:rgba(23,21,18,.62)}
+  .rowchev{font-size:22px;line-height:1;color:rgba(23,21,18,.45);transition:transform .15s;flex:none}
+  .clsrow[open]>summary .rowchev, #pastwrap[open]>summary .rowchev{transform:rotate(90deg)}
+  .clsrow>.clscard, .clsrow>.card{margin:0 8px 8px;box-shadow:none}
+  .foldsum{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:rgba(23,21,18,.6);padding:10px 12px;border-radius:12px;background:#EFE9DC}
+  .foldsum::-webkit-details-marker{display:none}
   .clspic{width:42px;height:42px;border-radius:50%;object-fit:cover;box-shadow:0 3px 8px rgba(0,0,0,.18);border:2px solid rgba(255,255,255,.75)}
   .clspic-i{display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,.7);font-size:19px}
   .clswhen{font-size:12px;font-weight:800;color:rgba(23,21,18,.55)}
@@ -553,6 +566,9 @@ function renderProfile(){
     <input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="TikTok" style="margin-top:6px">
     <input id="pf_web" value="${esc((ME&&ME.socials&&ME.socials.website)||'')}" placeholder="Website or shop" style="margin-top:6px">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
+    <label style="margin-top:14px">After a class, ask me how it went?</label>
+    <div class="seg" id="pf_debrief"><button class="${ME&&ME.no_debrief?'':'on'}" data-v="yes" onclick="segPick(this)">Yes, ask me</button><button class="${ME&&ME.no_debrief?'on':''}" data-v="no" onclick="segPick(this)">No thanks</button></div>
+    <div class="hint">The short questionnaire on My classes. Turn it off and it never appears for you; your thank-you emails to students still go out as normal.</div>
     <label style="margin-top:18px">Your skills</label>
     <div class="skillcloud">${PF_SKILLS.length
       ? PF_SKILLS.map(k=>`<button class="skill mine" onclick="pfRemoveSkill('${esc(k)}')">${esc(k)} <b>\u00d7</b></button>`).join('')
@@ -870,7 +886,8 @@ async function saveProfile(){
   if(!name) return showErr('perr','Name is required.');
   try{
     await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value});
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value,
+      no_debrief: ($('#pf_debrief')&&$('#pf_debrief').querySelector('.on')&&$('#pf_debrief').querySelector('.on').dataset.v==='no') ? 1 : 0});
     await api('/api/me').then(r=>ME=r.user);
     PF_PHOTO=null; PF_SKILLS=null; boot();
   }
@@ -2125,7 +2142,8 @@ async function adminApprovals(){
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}. <b>${c.register_clicks||0} Register click${c.register_clicks===1?'':'s'}</b> on the next-classes links.`
           : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
       </div>
-      ${c.fb_submitted_at?`<div class="meta" style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">
+      ${c.fb_submitted_at && c.fb_skipped?`<div class="meta" style="margin-top:8px">${esc(c.instructor_name||'The instructor')} skipped the questionnaire for this one.</div>`:''}
+      ${c.fb_submitted_at && !c.fb_skipped?`<div class="meta" style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">
         <b>${esc(c.instructor_name||'Instructor')}'s debrief:</b> ${c.fb_overall?'\u2605'.repeat(c.fb_overall)+' ':''}
         ${[['teach again',c.fb_teach_again],['length',c.fb_length],['room & supplies',c.fb_room]].filter(x=>x[1]).map(x=>x[0]+': '+esc(String(x[1]).replace(/_/g,' '))).join(' \u00b7 ')}
         ${c.fb_room_notes?`<div style="margin-top:4px">Room: ${esc(c.fb_room_notes)}</div>`:''}
@@ -2161,6 +2179,17 @@ async function sendFeedback(id){
   catch(e){ alert(e.message); return; }
   if(r&&r.error){ alert(r.error); return; }
   alert('Thank you. That goes straight to The Gibby and helps shape next season.');
+  instrMine();
+}
+async function skipFeedback(id){
+  try{ await api('/api/classes/'+id+'/feedback/skip','POST',{}); }
+  catch(e){ alert(e.message); return; }
+  instrMine();
+}
+async function skipAllFeedback(){
+  if(!confirm('Skip every questionnaire that is waiting? You can still turn them off for good in your profile.')) return;
+  try{ await api('/api/feedback/skip-all','POST',{}); }
+  catch(e){ alert(e.message); return; }
   instrMine();
 }
 async function saveFollowup(id, save){
@@ -3142,7 +3171,7 @@ async function instrMine(){
   const todo = classes.filter(c=>c.followup_status==='awaiting_instructor'||c.followup_status==='ready'
                               ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
   // asked once the class has finished, and only until they answer
-  const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
+  const feedbackDue = (ME&&ME.no_debrief) ? [] : classes.filter(c=>c.followup_status && !c.fb_submitted_at);
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     ${classes.some(c=>c.status==='approved')?`<button class="btn dark" style="margin-bottom:12px" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:''}
@@ -3154,10 +3183,10 @@ async function instrMine(){
         <button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">Claim this one</button></div>`).join('')}`:''}
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
       <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. It goes out in your name, and replies come straight to you.</p>
-      ${todo.map(c=>`<div class="card">
-        <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
-          <div class="meta">${esc(c.slot_date||'')} ${esc(c.slot_time||'')}</div></div>
-          ${c.followup_status==='ready'?'<span class="pill appr">written</span>':c.followup_status==='sent_generic'?'<span class="pill pend">thank-you sent</span>':'<span class="pill inc">waiting on you</span>'}</div>
+      ${todo.map((c,i)=>`<details class="clsrow ${c.followup_status==='ready'?'cls-approved':'cls-back'}"${i===0&&todo.length===1?' open':''}>
+        <summary><div class="rowt"><b>${esc(c.title)}</b><span>${esc(c.slot_date||'')} · ${esc(c.slot_time||'')}</span></div>
+          ${c.followup_status==='ready'?'<span class="pill appr" style="flex:none">written</span>':c.followup_status==='sent_generic'?'<span class="pill pend" style="flex:none">thank-you sent</span>':'<span class="pill inc" style="flex:none">waiting on you</span>'}<span class="rowchev">\u203A</span></summary>
+        <div class="card">
         <label style="margin-top:10px">Your note to students</label>
         <textarea id="fu${c.id}" placeholder="e.g. Thank you for a lovely afternoon. Your glaze will be ready to collect from the studio after the 14th, and I have popped a firing schedule on the noticeboard.">${esc(c.followup_note||'')}</textarea>
         <div class="hint">${c.followup_status==='sent_generic'
@@ -3168,12 +3197,13 @@ async function instrMine(){
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
-      </div>`).join('')}`:''}
+      </div></details>`).join('')}`:''}
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
-      <p class="sub" style="margin-top:2px">Three taps and two boxes, just for The Gibby. Students never see this. It goes straight into planning next season.</p>
-      ${feedbackDue.map(c=>`<div class="card">
-        <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
-          <div class="meta">${esc(c.slot_date||'')} &middot; ${c.enrolled} of ${c.max_p} booked</div></div></div>
+      <p class="sub" style="margin-top:2px">Three taps and two boxes, just for The Gibby. Students never see this. It goes straight into planning next season.
+        Not for you? ${feedbackDue.length>1?`<a href="#" onclick="skipAllFeedback();return false">Skip all ${feedbackDue.length}</a> &middot; `:''}<a href="#" onclick="renderProfile();return false">turn these off in your profile</a>.</p>
+      ${feedbackDue.map((c,i)=>`<details class="clsrow"${i===0&&feedbackDue.length===1?' open':''}>
+        <summary><div class="rowt"><b>${esc(c.title)}</b><span>${esc(c.slot_date||'')} · ${c.enrolled} of ${c.max_p} booked</span></div><span class="rowchev">\u203A</span></summary>
+        <div class="card">
         <label style="margin-top:10px">Would you teach this again?</label>
         <div class="seg" id="fba${c.id}"><button data-v="no" onclick="segPick(this)">No</button><button data-v="maybe" onclick="segPick(this)">Maybe</button><button class="on" data-v="yes" onclick="segPick(this)">Yes</button></div>
         <label>Was the class length right?</label>
@@ -3185,8 +3215,10 @@ async function instrMine(){
         <textarea id="fbn${c.id}" placeholder="e.g. Three hours instead of two so the glaze can dry. Or: the sign-in sheet was missing."></textarea>
         <label>Anything The Gibby must know? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
         <textarea id="fbc${c.id}" placeholder="A safety issue, a student who needs follow-up, an accessibility need, a payment question. This one emails the admins right away."></textarea>
-        <button class="btn dark" style="margin-top:10px" onclick="sendFeedback(${c.id})">Send to The Gibby</button>
-      </div>`).join('')}`:''}
+        <div class="two" style="margin-top:10px">
+          <button class="btn ghost" onclick="skipFeedback(${c.id})">Skip this one</button>
+          <button class="btn dark" onclick="sendFeedback(${c.id})">Send to The Gibby</button></div>
+      </div></details>`).join('')}`:''}
     ${drafts.length?`<label>Drafts (${drafts.length})</label>
       <p class="sub" style="margin-top:2px">Not submitted yet. The time is only held once you submit.</p>
       ${drafts.map(d=>`<div class="card">
@@ -3196,9 +3228,52 @@ async function instrMine(){
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="deleteDraft(${d.id})">Delete</button>
           <button class="btn dark" onclick="resumeDraft(${d.id})">Continue</button></div></div>`).join('')}
-      <label style="margin-top:18px">Submitted (${classes.length})</label>`
-    :`<p class="sub">${classes.length} submitted.</p>`}
-    ${classes.map(cardCls).join('') || '<div class="muted">You have not submitted a class yet.</div>'}`;
+      `:''}
+    ${classList(classes)}`;
+}
+/* Which day the class is over: the last session for a course, the day itself
+   otherwise. Labels carry no year, so the year comes from sort_key (first
+   session) and rolls over if a course runs past December. */
+function classEndKey(c){
+  const last = c.is_series&&c.sessions&&c.sessions.length ? c.sessions[c.sessions.length-1].date : (c.slot_date||'');
+  const m=(last||'').match(/([A-Z][a-z]{2}) (\d+)/), sk=c.sort_key||'';
+  if(!m || MONIDX[m[1]]==null || !sk) return sk;
+  let y=+sk.slice(0,4); const mo=MONIDX[m[1]];
+  if(mo < +sk.slice(5,7)-1) y+=1;
+  return `${y}-${String(mo+1).padStart(2,'0')}-${String(+m[2]).padStart(2,'0')}`;
+}
+/* Nineteen tall cards were a wall. Anything needing action stays a full card;
+   everything else is one tidy line that opens on tap, upcoming first, past
+   ones folded away, with a search box once the list is long. */
+function classList(classes){
+  if(!classes.length) return '<div class="muted">You have not submitted a class yet.</div>';
+  const d=new Date(), tk=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const attn = classes.filter(c=>['incomplete','pending','instructor_review'].includes(c.status));
+  const rest = classes.filter(c=>!attn.includes(c));
+  const up   = rest.filter(c=>c.status!=='cancelled' && classEndKey(c)>=tk).sort((a,b)=>(a.sort_key||'').localeCompare(b.sort_key||''));
+  const past = rest.filter(c=>!up.includes(c)).sort((a,b)=>(b.sort_key||'').localeCompare(a.sort_key||''));
+  const row = c => {
+    const [pc,pt]=STMAP[c.status]||STMAP.pending;
+    const tone={pending:'cls-pending',graphic_review:'cls-review',instructor_review:'cls-review',
+                approved:'cls-approved',incomplete:'cls-back',cancelled:'cls-off'}[c.status]||'cls-pending';
+    const when = c.is_series&&c.sessions&&c.sessions.length
+      ? `${c.sessions[0].date} – ${c.sessions[c.sessions.length-1].date} · ${c.sessions.length} sessions`
+      : `${c.slot_date||''} · ${c.class_time||c.slot_time||''}`;
+    return `<details class="clsrow ${tone}" data-t="${esc((c.title||'').toLowerCase())}">
+      <summary>${c.photo?`<img class="clspic" src="${c.photo}" alt="" onerror="this.style.visibility='hidden'">`:`<span class="clspic clspic-i">\u{1F3A8}</span>`}
+        <div class="rowt"><b>${esc(c.title)}</b><span>${esc(when)}${c.room?' · '+esc(c.room):''}</span></div>
+        <span class="pill ${pc}" style="flex:none">${pt}</span><span class="rowchev">\u203A</span></summary>
+      ${cardCls(c)}</details>`;
+  };
+  return `${classes.length>6?`<input id="clsq" placeholder="Find a class by name" oninput="filterMine()" style="margin:8px 0 4px">`:''}
+    ${attn.length?`<label style="margin-top:14px">Needs your attention (${attn.length})</label>${attn.map(cardCls).join('')}`:''}
+    ${up.length?`<label style="margin-top:14px">Coming up (${up.length})</label><p class="sub" style="margin-top:2px">Tap a class to see everything about it.</p>${up.map(row).join('')}`:''}
+    ${past.length?`<details id="pastwrap" style="margin-top:14px"><summary class="foldsum">Past and cancelled (${past.length}) <span class="rowchev">\u203A</span></summary>${past.map(row).join('')}</details>`:''}`;
+}
+function filterMine(){
+  const q=($('#clsq').value||'').toLowerCase().trim();
+  document.querySelectorAll('.clsrow[data-t]').forEach(r=>{ r.style.display=(!q || (r.dataset.t||'').includes(q))?'':'none'; });
+  const pw=$('#pastwrap'); if(pw && q) pw.open=true;
 }
 /* Leaving the form offers to keep the work rather than silently binning it. */
 async function leaveForm(){
@@ -3806,7 +3881,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

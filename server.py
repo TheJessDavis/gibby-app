@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.66.1-resubmit-series"
+VERSION = "10.67.0-my-classes-compact"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -194,9 +194,11 @@ def init_db():
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
     for col, typ in (("overall","INTEGER"),("room","TEXT"),("room_notes","TEXT"),("length","TEXT"),("engagement","TEXT"),
-                     ("support","TEXT"),("highlight","TEXT"),("concern","TEXT")):
+                     ("support","TEXT"),("highlight","TEXT"),("concern","TEXT"),("skipped","INTEGER")):
         try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
         except Exception: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN no_debrief INTEGER DEFAULT 0")   # opted out of the after-class questionnaire
+    except Exception: pass
     for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
@@ -2274,9 +2276,12 @@ def run_scheduler(asof=None):
                 c.execute("""UPDATE classes SET followup_status='awaiting_instructor',
                              followup_requested_at=? WHERE id=?""", (now(), cls["id"]))
                 cls["followup_status"] = "awaiting_instructor"
-            instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
+            instr_row = c.execute("SELECT name,email,no_debrief FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
             if instr_row:
                 first = (instr_row["name"] or "").split(" ")[0] or "there"
+                ask_q = ("" if instr_row["no_debrief"] else
+                         "\n\nWhile you are there, there are three quick questions about how the class went. "
+                         "Those are just for us and help us plan next season.")
                 sent, why = send_class_email(c, {**cls, "followup_status": "awaiting_instructor"},
                     "followup_request", [instr_row["email"]],
                     f"Write your note to students: {cls['title']}",
@@ -2285,9 +2290,7 @@ def run_scheduler(asof=None):
                     f"Follow-up notes: {mailer.APP_URL}\n\nTomorrow morning it goes to everyone who came, "
                     f"in your name, with The Gibby's thank-you underneath (review links and a discount on "
                     f"their next class). Replies come straight to you. If you skip it, The Gibby's "
-                    f"thank-you goes out on its own.\n\nWhile you are there, there are three quick "
-                    f"questions about how the class went. Those are just for us and help us plan next "
-                    f"season.\n\nThank you,\nThe Gibby", today, cfg)
+                    f"thank-you goes out on its own.{ask_q}\n\nThank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} to write the follow-up: {cls['title']}"
                                if sent else f"follow-up request suppressed for {cls['title']}: {why}")
                 # One nudge that evening if the note is still unwritten.
@@ -2515,6 +2518,7 @@ class H(http.server.BaseHTTPRequestHandler):
         return True
 
     def read_json(self):
+        self._body_read = True
         n = int(self.headers.get("Content-Length","0") or 0)
         if not n: return {}
         try: return json.loads(self.rfile.read(n).decode() or "{}")
@@ -2550,10 +2554,21 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         p = urllib.parse.urlparse(self.path).path
         if not p.startswith("/api/"): return self.send_error(404)
-        # Single choke point: every state-changing request is checked here, so a new
-        # endpoint cannot forget to protect itself.
-        if not self.csrf_ok(p): return
-        return self.api_post(p)
+        self._body_read = False
+        try:
+            # Single choke point: every state-changing request is checked here, so a new
+            # endpoint cannot forget to protect itself.
+            if not self.csrf_ok(p): return
+            return self.api_post(p)
+        finally:
+            # A handler that never read its body (or a 403/404 before it got there)
+            # would leave those bytes on the keep-alive socket, where they become
+            # the start of the NEXT request line: "{}GET ..." -> 501 for the caller.
+            if not getattr(self, "_body_read", True):
+                n = int(self.headers.get("Content-Length", "0") or 0)
+                if n:
+                    try: self.rfile.read(n)
+                    except Exception: pass
 
     def csrf_ok(self, path):
         """Synchronizer token check. Sends the 403 itself and returns False on failure."""
@@ -2892,6 +2907,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "phone":u.get("phone") or "",
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
                 "signoff":u.get("signoff") or "",
+                "no_debrief":1 if u.get("no_debrief") else 0,
                 "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
@@ -3516,7 +3532,8 @@ class H(http.server.BaseHTTPRequestHandler):
                              f.teach_again AS fb_teach_again, f.notes AS fb_notes,
                              f.submitted_at AS fb_submitted_at, f.overall AS fb_overall, f.room AS fb_room,
                              f.room_notes AS fb_room_notes, f.length AS fb_length, f.engagement AS fb_engagement,
-                             f.support AS fb_support, f.highlight AS fb_highlight, f.concern AS fb_concern
+                             f.support AS fb_support, f.highlight AS fb_highlight, f.concern AS fb_concern,
+                             f.skipped AS fb_skipped
                              FROM classes c
                              JOIN users u ON u.id=c.instructor_id
                              LEFT JOIN users ra ON ra.id=c.reviewing_admin_id
@@ -3824,6 +3841,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
+            if b.get("no_debrief") is not None:
+                c.execute("UPDATE users SET no_debrief=? WHERE id=?", (1 if b.get("no_debrief") else 0, u["id"]))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/upload-video":
@@ -5264,6 +5283,37 @@ class H(http.server.BaseHTTPRequestHandler):
             c.close()
             run_publish_side_effects(pending_side_effects)
             return self.send_json({"ok":True})
+        if p.startswith("/api/classes/") and p.endswith("/feedback/skip"):
+            # "Not for this one": the questionnaire card goes away without answers.
+            # Recorded (not deleted) so admins can see it was declined, not missed.
+            u = self.require("instructor")
+            if not u: return
+            cid = int(p.split("/")[3]); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not your class."},403)
+            c.execute("""INSERT INTO class_feedback(class_id,instructor_id,submitted_at,skipped) VALUES(?,?,?,1)
+                         ON CONFLICT(class_id) DO UPDATE SET skipped=1,
+                         submitted_at=COALESCE(class_feedback.submitted_at, excluded.submitted_at)""",
+                      (cid, u["id"], now()))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
+        if p == "/api/feedback/skip-all":
+            # Every questionnaire still waiting for this instructor, in one tap.
+            u = self.require("instructor")
+            if not u: return
+            c = db()
+            rows = c.execute("""SELECT c.id FROM classes c LEFT JOIN class_feedback f ON f.class_id=c.id
+                                WHERE c.instructor_id=? AND c.deleted_at IS NULL AND c.followup_status IS NOT NULL
+                                AND f.submitted_at IS NULL""", (u["id"],)).fetchall()
+            for r in rows:
+                c.execute("""INSERT INTO class_feedback(class_id,instructor_id,submitted_at,skipped) VALUES(?,?,?,1)
+                             ON CONFLICT(class_id) DO UPDATE SET skipped=1,
+                             submitted_at=COALESCE(class_feedback.submitted_at, excluded.submitted_at)""",
+                          (r["id"], u["id"], now()))
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "skipped":len(rows)})
         if p.startswith("/api/classes/") and p.endswith("/feedback"):
             # Three questions, asked once, private to The Gibby.
             u = self.require("instructor")
@@ -5296,7 +5346,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("""INSERT INTO class_feedback(class_id,instructor_id,enrollment,materials,teach_again,notes,submitted_at,
                          overall,room,room_notes,length,engagement,support,highlight,concern)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                         ON CONFLICT(class_id) DO UPDATE SET enrollment=excluded.enrollment,
+                         ON CONFLICT(class_id) DO UPDATE SET skipped=0, enrollment=excluded.enrollment,
                          materials=excluded.materials, teach_again=excluded.teach_again, notes=excluded.notes,
                          submitted_at=excluded.submitted_at, overall=excluded.overall, room=excluded.room,
                          room_notes=excluded.room_notes, length=excluded.length, engagement=excluded.engagement,
