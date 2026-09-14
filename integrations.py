@@ -713,6 +713,9 @@ def normalize_attendee(a):
     """Eventbrite attendee -> the fields the roster actually uses."""
     p = a.get("profile") or {}
     name = (p.get("name") or " ".join(x for x in (p.get("first_name"), p.get("last_name")) if x)).strip()
+    # Some attendee records reach Eventbrite as Python byte reprs ("b'Katie' b'Gorman'"),
+    # which would put "Hi b'Katie'," in an email. Unwrap them.
+    name = re.sub(r"b'([^']*)'", r"\1", name).strip()
     return {
         "external_id": str(a.get("id") or ""),
         "name": name or "(no name)",
