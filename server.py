@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.70.0-paperwork-requests"
+VERSION = "10.70.1-names-replyto"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -193,6 +193,10 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
+    # One-time repair: attendee names that arrived as byte reprs ("b'Katie' b'Gorman'").
+    for r in c.execute("SELECT id, name FROM registrations WHERE name LIKE ?", ("%b'%",)).fetchall():
+        fixed = re.sub(r"b'([^']*)'", r"\1", r["name"] or "").strip()
+        if fixed != r["name"]: c.execute("UPDATE registrations SET name=? WHERE id=?", (fixed, r["id"]))
     c.execute("""CREATE TABLE IF NOT EXISTS paperwork(
         id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT NOT NULL,
         status TEXT DEFAULT 'requested', note TEXT, requested_by INTEGER, requested_at TEXT,
@@ -4159,10 +4163,16 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/api/test-email":
             u = self.require("admin")
             if not u: return
-            to = (self.read_json().get("to") or u["email"]).strip()
+            b = self.read_json()
+            to = (b.get("to") or u["email"]).strip()
             cfg = mailer.load_email_config()
+            # Optional: prove the Reply-To / display-name path (instructor emails use it).
+            kw = {}
+            if b.get("reply_to"): kw["reply_to"] = str(b["reply_to"]).strip()[:120]
+            if b.get("from_name"): kw["from_name"] = str(b["from_name"]).strip()[:80]
             delivered = mailer.send(to, "Gibby Class Manager test email",
-                "This is a test from your Gibby Class Manager. If you received this, email is working.", cfg)
+                "This is a test from your Gibby Class Manager. If you received this, email is working."
+                + (f"\n\nReplies to this test should go to {kw['reply_to']}." if kw.get("reply_to") else ""), cfg, **kw)
             return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
                 "live": bool(cfg["email_live"] and (cfg["smtp_host"] or mailer.bridge_available())), "delivered": bool(delivered),
                 "smtp_host": cfg.get("smtp_host"), "smtp_port": cfg.get("smtp_port"),
