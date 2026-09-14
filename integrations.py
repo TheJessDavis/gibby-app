@@ -607,6 +607,37 @@ def update_eventbrite_times(cls, cfg):
 
 MAX_ATTENDEE_PAGES = 200          # ~10k attendees at 50/page; a stop against a bad loop
 
+def create_discount(cfg, code, percent_off, end_date, quantity=1):
+    """One coded discount valid on EVERY event of the organization (no event_id),
+    usable `quantity` times, dead after end_date ('YYYY-MM-DDTHH:MM:SS', no zone).
+    Returns {ok, id, error}."""
+    if not (cfg.get("eventbrite_token") and cfg.get("eventbrite_org_id")):
+        return _no("", "Eventbrite is not connected")
+    try:
+        r = _req(f"https://www.eventbriteapi.com/v3/organizations/{cfg['eventbrite_org_id']}/discounts/",
+                 token=cfg["eventbrite_token"],
+                 json_body={"discount": {"type": "coded", "code": code, "percent_off": str(percent_off),
+                                         "quantity_available": int(quantity), "end_date": end_date}})
+        return _ok(r.get("id"), "created") if r.get("id") else _no("", str(r)[:200])
+    except urllib.error.HTTPError as e:
+        return _no(str(e.code), (e.read() or b"").decode(errors="replace")[:300])
+    except Exception as e:
+        return _no("", str(e)[:200])
+
+def discount_status(cfg, discount_id):
+    """quantity_sold for one discount, or None if it cannot be read."""
+    try:
+        r = _req(f"https://www.eventbriteapi.com/v3/discounts/{discount_id}/", method="GET", token=cfg["eventbrite_token"])
+        return int(r.get("quantity_sold") or 0)
+    except Exception:
+        return None
+
+def delete_discount(cfg, discount_id):
+    try:
+        _req(f"https://www.eventbriteapi.com/v3/discounts/{discount_id}/", method="DELETE", token=cfg["eventbrite_token"]); return True
+    except Exception:
+        return False
+
 def list_org_events(cfg, _req_fn=None):
     """Every live or started event on the organization, oldest first, with the
     fields the app needs to adopt one as a class. Follows pagination."""

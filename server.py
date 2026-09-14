@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.68.0-order-requests"
+VERSION = "10.69.0-personal-codes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -193,6 +193,9 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
+        id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
+        pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
     try: c.execute("ALTER TABLE email_log ADD COLUMN copies INTEGER DEFAULT 0")     # copies sent to the watch address
     except Exception: pass
     try: c.execute("ALTER TABLE supply_requests ADD COLUMN lines TEXT")               # [{name, qty, link}]
@@ -2032,16 +2035,50 @@ def thanks_settings():
     """The after-class thank-you's links and discount, editable under Connections."""
     return {k: (_meta_get("thanks_" + k) or v) for k, v in THANKS_DEFAULTS.items()}
 
-def thanks_block(ts=None):
+CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I/L: people type these  # pragma: allowlist secret
+CODE_DAYS = 30
+
+def issue_thanks_code(c, cls, person, cfg=None):
+    """A personal, single-use discount for one student: created on Eventbrite for
+    EVERY event, one redemption, dead 30 days from today. Returns the row dict or
+    None (Eventbrite unreachable: the email falls back to the shared code)."""
+    ecfg = integrations.load_config()
+    if not (ecfg.get("eventbrite_token") and ecfg.get("eventbrite_org_id")):
+        return None
+    pct = thanks_settings().get("promo_pct") or "15"
+    expires = datetime.date.today() + datetime.timedelta(days=CODE_DAYS)
+    for _ in range(5):
+        code = "GIBBY-" + "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
+        if not c.execute("SELECT 1 FROM thanks_codes WHERE code=?", (code,)).fetchone(): break
+    r = integrations.create_discount(ecfg, code, pct, expires.strftime("%Y-%m-%dT23:59:59"))
+    if not r.get("ok"):
+        print(f"[thanks-code] could not create {code} for {person.get('email')}: {r.get('error')}")
+        return None
+    row = {"class_id": cls["id"], "email": person.get("email"), "name": person.get("name") or "",
+           "code": code, "eb_id": str(r.get("id")), "pct": pct, "expires_at": expires.isoformat(), "created": now()}
+    c.execute("""INSERT INTO thanks_codes(class_id,email,name,code,eb_id,pct,expires_at,created)
+                 VALUES(:class_id,:email,:name,:code,:eb_id,:pct,:expires_at,:created)""", row)
+    return row
+
+def thanks_block(ts=None, code=None):
+    """code: a personal single-use code row (see issue_thanks_code); without one
+    the shared promo code from Connections is offered instead."""
     ts = ts or thanks_settings()
     lines = ["If you enjoyed the class, we would love to hear about it. A quick review helps other people find us:", ""]
     if ts["google_url"]:   lines.append(f"Leave a Google review: {ts['google_url']}")
     if ts["facebook_url"]: lines.append(f"Leave a Facebook review: {ts['facebook_url']}")
     if not (ts["google_url"] or ts["facebook_url"]):
         lines.append("Tell us on Google or Facebook, or just reply to this email.")
-    lines += ["", f"And here's a little thank-you: take {ts['promo_pct']}% off your next class with us. "
-                  f"Use code {ts['promo_code']} at checkout.", "",
-              f"See what's coming up: {ts['upcoming_url']}"]
+    if code:
+        exp = datetime.date.fromisoformat(code["expires_at"])
+        lines += ["", f"And here's a little thank-you, just for you: {code['pct']}% off any class at The Gibby.",
+                  f"Your personal code is {code['code']}. Enter it at checkout on Eventbrite.",
+                  f"It works once, on any class, and expires on {exp.strftime('%A, %B %-d')} ({CODE_DAYS} days from today).", "",
+                  f"See what's coming up: {ts['upcoming_url']}"]
+    else:
+        lines += ["", f"And here's a little thank-you: take {ts['promo_pct']}% off your next class with us. "
+                      f"Use code {ts['promo_code']} at checkout.", "",
+                  f"See what's coming up: {ts['upcoming_url']}"]
     return "\n".join(lines)
 
 def instructor_next_classes(c, instructor_id, exclude_id=None, n=3):
@@ -2052,13 +2089,13 @@ def instructor_next_classes(c, instructor_id, exclude_id=None, n=3):
     rows.sort(key=lambda r: (_class_date(r) or datetime.date.max))
     return [r["id"] for r in rows[:n]]
 
-def after_class_email(cls, first, attended, note="", instructor_name="", upcoming=""):
+def after_class_email(cls, first, attended, note="", instructor_name="", upcoming="", code=None):
     """The email students get after a class. With a note it opens in the
     instructor's voice (sent 'via The Gibby', replies go to them); without one
     it is The Gibby's own thank-you. Attendance wording is careful: a no-show
     must never be thanked for coming."""
     title = cls.get("title", "")
-    block = thanks_block()
+    block = thanks_block(code=code)
     ifirst = (instructor_name or "").split(" ")[0]
     if attended:
         subject = f"Thank you for taking {title}!"
@@ -2134,7 +2171,12 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
                     + (f"\n\n{upcoming}" if upcoming else "") +
                     f"\n\n----\nSent through The Gibby Class Manager. Reply to reach your instructor directly.")
         else:
-            subj, body = after_class_email(cls, first, attended, note, iname, upcoming)
+            # A personal one-use code for this student (30 days, any class).
+            code = None
+            if email_type == "followup":
+                try: code = issue_thanks_code(c, cls, p, cfg)
+                except Exception as e: print("[thanks-code]", e)
+            subj, body = after_class_email(cls, first, attended, note, iname, upcoming, code=code)
         if email_type == "followup":
             body = body.replace("\n\nSee you at The Gibby,",
                 f"\n\nHow was it? Tap a star to tell us (takes ten seconds): {feedback_link(cid, p['email'])}\n\nSee you at The Gibby,", 1)
@@ -3302,6 +3344,28 @@ class H(http.server.BaseHTTPRequestHandler):
                 ev["sessions"] = sessions
                 out.append(ev)
             return self.send_json({"events": out, "people": people, "linked": len(linked)})
+        mtc = re.match(r"^/api/(?:classes/(\d+)/)?thanks-codes$", p)
+        if mtc:
+            # Personal thank-you codes: who got one, whether it was used, when it dies.
+            # Redemption is read from Eventbrite on each open (a few calls at most).
+            u = self.require("admin")
+            if not u: return
+            c = db(); ecfg = integrations.load_config()
+            where, args = ("WHERE class_id=?", (int(mtc.group(1)),)) if mtc.group(1) else ("", ())
+            rows = [dict(r) for r in c.execute(f"SELECT * FROM thanks_codes {where} ORDER BY id DESC LIMIT 200", args).fetchall()]
+            today = datetime.date.today().isoformat()
+            for r in rows[:40]:
+                if r["eb_id"] and not r["redeemed"] and r["expires_at"] >= today:
+                    sold = integrations.discount_status(ecfg, r["eb_id"])
+                    if sold is not None and sold != (r["redeemed"] or 0):
+                        c.execute("UPDATE thanks_codes SET redeemed=?, checked_at=? WHERE id=?", (sold, now(), r["id"]))
+                        r["redeemed"] = sold
+                r["expired"] = r["expires_at"] < today
+            c.commit()
+            titles = {t["id"]: t["title"] for t in c.execute("SELECT id, title FROM classes WHERE id IN (%s)" % (",".join(str(r["class_id"]) for r in rows) or "0"))}
+            for r in rows: r["class_title"] = titles.get(r["class_id"], "")
+            c.close()
+            return self.send_json({"codes": rows})
         if p == "/api/classes/followup-review":
             # Admin visibility: every class that finished in the last 45 days,
             # who wrote their note, and what the students were sent.
@@ -3320,6 +3384,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 cl["thanks_sent_at"] = email_sent_at(c, cl["id"], "followup")
                 cl["register_clicks"] = link_clicks(c, "after_class", cl["id"])
                 cl["late_sent_at"] = email_sent_at(c, cl["id"], "followup_late")
+                cl["codes_issued"] = c.execute("SELECT COUNT(*) FROM thanks_codes WHERE class_id=?", (cl["id"],)).fetchone()[0]
+                cl["codes_redeemed"] = c.execute("SELECT COUNT(*) FROM thanks_codes WHERE class_id=? AND redeemed>0", (cl["id"],)).fetchone()[0]
                 cl["note_written"] = bool((cl.get("followup_note") or "").strip()) and cl.get("followup_status") in ("ready","sent","sent_late")
                 cl["exempt"] = followup_exempt(c, cl)
                 cl["end_date"] = end.isoformat()

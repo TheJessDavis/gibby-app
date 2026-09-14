@@ -1495,6 +1495,12 @@ async function adminSupplies(){
     <label style="margin-top:16px">Ordered (${ordered.length})</label>${ordered.map(card).join('')||'<div class="muted">None.</div>'}
     ${done.length?`<label style="margin-top:16px">Done (${done.length})</label>${done.slice(0,20).map(card).join('')}`:''}`;
 }
+async function showThanksCodes(classId, boxId){
+  const box=$('#'+(boxId||'th_codes')); if(!box) return;
+  box.innerHTML='<div class="muted">Checking with Eventbrite…</div>';
+  let codes=[]; try{ codes=(await api(classId?`/api/classes/${classId}/thanks-codes`:'/api/thanks-codes')).codes||[]; }catch(e){ box.innerHTML=esc(e.message); return; }
+  box.innerHTML=codes.length?`<div class="card" style="margin-top:6px">${codes.map(k=>`<div class="meta" style="margin-bottom:4px"><b>${esc(k.code)}</b> · ${esc(k.name||k.email)}${classId?'':' · '+esc(k.class_title)} · ${k.redeemed?'<span class="pill appr">used</span>':k.expired?'<span class="pill inc">expired</span>':'<span class="pill pend">unused, expires '+esc(k.expires_at)+'</span>'}</div>`).join('')}</div>`:'<div class="muted">No personal codes issued yet.</div>';
+}
 async function saveSupplyTo(){
   try{ const r=await api('/api/admin/supply-settings','POST',{to:$('#sup_to').value}); alert('Saved. New requests go to: '+(r.to||'the admins only')); }
   catch(e){ alert(e.message); }
@@ -1630,7 +1636,9 @@ async function adminConnections(){
       <div class="meta" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)"><b>After-class thank-you</b> (sent two mornings after every class):</div>
       <input id="th_google" placeholder="Google review link" value="${esc((d.thanks||{}).google_url||'')}" style="margin-top:6px">
       <input id="th_fb" placeholder="Facebook page or review link" value="${esc((d.thanks||{}).facebook_url||'')}" style="margin-top:6px">
-      <div class="two" style="margin-top:6px"><input id="th_code" placeholder="Promo code" value="${esc((d.thanks||{}).promo_code||'')}"><input id="th_pct" placeholder="% off" value="${esc((d.thanks||{}).promo_pct||'')}"></div>
+      <div class="two" style="margin-top:6px"><input id="th_code" placeholder="Fallback promo code" value="${esc((d.thanks||{}).promo_code||'')}"><input id="th_pct" placeholder="% off" value="${esc((d.thanks||{}).promo_pct||'')}"></div>
+      <div class="hint">Every thank-you carries a <b>personal one-use code</b> (GIBBY-XXXXXX) made on Eventbrite for that student: this % off any class, dead 30 days after the email. The fallback code is only used if Eventbrite cannot be reached at send time. <a href="#" onclick="showThanksCodes();return false">See issued codes</a></div>
+      <div id="th_codes"></div>
       <input id="th_up" placeholder="Upcoming classes link" value="${esc((d.thanks||{}).upcoming_url||'')}" style="margin-top:6px">
       <input id="th_copy" placeholder="Who gets a copy of every instructor email" value="${esc((d.thanks||{}).instructor_copy||'')}" style="margin-top:6px">
       <input id="th_copyall" placeholder="Who gets a copy of EVERY email the app sends" value="${esc((d.thanks||{}).copy_all||'')}" style="margin-top:6px">
@@ -2149,6 +2157,7 @@ async function adminApprovals(){
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}. <b>${c.register_clicks||0} Register click${c.register_clicks===1?'':'s'}</b> on the next-classes links.`
           : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
       </div>
+      ${c.codes_issued?`<div class="meta" style="margin-top:6px">\u{1F39F}\uFE0F ${c.codes_issued} personal code${c.codes_issued===1?'':'s'} sent, ${c.codes_redeemed||0} used so far. <a href="#" onclick="showThanksCodes(${c.id},'cc${c.id}');return false">Show</a><div id="cc${c.id}"></div></div>`:''}
       ${c.fb_submitted_at && c.fb_skipped?`<div class="meta" style="margin-top:8px">${esc(c.instructor_name||'The instructor')} skipped the questionnaire for this one.</div>`:''}
       ${c.fb_submitted_at && !c.fb_skipped?`<div class="meta" style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">
         <b>${esc(c.instructor_name||'Instructor')}'s debrief:</b> ${c.fb_overall?'\u2605'.repeat(c.fb_overall)+' ':''}
@@ -3921,7 +3930,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
