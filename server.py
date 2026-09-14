@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.69.0-personal-codes"
+VERSION = "10.70.0-paperwork-requests"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -193,6 +193,11 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS paperwork(
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, kind TEXT NOT NULL,
+        status TEXT DEFAULT 'requested', note TEXT, requested_by INTEGER, requested_at TEXT,
+        reminded_at TEXT, done_at TEXT, value TEXT, file_name TEXT, file_mime TEXT, file_b64 TEXT,
+        drive_link TEXT, UNIQUE(user_id, kind))""")
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
@@ -1203,6 +1208,47 @@ def sweep_contract_reminders():
     if n: print(f"[contract] {n} reminder(s) sent")
     return n
 
+PAPERWORK_KINDS = {
+    "w9":         {"label": "W-9 tax form",
+                   "what": "Fill in the IRS W-9 (https://www.irs.gov/pub/irs-pdf/fw9.pdf), sign it, and upload a photo or PDF of it in the app."},
+    "background": {"label": "Background check",
+                   "what": "Complete the background check, then mark it done in the app (attach the confirmation if you have one)."},
+    "phone":      {"label": "Phone number",
+                   "what": "Add a phone number where The Gibby can reach you on class day."},
+}
+
+def paperwork_email(user, rows, reminder=False):
+    """One email listing everything still needed from this instructor."""
+    first = (user.get("name") or "").split(" ")[0] or "there"
+    parts = []
+    for r in rows:
+        k = PAPERWORK_KINDS.get(r["kind"], {"label": r["kind"], "what": ""})
+        parts.append(f"  \u2022 {k['label']}: {k['what']}" + (f"\n    Note from The Gibby: {r['note']}" if r.get("note") else ""))
+    subj = ("Reminder: " if reminder else "") + f"The Gibby needs {len(rows)} thing{'s' if len(rows) != 1 else ''} from you"
+    body = (f"Hi {first},\n\n" + ("Just a reminder that " if reminder else "") +
+            f"The Gibby needs the following from you:\n\n" + "\n".join(parts) +
+            f"\n\nIt all goes through the app: sign in, open My classes, and it is waiting at the top under "
+            f"\"The Gibby needs from you\".\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby")
+    return subj, body
+
+def sweep_paperwork_reminders():
+    """Hourly: anything requested 3+ days ago, still open and never reminded."""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=CONTRACT_REMINDER_DAYS)).isoformat(timespec="seconds")
+    c = db()
+    rows = [dict(r) for r in c.execute("""SELECT p.*, u.name, u.email FROM paperwork p JOIN users u ON u.id=p.user_id
+        WHERE p.status='requested' AND p.requested_at<=? AND p.reminded_at IS NULL AND u.deleted_at IS NULL""", (cutoff,)).fetchall()]
+    c.close()
+    by_user = {}
+    for r in rows: by_user.setdefault(r["user_id"], []).append(r)
+    n = 0
+    for uid, items in by_user.items():
+        subj, body = paperwork_email({"name": items[0]["name"]}, items, reminder=True)
+        if mailer.send(items[0]["email"], subj, body):
+            c = db(); c.execute("UPDATE paperwork SET reminded_at=? WHERE user_id=? AND status='requested'",
+                                (now(), uid)); c.commit(); c.close(); n += 1
+    if n: print(f"[paperwork] {n} reminder(s) sent")
+    return n
+
 def resend_unsigned_contract_emails():
     """Email every instructor whose contract is waiting, and start the 3-day
     reminder clock for any contract that never had one (sent before v10.43)."""
@@ -1598,6 +1644,10 @@ def admin_digest_text(c):
     for f in flagged: L.append(f"  {f['title']}: {f['concern'][:160]}")
     sp = [dict(r) for r in c.execute("""SELECT s.items, s.needed_by, COALESCE(cl.title,'studio stock') AS title, u.name FROM supply_requests s LEFT JOIN classes cl ON cl.id=s.class_id
                                        JOIN users u ON u.id=s.user_id WHERE s.status='requested' ORDER BY s.needed_by""")]
+    pw = [dict(r) for r in c.execute("""SELECT u.name, p.kind FROM paperwork p JOIN users u ON u.id=p.user_id
+                                       WHERE p.status='requested' AND u.deleted_at IS NULL ORDER BY u.name""")]
+    L.append(""); L.append(f"PAPERWORK STILL WAITING: {len(pw)}")
+    for x in pw: L.append(f"  {x['name']}: {PAPERWORK_KINDS.get(x['kind'],{}).get('label', x['kind'])}")
     L.append(""); L.append(f"SUPPLY REQUESTS WAITING: {len(sp)}")
     for x in sp: L.append(f"  {x['name']} for {x['title']} by {x['needed_by'] or '?'}: {' / '.join((x['items'] or '').splitlines())[:140]}")
     photos = c.execute("SELECT COUNT(*) FROM social_posts WHERE status='draft'").fetchone()[0]
@@ -2485,6 +2535,8 @@ def scheduler_loop():
             except Exception as e: print("[contract] sweep error:", e)
             try: sweep_contract_reminders()
             except Exception as e: print("[contract] reminder error:", e)
+            try: sweep_paperwork_reminders()
+            except Exception as e: print("[paperwork] reminder error:", e)
             try: send_due_instructor_emails()
             except Exception as e: print("[instructor-email] error:", e)
             try: send_admin_digest()
@@ -2946,6 +2998,7 @@ class H(http.server.BaseHTTPRequestHandler):
             cq = db()
             n_contracts = cq.execute("""SELECT COUNT(*) FROM classes WHERE instructor_id=?
                 AND contract_status='sent' AND deleted_at IS NULL""",(u["id"],)).fetchone()[0]
+            n_paper = cq.execute("SELECT COUNT(*) FROM paperwork WHERE user_id=? AND status='requested'",(u["id"],)).fetchone()[0]
             cq.close()
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
                 "role":u["role"],"must_change_pw":u.get("must_change_pw",0),
@@ -2955,6 +3008,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "phone":u.get("phone") or "",
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
                 "signoff":u.get("signoff") or "",
+                "paperwork_open":n_paper,
                 "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
@@ -2964,10 +3018,14 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             rows = [{"id":r["id"],"name":r["name"],"email":r["email"],"role":r["role"],
                      "pending":bool(r["must_change_pw"]), "photo":r["photo"] or "",
-                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or ""}
+                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or "", "paperwork":{}}
                     for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
-            c.close(); return self.send_json({"users":rows})
+            by_id = {r["id"]: r for r in rows}
+            for p_ in c.execute("SELECT id,user_id,kind,status,requested_at,reminded_at,done_at,value,file_name,drive_link,note FROM paperwork"):
+                if p_["user_id"] in by_id:
+                    by_id[p_["user_id"]]["paperwork"][p_["kind"]] = {k: p_[k] for k in p_.keys() if k not in ("user_id","kind")}
+            c.close(); return self.send_json({"users":rows, "paperwork_kinds": {k: v["label"] for k, v in PAPERWORK_KINDS.items()}})
         if p == "/api/slots":
             u = self.require()
             if not u: return
@@ -3473,6 +3531,30 @@ class H(http.server.BaseHTTPRequestHandler):
                 "SELECT * FROM client_errors ORDER BY id DESC LIMIT 100").fetchall()]
             c.close()
             return self.send_json({"errors": rows})
+        if p == "/api/paperwork":
+            # What The Gibby has asked this person for, and what they have sent.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT id,kind,status,note,requested_at,done_at,value,file_name,drive_link
+                                                  FROM paperwork WHERE user_id=? ORDER BY id""", (u["id"],)).fetchall()]
+            c.close()
+            for r in rows: r["label"] = PAPERWORK_KINDS.get(r["kind"], {}).get("label", r["kind"]); r["what"] = PAPERWORK_KINDS.get(r["kind"], {}).get("what", "")
+            return self.send_json({"paperwork": rows, "phone": u.get("phone") or ""})
+        mpf = re.match(r"^/api/paperwork/(\d+)/file$", p)
+        if mpf:
+            # The uploaded W-9 / confirmation itself: the owner or an admin.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); r = c.execute("SELECT * FROM paperwork WHERE id=?", (int(mpf.group(1)),)).fetchone(); c.close()
+            if not r or not r["file_b64"]: return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and r["user_id"] != u["id"]: return self.send_json({"error":"forbidden"},403)
+            data = base64.b64decode(r["file_b64"])
+            self.send_response(200)
+            self.send_header("Content-Type", r["file_mime"] or "application/octet-stream")
+            self.send_header("Content-Disposition", f'inline; filename="{r["file_name"] or "file"}"')
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+            return
         if p == "/api/email-log":   # read-only record of which automated emails went out
             u = self.require("admin")
             if not u: return
@@ -4260,6 +4342,95 @@ class H(http.server.BaseHTTPRequestHandler):
             if recips:
                 mailer.send(recips, f"Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
             return self.send_json({"ok":True, "id":rid})
+        if p == "/api/admin/paperwork":
+            # Ask one person, several, or everyone missing it, for W-9 / background
+            # check / phone number. One email per person listing what is needed.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            kinds = [k for k in (b.get("kinds") or []) if k in PAPERWORK_KINDS]
+            if not kinds: return self.send_json({"error":"Pick at least one thing to ask for."},400)
+            note = (b.get("note") or "").strip()[:500]
+            c = db()
+            if b.get("everyone"):
+                targets = [r["id"] for r in c.execute("SELECT id FROM users WHERE role='instructor' AND deleted_at IS NULL")]
+            else:
+                targets = [int(x) for x in (b.get("user_ids") or [])]
+            emailed, skipped = [], 0
+            for uid in targets:
+                usr = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL", (uid,)).fetchone()
+                if not usr: continue
+                asked = []
+                for k in kinds:
+                    cur = c.execute("SELECT * FROM paperwork WHERE user_id=? AND kind=?", (uid, k)).fetchone()
+                    if k == "phone" and (usr["phone"] or "").strip() and not b.get("force"):
+                        # already on file: record it as done rather than nagging
+                        c.execute("""INSERT INTO paperwork(user_id,kind,status,requested_by,requested_at,done_at,value)
+                                     VALUES(?,?,'done',?,?,?,?) ON CONFLICT(user_id,kind) DO NOTHING""",
+                                  (uid, k, u["id"], now(), now(), usr["phone"]))
+                        continue
+                    if cur and cur["status"] == "done" and not b.get("force"):
+                        continue            # already have it; use force to ask again
+                    c.execute("""INSERT INTO paperwork(user_id,kind,status,note,requested_by,requested_at,reminded_at,done_at)
+                                 VALUES(?,?,'requested',?,?,?,NULL,NULL)
+                                 ON CONFLICT(user_id,kind) DO UPDATE SET status='requested', note=excluded.note,
+                                 requested_by=excluded.requested_by, requested_at=excluded.requested_at, reminded_at=NULL, done_at=NULL""",
+                              (uid, k, note, u["id"], now()))
+                    asked.append({"kind": k, "note": note})
+                if not asked: skipped += 1; continue
+                subj, body = paperwork_email(dict(usr), asked)
+                if mailer.send(usr["email"], subj, body): emailed.append(usr["name"] or usr["email"])
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "emailed": emailed, "already_had_it": skipped})
+        mpc = re.match(r"^/api/paperwork/(\d+)/(complete|done|reopen)$", p)
+        if mpc:
+            pid, action = int(mpc.group(1)), mpc.group(2)
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            b = self.read_json(); c = db()
+            r = c.execute("SELECT * FROM paperwork WHERE id=?", (pid,)).fetchone()
+            if not r: c.close(); return self.send_json({"error":"not found"},404)
+            if action in ("done", "reopen") and u["role"] != "admin":
+                c.close(); return self.send_json({"error":"forbidden"},403)
+            if action == "complete" and u["role"] != "admin" and r["user_id"] != u["id"]:
+                c.close(); return self.send_json({"error":"That is not yours."},403)
+            if action == "reopen":
+                c.execute("UPDATE paperwork SET status='requested', requested_at=?, reminded_at=NULL, done_at=NULL WHERE id=?", (now(), pid))
+                c.commit(); c.close(); return self.send_json({"ok":True})
+            owner = c.execute("SELECT * FROM users WHERE id=?", (r["user_id"],)).fetchone()
+            value = (b.get("value") or "").strip()[:200]
+            if r["kind"] == "phone" and action == "complete":
+                value = re.sub(r"[^0-9+() .-]", "", value)[:30].strip()
+                if len(re.sub(r"\D", "", value)) < 7: c.close(); return self.send_json({"error":"That does not look like a phone number."},400)
+                c.execute("UPDATE users SET phone=? WHERE id=?", (value, r["user_id"]))
+            fname = fmime = fb64 = link = None
+            if b.get("b64"):
+                fb64 = b["b64"].split(",",1)[1] if "," in b["b64"][:40] else b["b64"]
+                if len(fb64) > 6_000_000: c.close(); return self.send_json({"error":"That file is too large (4 MB max). A photo of the form is fine."},400)
+                fmime = (b.get("mime") or "application/octet-stream")[:80]
+                fname = re.sub(r"[^A-Za-z0-9._-]+", "-", (b.get("name") or "file"))[:80]
+                # Best effort: a copy on Drive too, under Paperwork - <name>.
+                try:
+                    res = push_photo_to_drive({"title": f"Paperwork - {owner['name'] or owner['email']}"},
+                                              f"{PAPERWORK_KINDS[r['kind']]['label']} - {fname}", fb64, fmime)
+                    link = res.get("link")
+                except Exception as e:
+                    print("[paperwork] drive copy failed:", e)
+            elif r["kind"] == "w9" and action == "complete":
+                c.close(); return self.send_json({"error":"Please attach a photo or PDF of your signed W-9."},400)
+            c.execute("""UPDATE paperwork SET status='done', done_at=?, value=COALESCE(?,value),
+                         file_name=COALESCE(?,file_name), file_mime=COALESCE(?,file_mime), file_b64=COALESCE(?,file_b64),
+                         drive_link=COALESCE(?,drive_link) WHERE id=?""",
+                      (now(), value or None, fname, fmime, fb64, link, pid))
+            c.commit(); c.close()
+            if action == "complete" and u["role"] != "admin":
+                admins = emails_for(db(), "WHERE role='admin'")
+                label = PAPERWORK_KINDS[r["kind"]]["label"]
+                mailer.send(admins, f"{owner['name'] or owner['email']} sent their {label}",
+                    f"{owner['name'] or owner['email']} has completed: {label}." + (f"\n\nPhone: {value}" if r["kind"] == "phone" else "")
+                    + (f"\n\nFile: {fname}" + (f"\nOn Drive: {link}" if link else " (open it from People in the app)") if fname else "")
+                    + f"\n\nSee everyone's paperwork under People: {mailer.APP_URL}")
+            return self.send_json({"ok":True, "drive_link": link})
         if p == "/api/admin/supply-settings":
             u = self.require("admin")
             if not u: return

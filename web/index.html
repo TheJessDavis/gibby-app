@@ -601,7 +601,7 @@ function buildBnav(role, active){
       + item('people','\u{1F465}','People',"renderAdmin('people')")
       + `<button data-tab="more" class="${inMore?'on':''}" onclick="openMore()"><span class="bi">\u22EF</span><span class="bl">More</span></button>`;
   } else {
-    const nSign=(ME&&ME.contracts_to_sign)||0;
+    const nSign=((ME&&ME.contracts_to_sign)||0)+((ME&&ME.paperwork_open)||0);
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
       + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
       + item('audit','\u{1F393}','Learn',"renderInstr('audit')")
@@ -1405,7 +1405,12 @@ async function adminPeople(){
       <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.phone?' · <a href="tel:'+esc(u.phone)+'">'+esc(u.phone)+'</a>':''}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       </div>
+      ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
+          if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
+          if(q.status==='done') return `<span class="pill appr">${esc(lab)} \u2713${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} <a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`;
+          return `<span class="pill pend">${esc(lab)}: waiting since ${esc((q.requested_at||'').slice(0,10))}${q.reminded_at?', reminded':''}</span> <a href="#" onclick="paperAdmin(${q.id},'done');return false" style="font-size:12px">mark done</a>`; }).join(' ')}</div>`:''}
       <div style="text-align:right">${u.role==='admin'?'<span class="pill appr">admin</span>':''}
+      ${u.role==='instructor'?`<button class="btn ghost" style="margin-top:6px" onclick="paperRequest(${u.id},'${esc(u.name||u.email)}')">Request paperwork</button>`:''}
       ${u.pending?'<span class="pill pend">invite sent, no password yet</span>':''}
       ${u.pending?`<button class="btn ghost" onclick="reinvite('${esc(u.email)}','${esc(u.name||'')}','${u.role}')">Re-send invite</button>`
                  :`<button class="btn ghost" style="margin-top:6px" onclick="askToTeach(${u.id},'${esc(u.name||u.email)}')">Ask to teach</button>`}
@@ -1413,6 +1418,7 @@ async function adminPeople(){
     </div></div>`;
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
+    <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">\u{1F4CB} Request paperwork from everyone missing it</button>
     <div class="card"><h3>Find someone</h3>
       <div style="position:relative">
       <input id="q_people" placeholder="Search by name or skill (pottery, watercolor...)" value="${esc(PEOPLE_Q)}" oninput="peopleSearch(this.value)" autocomplete="off" style="margin-top:8px">
@@ -1494,6 +1500,40 @@ async function adminSupplies(){
     <label style="margin-top:12px">Waiting (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
     <label style="margin-top:16px">Ordered (${ordered.length})</label>${ordered.map(card).join('')||'<div class="muted">None.</div>'}
     ${done.length?`<label style="margin-top:16px">Done (${done.length})</label>${done.slice(0,20).map(card).join('')}`:''}`;
+}
+/* Ask one instructor (or everyone missing it) for the W-9, background check
+   and phone number. One email per person listing what is needed; a reminder
+   goes out on its own three days later. */
+function paperRequest(userId, who){
+  const m=document.createElement('div'); m.id='pwmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:420px;width:100%;padding:20px 22px">
+    <h2 style="margin:0 0 2px">Request <em>paperwork</em></h2>
+    <p class="sub" style="margin:0 0 10px">From ${esc(who)}. They get one email and a card at the top of My classes; a reminder follows in 3 days if it is still open.</p>
+    <label class="chk"><input type="checkbox" id="pwk_w9" checked> W-9 tax form (they upload a photo or PDF)</label>
+    <label class="chk"><input type="checkbox" id="pwk_bg" checked> Background check (they mark it done, attach confirmation if any)</label>
+    <label class="chk"><input type="checkbox" id="pwk_ph" checked> Phone number (skipped for anyone who already has one on file)</label>
+    <label style="margin-top:10px">Note or link to include (optional)</label>
+    <input id="pwk_note" placeholder="e.g. background check link, who to ask, deadline">
+    ${userId?`<label class="chk" style="margin-top:8px"><input type="checkbox" id="pwk_force"> Ask again even if we already have it</label>`:''}
+    <div class="two" style="margin-top:14px">
+      <button class="btn ghost" onclick="document.getElementById('pwmodal').remove()">Cancel</button>
+      <button class="btn dark" onclick="paperSend(${userId})">Send the request</button></div></div>`;
+  m.addEventListener('click', e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+async function paperSend(userId){
+  const kinds=[['pwk_w9','w9'],['pwk_bg','background'],['pwk_ph','phone']].filter(([i])=>$('#'+i).checked).map(([,k])=>k);
+  if(!kinds.length){ alert('Tick at least one thing to ask for.'); return; }
+  const body={kinds, note:$('#pwk_note').value, everyone:!userId, user_ids:userId?[userId]:[], force:!!($('#pwk_force')&&$('#pwk_force').checked)};
+  let r; try{ r=await api('/api/admin/paperwork','POST',body); }catch(e){ alert(e.message); return; }
+  const m=$('#pwmodal'); if(m) m.remove();
+  alert((r.emailed||[]).length?('Sent to: '+r.emailed.join(', ')+(r.already_had_it?`. ${r.already_had_it} already had everything.`:'')):'Nothing to send: everyone already has it on file.');
+  adminPeople();
+}
+async function paperAdmin(id, action){
+  try{ await api('/api/paperwork/'+id+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
+  adminPeople();
 }
 async function showThanksCodes(classId, boxId){
   const box=$('#'+(boxId||'th_codes')); if(!box) return;
@@ -2196,6 +2236,26 @@ async function sendFeedback(id){
   if(r&&r.error){ alert(r.error); return; }
   alert('Thank you. That goes straight to The Gibby and helps shape next season.');
   instrMine();
+}
+function linkify(t){ return esc(t).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'); }
+function fileToB64(file){ return new Promise((ok,bad)=>{ const r=new FileReader(); r.onload=()=>ok(r.result); r.onerror=()=>bad(new Error('Could not read that file.')); r.readAsDataURL(file); }); }
+async function paperComplete(id, kind, noFile){
+  const st=$('#pws'+id);
+  const body={};
+  if(kind==='phone'){ body.value=$('#pwv'+id).value; }
+  else if(!noFile){
+    const f=$('#pwf'+id).files[0]; if(!f) return;
+    if(st) st.textContent='Preparing…';
+    try{
+      if(f.type==='application/pdf'){ if(f.size>4*1024*1024) throw new Error('That PDF is over 4 MB. A photo of the form works too.'); body.b64=await fileToB64(f); body.mime='application/pdf'; body.name=f.name; }
+      else { body.b64=await shrinkImage(f,2000,0.88); body.mime='image/jpeg'; body.name=(f.name||'photo').replace(/\.[^.]+$/,'')+'.jpg'; }
+    }catch(e){ if(st) st.textContent=e.message; return; }
+    if(st) st.textContent='Sending…';
+  }
+  try{ await api('/api/paperwork/'+id+'/complete','POST',body); }
+  catch(e){ if(st) st.textContent=e.message; else alert(e.message); return; }
+  if(kind==='phone'){ try{ ME=(await api('/api/me')).user; }catch(_){} }
+  alert('Thank you. The Gibby has it.'); boot();
 }
 async function skipFeedback(id){
   try{ await api('/api/classes/'+id+'/feedback/skip','POST',{}); }
@@ -3220,11 +3280,26 @@ async function instrMine(){
                               ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
   // asked once the class has finished, and only until they answer
   const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
+  let paper=[], myPhone=''; try{ const pw=await api('/api/paperwork'); paper=pw.paperwork||[]; myPhone=pw.phone||''; }catch(_){}
+  const paperOpen=paper.filter(x=>x.status==='requested');
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     <div class="two" style="margin-bottom:12px">
       ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
       <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
+    ${paperOpen.length?`<label>The Gibby needs from you (${paperOpen.length})</label>
+      <p class="sub" style="margin-top:2px">Quick paperwork so we can pay you and keep everyone safe. Nothing here is shared with students.</p>
+      ${(()=>{ const n=(paperOpen.find(x=>x.note)||{}).note; return n?`<div class="meta" style="margin:0 0 8px"><b>From The Gibby:</b> ${linkify(n)}</div>`:''; })()}
+      ${paperOpen.map(x=>`<div class="card" id="pw${x.id}">
+        <div class="row"><div><h3 style="font-size:1rem">${esc(x.label)}</h3><div class="meta">${esc(x.what.replace(/\s*\(https?:[^)]*\)/,''))}</div></div></div>
+        ${x.kind==='phone'?`<input id="pwv${x.id}" type="tel" value="${esc(myPhone)}" placeholder="Your phone number" style="margin-top:8px">
+          <button class="btn dark" style="margin-top:8px" onclick="paperComplete(${x.id},'phone')">Save my number</button>`
+        :`${x.kind==='w9'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer">\u{1F4C4} Open the blank W-9 form</a>`:''}
+          <input type="file" id="pwf${x.id}" accept="image/*,application/pdf" style="display:none" onchange="paperComplete(${x.id},'${x.kind}')">
+          <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('pwf${x.id}').click()">${x.kind==='w9'?'\u{1F4F7} Upload my signed W-9 (photo or PDF)':'\u{1F4CE} Attach confirmation and mark done'}</button>
+          ${x.kind==='background'?`<button class="btn ghost" style="margin-top:8px" onclick="paperComplete(${x.id},'background',true)">I have completed it (nothing to attach)</button>`:''}
+          <div class="meta" id="pws${x.id}" style="margin-top:6px"></div>`}
+      </div>`).join('')}`:''}
     ${reqs.length?`<label>The Gibby is looking for (${reqs.length})</label>
       <p class="sub" style="margin-top:2px">Classes the Gibby would love to run. Claim one and the proposal is pre-filled; you just pick the time.</p>
       ${reqs.map(r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
@@ -3930,7 +4005,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
