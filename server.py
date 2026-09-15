@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.76.0-wanted-skills"
+VERSION = "10.77.0-instructor-todo"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3280,7 +3280,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             c = db()
             rows = [dict(r) for r in c.execute("""
-                SELECT id,title,slot_date,slot_time,room,is_series,session_count,created,updated
+                SELECT id,title,slot_date,slot_time,room,is_series,session_count,created,updated, json_extract(payload,'$.request_id') AS request_id
                 FROM drafts WHERE instructor_id=? AND deleted_at IS NULL
                 ORDER BY updated DESC""", (u["id"],))]
             c.close()

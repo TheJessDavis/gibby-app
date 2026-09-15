@@ -77,6 +77,8 @@
   #tab .clscard.cls-back{background:var(--pink)}
   #tab .clscard.cls-off{background:#E9E4D8}
   .clstop{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .todoline{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:10px 6px;font:inherit;color:var(--ink);cursor:pointer}
+  .todoline:last-child{border-bottom:0} .todoline b{flex:1;font-size:14px;line-height:1.3} .todoline>span:first-child{font-size:18px}
   .clsrow{border-radius:14px;margin-bottom:8px;overflow:hidden;background:#EFE9DC}
   #tab .clsrow.cls-approved{background:#D9EFD0} #tab .clsrow.cls-off{background:#E9E4D8}
   #tab .clsrow.cls-pending{background:var(--yellow)} #tab .clsrow.cls-review{background:var(--purple)} #tab .clsrow.cls-back{background:var(--pink)}
@@ -3397,7 +3399,21 @@ async function instrMine(){
   let paper=[], myPhone='', bgForm=''; try{ const pw=await api('/api/paperwork'); paper=pw.paperwork||[]; myPhone=pw.phone||''; bgForm=pw.bg_form_name||''; }catch(_){}
   const paperOpen=paper.filter(x=>x.status==='requested');
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
+  // Everything that needs the instructor's hand, in one list, each line going
+  // straight to where it gets done. Contracts and sent-back classes live inside
+  // collapsed rows otherwise, which is how they went unnoticed.
+  const todos=[];
+  classes.filter(c=>c.contract_status==='sent').forEach(c=>todos.push({t:`Sign your contract for ${c.title}`, go:`openContract(${c.id})`, k:'\u{1F4DD}'}));
+  classes.filter(c=>c.status==='incomplete').forEach(c=>todos.push({t:`Fix and resubmit ${c.title}`, go:`startResubmit(${c.id})`, k:'\u{1F501}'}));
+  classes.filter(c=>c.status==='instructor_review').forEach(c=>todos.push({t:`Review the admin's edits to ${c.title}`, go:`jumpTo('#cls${c.id}')`, k:'\u{1F440}'}));
+  paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':'Complete your background check', go:`jumpTo('#pw${x.id}')`, k:'\u{1F4CB}'}));
+  todo.filter(c=>c.followup_status!=='ready').forEach(c=>todos.push({t:`Write your note to the students of ${c.title}`, go:`jumpTo('#fu${c.id}')`, k:'\u2709\uFE0F'}));
+  drafts.filter(d=>d.payload_request_id||d.request_id).forEach(d=>todos.push({t:`Finish your proposal for ${d.title||'a claimed class'}`, go:`resumeDraft(${d.id})`, k:'\u{1F4CC}'}));
+  if(ME && !ME.phone && !paperOpen.some(x=>x.kind==='phone')) todos.push({t:'Add your phone number to your profile', go:'renderProfile()', k:'\u{1F4DE}'});
+  if(ME && !ME.photo) todos.push({t:'Add a photo to your profile', go:'renderProfile()', k:'\u{1F4F7}'});
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
+    ${todos.length?`<label>To do (${todos.length})</label>
+      <div class="card" style="padding:6px 8px">${todos.map(x=>`<button class="todoline" onclick="${x.go}"><span>${x.k}</span><b>${esc(x.t)}</b><span class="rowchev">\u203A</span></button>`).join('')}</div>`:''}
     <div class="two" style="margin-bottom:12px">
       ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
       <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
@@ -3533,6 +3549,12 @@ function classList(classes){
     ${attn.length?`<label style="margin-top:14px">Needs your attention (${attn.length})</label>${attn.map(cardCls).join('')}`:''}
     ${up.length?`<label style="margin-top:14px">Coming up (${up.length})</label><p class="sub" style="margin-top:2px">Tap a class to see everything about it.</p>${up.map(row).join('')}`:''}
     ${past.length?`<details id="pastwrap" style="margin-top:14px"><summary class="foldsum">Past and cancelled (${past.length}) <span class="rowchev">\u203A</span></summary>${past.map(row).join('')}</details>`:''}`;
+}
+function jumpTo(sel){
+  const el=document.querySelector(sel); if(!el) return;
+  let d=el.closest('details'); while(d){ d.open=true; d=d.parentElement && d.parentElement.closest('details'); }
+  el.scrollIntoView({behavior:'smooth',block:'center'});
+  el.style.transition='box-shadow .3s'; el.style.boxShadow='0 0 0 4px #F2C94C'; setTimeout(()=>{ el.style.boxShadow=''; },1800);
 }
 function filterMine(){
   const q=($('#clsq').value||'').toLowerCase().trim();
@@ -4208,7 +4230,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
