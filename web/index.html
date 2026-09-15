@@ -604,6 +604,7 @@ function buildBnav(role, active){
     const nSign=((ME&&ME.contracts_to_sign)||0)+((ME&&ME.paperwork_open)||0);
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
       + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
+      + item('wanted','\u{1F4CC}','Wanted',"renderInstr('wanted')")
       + item('audit','\u{1F393}','Learn',"renderInstr('audit')")
       + (nSign?`<span style="position:relative">${''}</span>`:'')
       + item('profile','\u{1F464}','Profile',"renderProfile()");
@@ -1024,6 +1025,9 @@ async function adminDashboard(){
         <div class="meta">The last email the app tried to send was rejected, so instructors and admins are not getting notifications, invitations or contracts.</div></div></div>
       <div class="meta" style="margin-top:8px;color:#B4442C">${esc(d.email_error)}</div>
       <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Open Connections to send a test</button></div>`:''}
+    <div class="card"><div class="row"><div><h3>Need a class taught?</h3>
+        <div class="meta">Post a title and description; every instructor is emailed and the first to claim gets a pre-filled proposal.</div></div></div>
+      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('requests')">\u{1F4CC} Post a class request \u2192</button></div>
     ${d.supplies_waiting?`<div class="card"><div class="row"><div><h3>Supplies requested</h3>
         <div class="meta">${d.supplies_waiting} request${d.supplies_waiting===1?'':'s'} from instructors waiting to be ordered.</div></div></div>
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('supplies')">Open Supplies \u2192</button></div>`:''}
@@ -1578,6 +1582,7 @@ async function adminRequests(){
   const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
   const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
+      ${r.description?`<div class="meta" style="margin-top:4px">${esc(r.description)}</div>`:''}
       ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}
       ${r.status==='claimed'?`<div class="meta" style="margin-top:4px;color:#3F7A32;font-weight:800">Claimed by ${esc(r.claimed_by_name||'?')} ${esc((r.claimed_at||'').slice(0,10))}${r.class_title?' · submitted as '+esc(r.class_title)+' ('+esc(r.class_status)+')':' · proposal in progress'}</div>`:''}</div>
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
@@ -1588,6 +1593,7 @@ async function adminRequests(){
       <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
       <div class="two"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
+      <label>Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
       <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
       <button class="btn dark" style="margin-top:10px" onclick="postRequest()">Post it and email the instructors</button></div>
     <label style="margin-top:16px">Open (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing open.</div>'}
@@ -1595,7 +1601,7 @@ async function adminRequests(){
     ${closed.length?`<label style="margin-top:16px">Closed recently (${closed.length})</label>${closed.map(card).join('')}`:''}`;
 }
 async function postRequest(){
-  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value};
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value};
   const r=await api('/api/requests','POST',b);
   if(r.error){ alert(r.error); return; }
   alert('Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.'); adminRequests();
@@ -3018,7 +3024,7 @@ function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+
 async function renderInstr(tab){
   buildBnav('instructor', tab);
   $('#view').innerHTML = `${helloHTML()}<div id="tab"></div>`;
-  const screens = {open:instrOpen, mine:instrMine, audit:instrAudit};
+  const screens = {open:instrOpen, mine:instrMine, audit:instrAudit, wanted:instrWanted};
   return boundary('instructor:'+tab, '#tab', screens[tab] || instrOpen);
 }
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
@@ -3374,12 +3380,9 @@ async function instrMine(){
           <label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'${x.kind}',true,true)"> I've already ${x.kind==='w9'?'submitted a W-9':'completed a background check'} to The Gibby in ${new Date().getFullYear()}</label>
           <div class="meta" id="pws${x.id}" style="margin-top:6px"></div>`}
       </div>`).join('')}`:''}
-    ${reqs.length?`<label>The Gibby is looking for (${reqs.length})</label>
-      <p class="sub" style="margin-top:2px">Classes the Gibby would love to run. Claim one and the proposal is pre-filled; you just pick the time.</p>
-      ${reqs.map(r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
-        <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
-        ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}</div></div>
-        <button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">Claim this one</button></div>`).join('')}`:''}
+    ${reqs.length?`<div class="card" style="background:#DCE8F5;margin-bottom:10px"><div class="row"><div><h3 style="font-size:1rem">\u{1F4CC} ${reqs.length} class${reqs.length===1?'':'es'} The Gibby wants taught</h3>
+        <div class="meta">Claim one and the proposal is pre-filled; you just pick the time.</div></div>
+        <button class="btn dark" style="flex:none" onclick="renderInstr('wanted')">See them</button></div></div>`:''}
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
       <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. It goes out in your name, and replies come straight to you.</p>
       ${todo.map((c,i)=>`<details class="clsrow ${c.followup_status==='ready'?'cls-approved':'cls-back'}"${i===0&&todo.length===1?' open':''}>
@@ -3431,6 +3434,22 @@ async function instrMine(){
           <button class="btn dark" onclick="resumeDraft(${d.id})">Continue</button></div></div>`; }).join(''); })()}
       `:''}
     ${classList(classes)}`;
+}
+/* Wanted: classes The Gibby would like taught. Claim one and the class title,
+   description, ages and room are filled in; the instructor only picks the time. */
+async function instrWanted(){
+  let reqs=[]; try{ reqs=(await api('/api/requests')).requests||[]; }catch(_){}
+  const open=reqs.filter(r=>r.status==='open'), mine=reqs.filter(r=>r.status==='claimed' && ME && r.claimed_by===ME.id);
+  $('#tab').innerHTML = `<h2>Classes <em>wanted</em></h2>
+    <p class="sub">The Gibby would love someone to teach these. Claim one and you go straight to booking: the title, description and details are already filled in.</p>
+    ${open.length?open.map(r=>`<div class="card"><h3 style="font-size:1.05rem">${esc(r.title)}</h3>
+        <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
+        ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
+        ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
+        <button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">Claim this one</button></div>`).join('')
+      :'<div class="muted">Nothing is wanted right now. Check back after the next planning meeting.</div>'}
+    ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><h3 style="font-size:1rem">${esc(r.title)}</h3>
+        <div class="meta">${r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'}</div></div>`).join('')}`:''}`;
 }
 /* Which day the class is over: the last session for a course, the day itself
    otherwise. Labels carry no year, so the year comes from sort_key (first
@@ -4143,7 +4162,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

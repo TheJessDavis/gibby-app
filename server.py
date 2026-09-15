@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.73.1-fixes"
+VERSION = "10.74.0-wanted-tab"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -205,6 +205,8 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
+    try: c.execute("ALTER TABLE class_requests ADD COLUMN description TEXT")   # what students will read
+    except Exception: pass
     try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
     except Exception: pass
     for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER")):
@@ -4765,10 +4767,11 @@ class H(http.server.BaseHTTPRequestHandler):
             title = (b.get("title") or "").strip()[:120]
             if len(title) < 3: return self.send_json({"error":"Give the request a short title, like 'Kids pottery'."},400)
             c = db()
-            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created)
-                         VALUES(?,?,?,?,?,'open',?,?)""",
+            desc = (b.get("description") or "").strip()[:1500]
+            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description)
+                         VALUES(?,?,?,?,?,'open',?,?,?)""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
-                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now()))
+                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc))
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             instructors = emails_for(c, "WHERE role='instructor'")
             c.commit(); c.close()
@@ -4778,6 +4781,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     + (f"  When: {b.get('when_text')}\n" if b.get("when_text") else "")
                     + (f"  Room: {b.get('room')}\n" if b.get("room") else "")
                     + (f"  Ages: {b.get('ages')}\n" if b.get("ages") else "")
+                    + (f"\n{desc}\n" if desc else "")
                     + (f"\n{b.get('notes').strip()}\n" if (b.get("notes") or "").strip() else "")
                     + f"\nIf that is you, open the app and press Claim on the request. It pre-fills a class "
                     f"proposal so you only pick the time and add your details: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
@@ -4800,7 +4804,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"Someone already claimed this one."},409)
             n = c.execute("SELECT COUNT(*) FROM drafts WHERE instructor_id=? AND deleted_at IS NULL",(u["id"],)).fetchone()[0]
             if n >= 20: c.close(); return self.send_json({"error":"You have 20 drafts already. Delete one first."},400)
-            payload = {"title": row["title"], "description": row.get("notes") or "", "room": row.get("room") or "",
+            payload = {"title": row["title"], "description": row.get("description") or row.get("notes") or "",
+                       "pre_class": "", "room": row.get("room") or "",
                        "age_range": row.get("ages") or "", "slot_ids": [], "request_id": rid}
             c.execute("""INSERT INTO drafts(instructor_id,title,payload,slot_ids,slot_date,slot_time,room,is_series,session_count,created,updated)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
