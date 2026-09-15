@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.70.1-names-replyto"
+VERSION = "10.71.0-pricing-supplies"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -205,6 +205,11 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
+    try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
+    except Exception: pass
+    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER")):
+        try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
+        except Exception: pass
     try: c.execute("ALTER TABLE email_log ADD COLUMN copies INTEGER DEFAULT 0")     # copies sent to the watch address
     except Exception: pass
     try: c.execute("ALTER TABLE supply_requests ADD COLUMN lines TEXT")               # [{name, qty, link}]
@@ -1212,6 +1217,11 @@ def sweep_contract_reminders():
     if n: print(f"[contract] {n} reminder(s) sent")
     return n
 
+BG_FORM_DEFAULT = "Fill in The Gibby's background check form, sign it, and upload a photo or PDF of it here."
+BG_INSTRUCTIONS_DEFAULT = ("Get a Delaware certified criminal record from the Delaware State Police, State Bureau of Identification "
+    "(fingerprinting by appointment in Dover, Newark or Georgetown; see dsp.delaware.gov). If you teach children, also request "
+    "the Child Protection Registry check. Upload the result letter here, or mark it done if you have already completed one this year.")
+
 PAPERWORK_KINDS = {
     "w9":         {"label": "W-9 tax form",
                    "what": "Fill in the IRS W-9 (https://www.irs.gov/pub/irs-pdf/fw9.pdf), sign it, and upload a photo or PDF of it in the app."},
@@ -1221,12 +1231,18 @@ PAPERWORK_KINDS = {
                    "what": "Add a phone number where The Gibby can reach you on class day."},
 }
 
+def paperwork_kinds():
+    """PAPERWORK_KINDS with the background-check instructions Jess set under People."""
+    k = {kk: dict(v) for kk, v in PAPERWORK_KINDS.items()}
+    k["background"]["what"] = (_meta_get("bg_instructions") or (BG_FORM_DEFAULT if _meta_get("bg_form_name") else BG_INSTRUCTIONS_DEFAULT)).strip()
+    return k
+
 def paperwork_email(user, rows, reminder=False):
     """One email listing everything still needed from this instructor."""
     first = (user.get("name") or "").split(" ")[0] or "there"
     parts = []
     for r in rows:
-        k = PAPERWORK_KINDS.get(r["kind"], {"label": r["kind"], "what": ""})
+        k = paperwork_kinds().get(r["kind"], {"label": r["kind"], "what": ""})
         parts.append(f"  \u2022 {k['label']}: {k['what']}" + (f"\n    Note from The Gibby: {r['note']}" if r.get("note") else ""))
     subj = ("Reminder: " if reminder else "") + f"The Gibby needs {len(rows)} thing{'s' if len(rows) != 1 else ''} from you"
     body = (f"Hi {first},\n\n" + ("Just a reminder that " if reminder else "") +
@@ -3026,10 +3042,12 @@ class H(http.server.BaseHTTPRequestHandler):
                     for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             by_id = {r["id"]: r for r in rows}
-            for p_ in c.execute("SELECT id,user_id,kind,status,requested_at,reminded_at,done_at,value,file_name,drive_link,note FROM paperwork"):
+            for p_ in c.execute("SELECT id,user_id,kind,status,requested_at,reminded_at,done_at,value,file_name,drive_link,note,self_reported FROM paperwork"):
                 if p_["user_id"] in by_id:
                     by_id[p_["user_id"]]["paperwork"][p_["kind"]] = {k: p_[k] for k in p_.keys() if k not in ("user_id","kind")}
-            c.close(); return self.send_json({"users":rows, "paperwork_kinds": {k: v["label"] for k, v in PAPERWORK_KINDS.items()}})
+            c.close(); return self.send_json({"users":rows, "paperwork_kinds": {k: v["label"] for k, v in PAPERWORK_KINDS.items()},
+                                              "bg_instructions": _meta_get("bg_instructions") or (BG_FORM_DEFAULT if _meta_get("bg_form_name") else BG_INSTRUCTIONS_DEFAULT),
+                                              "bg_form_name": _meta_get("bg_form_name")})
         if p == "/api/slots":
             u = self.require()
             if not u: return
@@ -3543,8 +3561,20 @@ class H(http.server.BaseHTTPRequestHandler):
             rows = [dict(r) for r in c.execute("""SELECT id,kind,status,note,requested_at,done_at,value,file_name,drive_link
                                                   FROM paperwork WHERE user_id=? ORDER BY id""", (u["id"],)).fetchall()]
             c.close()
-            for r in rows: r["label"] = PAPERWORK_KINDS.get(r["kind"], {}).get("label", r["kind"]); r["what"] = PAPERWORK_KINDS.get(r["kind"], {}).get("what", "")
-            return self.send_json({"paperwork": rows, "phone": u.get("phone") or ""})
+            kinds = paperwork_kinds()
+            for r in rows: r["label"] = kinds.get(r["kind"], {}).get("label", r["kind"]); r["what"] = kinds.get(r["kind"], {}).get("what", "")
+            return self.send_json({"paperwork": rows, "phone": u.get("phone") or "", "bg_form_name": _meta_get("bg_form_name")})
+        if p == "/api/paperwork/background-form":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            b64 = _meta_get("bg_form_b64")
+            if not b64: return self.send_json({"error":"No form has been uploaded yet."},404)
+            data = base64.b64decode(b64)
+            self.send_response(200)
+            self.send_header("Content-Type", _meta_get("bg_form_mime") or "application/pdf")
+            self.send_header("Content-Disposition", f'inline; filename="{_meta_get("bg_form_name") or "background-check-form.pdf"}"')
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+            return
         mpf = re.match(r"^/api/paperwork/(\d+)/file$", p)
         if mpf:
             # The uploaded W-9 / confirmation itself: the owner or an admin.
@@ -3939,6 +3969,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"Your username is this email address. Choose your password here (link good for 7 days):\n\n"
                     f"{proto}://{host}/?reset={tok}\n\n"
                     f"After that, sign in any time at: {mailer.APP_URL}\n\n"
+                    + (PROFILE_ASK + "\n\n" if role == "instructor" else "") +
                     f"See you at The Gibby!")
             else:
                 mailer.send(email, "Welcome to the Gibby Class Manager",
@@ -3949,6 +3980,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"Your temporary password: {pw}\n\n"
                     + ("The app will ask you to choose your own password as soon as you sign in.\n\n" if mc else "")
                     + f"Sign in here: {mailer.APP_URL}\n\n"
+                    + (PROFILE_ASK + "\n\n" if role == "instructor" else "") +
                     f"See you at The Gibby!")
             c.commit(); c.close()
             return self.send_json({"ok":True,"action":action,"email":email,"role":role,"invited":invited})
@@ -4352,6 +4384,23 @@ class H(http.server.BaseHTTPRequestHandler):
             if recips:
                 mailer.send(recips, f"Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
             return self.send_json({"ok":True, "id":rid})
+        if p == "/api/admin/paperwork-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            if b.get("bg_instructions") is not None:
+                txt = str(b.get("bg_instructions") or "").strip()[:1500]
+                _meta_set("bg_instructions", txt)
+            if b.get("form_b64"):
+                fb64 = b["form_b64"].split(",",1)[1] if "," in b["form_b64"][:40] else b["form_b64"]
+                if len(fb64) > 8_000_000: return self.send_json({"error":"That form is too large (6 MB max)."},400)
+                _meta_set("bg_form_b64", fb64)
+                _meta_set("bg_form_mime", str(b.get("form_mime") or "application/pdf")[:80])
+                _meta_set("bg_form_name", re.sub(r"[^A-Za-z0-9._ -]+", "-", str(b.get("form_name") or "background-check-form.pdf"))[:80])
+            if b.get("remove_form"):
+                for k in ("bg_form_b64","bg_form_mime","bg_form_name"): _meta_set(k, "")
+            return self.send_json({"ok":True, "bg_instructions": _meta_get("bg_instructions") or (BG_FORM_DEFAULT if _meta_get("bg_form_name") else BG_INSTRUCTIONS_DEFAULT),
+                                   "bg_form_name": _meta_get("bg_form_name")})
         if p == "/api/admin/paperwork":
             # Ask one person, several, or everyone missing it, for W-9 / background
             # check / phone number. One email per person listing what is needed.
@@ -4409,6 +4458,20 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.commit(); c.close(); return self.send_json({"ok":True})
             owner = c.execute("SELECT * FROM users WHERE id=?", (r["user_id"],)).fetchone()
             value = (b.get("value") or "").strip()[:200]
+            if action == "complete" and b.get("already"):
+                # "I already did this in 2026": recorded as done, flagged as their word.
+                yr = datetime.date.today().year
+                if r["kind"] == "phone" and not (owner["phone"] or "").strip():
+                    c.close(); return self.send_json({"error":"There is no phone number on file yet. Please enter one."},400)
+                c.execute("""UPDATE paperwork SET status='done', done_at=?, self_reported=1,
+                             value=? WHERE id=?""", (now(), owner["phone"] if r["kind"] == "phone" else f"Already completed in {yr} (their word)", pid))
+                c.commit(); c.close()
+                if u["role"] != "admin":
+                    label = PAPERWORK_KINDS[r["kind"]]["label"]
+                    mailer.send(emails_for(db(), "WHERE role='admin'"), f"{owner['name'] or owner['email']}: {label} already done",
+                        f"{owner['name'] or owner['email']} says they already completed their {label} in {yr}. "
+                        f"Nothing was uploaded; it is marked done on their word. Reopen it under People if you need the document: {mailer.APP_URL}")
+                return self.send_json({"ok":True})
             if r["kind"] == "phone" and action == "complete":
                 value = re.sub(r"[^0-9+() .-]", "", value)[:30].strip()
                 if len(re.sub(r"\D", "", value)) < 7: c.close(); return self.send_json({"error":"That does not look like a phone number."},400)
@@ -4984,6 +5047,24 @@ class H(http.server.BaseHTTPRequestHandler):
             if waives and (_num("instructor_pay") or 0) < 0: miss.append("instructor_pay")
             mc = _num("material_cost")
             if mc is None or mc < 0: miss.append("material_cost")
+            # Supplies: links with price and quantity, unless the instructor buys their own.
+            supply_links = []
+            for x in (b.get("supply_links") or [])[:40]:
+                if not isinstance(x, dict): continue
+                url = str(x.get("url") or "").strip()[:500]
+                if url and not url.lower().startswith(("http://", "https://")): url = "https://" + url
+                try: price = round(max(0.0, float(x.get("price") or 0)), 2)
+                except (TypeError, ValueError): price = 0.0
+                try: qty = max(0, int(float(x.get("qty") or 0)))
+                except (TypeError, ValueError): qty = 0
+                if url or price or qty: supply_links.append({"url": url, "price": price, "qty": qty})
+            good_links = [x for x in supply_links if x["url"] and x["price"] > 0 and x["qty"] > 0]
+            if not b.get("own_materials") and not good_links:
+                miss.append("supply links with price and quantity (or tick that you are buying the supplies yourself)")
+            try: planned = max(0, int(float(b.get("planned") or 0)))
+            except (TypeError, ValueError): planned = 0
+            try: pps = max(0.0, float(b.get("pay_per_student") or 0))
+            except (TypeError, ValueError): pps = 0.0
             # The booked window includes setup and cleanup; the class itself must be
             # marked inside it, because students are told the CLASS time.
             cs, ce = (b.get("class_start") or "").strip(), (b.get("class_end") or "").strip()
@@ -5107,7 +5188,8 @@ class H(http.server.BaseHTTPRequestHandler):
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-            c.execute("UPDATE classes SET class_time=? WHERE id=?", (f"{cs} \u2013 {ce}", new_id))
+            c.execute("UPDATE classes SET class_time=?, supply_links=?, pay_per_student=?, planned=? WHERE id=?",
+                      (f"{cs} \u2013 {ce}", json.dumps(good_links), pps or None, planned or None, new_id))
             if video:
                 c.execute("UPDATE classes SET video=? WHERE id=?", (video, new_id))
             if faq:
@@ -6338,6 +6420,10 @@ def compact_database():
     print(f"[compact] {before//1048576}MB -> {after//1048576}MB, {freed_rows} audit rows cleaned")
     return out
 
+PROFILE_ASK = ("Once you're in, please take two minutes to complete your profile (Profile tab): a photo of you, "
+               "your phone number, your skills, your social links and how you sign off. Students see your name and "
+               "links on emails, and The Gibby uses the rest to match you with classes and reach you on class day.")
+
 def invite_instructor(c, name, email, proto, host):
     """Find or create an instructor account by email, for admin submit-on-behalf.
     A new account gets the standard welcome email with a set-your-password link
@@ -6364,6 +6450,7 @@ def invite_instructor(c, name, email, proto, host):
         f"Your username is this email address. Choose your password here (link good for 7 days):\n\n"
         f"{proto}://{host}/?reset={tok}\n\n"
         f"After that, sign in any time at: {mailer.APP_URL}\n\n"
+        + PROFILE_ASK + "\n\n"
         f"See you at The Gibby!")
     return uid, name
 

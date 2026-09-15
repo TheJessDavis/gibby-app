@@ -1407,7 +1407,7 @@ async function adminPeople(){
       </div>
       ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
           if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
-          if(q.status==='done') return `<span class="pill appr">${esc(lab)} \u2713${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} <a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`;
+          if(q.status==='done') return `<span class="pill ${q.self_reported?'pend':'appr'}">${esc(lab)} \u2713${q.self_reported?' (their word, '+esc((q.done_at||'').slice(0,4))+')':''}${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} <a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`;
           return `<span class="pill pend">${esc(lab)}: waiting since ${esc((q.requested_at||'').slice(0,10))}${q.reminded_at?', reminded':''}</span> <a href="#" onclick="paperAdmin(${q.id},'done');return false" style="font-size:12px">mark done</a>`; }).join(' ')}</div>`:''}
       <div style="text-align:right">${u.role==='admin'?'<span class="pill appr">admin</span>':''}
       ${u.role==='instructor'?`<button class="btn ghost" style="margin-top:6px" onclick="paperRequest(${u.id},'${esc(u.name||u.email)}')">Request paperwork</button>`:''}
@@ -1419,6 +1419,13 @@ async function adminPeople(){
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
     <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">\u{1F4CB} Request paperwork from everyone missing it</button>
+    <details class="card" style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:800">Background check instructions (what instructors are told)</summary>
+      <textarea id="bg_instr" rows="5" style="margin-top:8px">${esc(d.bg_instructions||'')}</textarea>
+      <div class="hint">Shown on their card and in the request email. Put the exact steps or a screening-service link here once you decide how The Gibby runs checks.</div>
+      <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveBgInstr()">Save</button>
+      <label style="margin-top:12px">The form itself (the one summer camp uses)</label>
+      <div class="meta">${d.bg_form_name?`Current form: <a href="/api/paperwork/background-form" target="_blank" rel="noopener noreferrer">${esc(d.bg_form_name)}</a> · <a href="#" onclick="removeBgForm();return false">remove</a>`:'No form uploaded yet. Upload it and instructors get an "Open the background check form" button and upload the completed one back, like the W-9.'}</div>
+      <input type="file" id="bg_form_file" accept="application/pdf,image/*" style="margin-top:6px" onchange="uploadBgForm(event)"></details>
     <div class="card"><h3>Find someone</h3>
       <div style="position:relative">
       <input id="q_people" placeholder="Search by name or skill (pottery, watercolor...)" value="${esc(PEOPLE_Q)}" oninput="peopleSearch(this.value)" autocomplete="off" style="margin-top:8px">
@@ -1530,6 +1537,20 @@ async function paperSend(userId){
   const m=$('#pwmodal'); if(m) m.remove();
   alert((r.emailed||[]).length?('Sent to: '+r.emailed.join(', ')+(r.already_had_it?`. ${r.already_had_it} already had everything.`:'')):'Nothing to send: everyone already has it on file.');
   adminPeople();
+}
+async function uploadBgForm(ev){
+  const f=ev.target.files[0]; if(!f) return;
+  if(f.size>6*1024*1024){ alert('That file is over 6 MB.'); return; }
+  try{ const b64=await fileToB64(f); await api('/api/admin/paperwork-settings','POST',{form_b64:b64, form_name:f.name, form_mime:f.type||'application/pdf'}); alert('Form saved. Instructors now see it on their background check card.'); adminPeople(); }
+  catch(e){ alert(e.message); }
+}
+async function removeBgForm(){
+  if(!confirm('Remove the background check form?')) return;
+  try{ await api('/api/admin/paperwork-settings','POST',{remove_form:true}); adminPeople(); }catch(e){ alert(e.message); }
+}
+async function saveBgInstr(){
+  try{ await api('/api/admin/paperwork-settings','POST',{bg_instructions:$('#bg_instr').value}); alert('Saved.'); }
+  catch(e){ alert(e.message); }
 }
 async function paperAdmin(id, action){
   try{ await api('/api/paperwork/'+id+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
@@ -2239,10 +2260,11 @@ async function sendFeedback(id){
 }
 function linkify(t){ return esc(t).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'); }
 function fileToB64(file){ return new Promise((ok,bad)=>{ const r=new FileReader(); r.onload=()=>ok(r.result); r.onerror=()=>bad(new Error('Could not read that file.')); r.readAsDataURL(file); }); }
-async function paperComplete(id, kind, noFile){
+async function paperComplete(id, kind, noFile, already){
   const st=$('#pws'+id);
   const body={};
-  if(kind==='phone'){ body.value=$('#pwv'+id).value; }
+  if(already){ body.already=true; }
+  else if(kind==='phone'){ body.value=$('#pwv'+id).value; }
   else if(!noFile){
     const f=$('#pwf'+id).files[0]; if(!f) return;
     if(st) st.textContent='Preparing…';
@@ -2326,6 +2348,7 @@ window.addEventListener('message', e => {
   const set = (id, v, touch) => { const el = $(id); if (el && v) { el.value = v; if (touch) el.dataset.t = 1; } };
   set('#c_pay', d.target_pay); set('#c_plan', d.planned); set('#c_mat', d.material_cost);
   set('#f_max', d.planned); set('#f_min', d.min_students);
+  if ($('#c_pps') && d.target_pay && d.planned) $('#c_pps').value = Math.round((+d.target_pay / +d.planned) * 100) / 100;
   if ($('#c_pay') && typeof calc === 'function') calc();
   set('#f_ticket', d.ticket, true); set('#f_pay', d.target_pay, true);
   closePricingGuide();
@@ -2440,6 +2463,11 @@ function cardCls(c){
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
     ${c.video?`<div class="meta" style="margin-top:6px">\u{1F3AC} <a href="${esc(c.video)}" target="_blank" rel="noopener noreferrer">Play the class video</a>${actingRole()==='admin' && c.video.indexOf('/media/')>-1?` \u00b7 <a href="${esc(c.video)}?dl=1">Download</a>`:''}</div>`:''}
     ${actingRole()==='admin' && (c.photo||'').startsWith('data:image')?`<div class="meta" style="margin-top:6px">\u{1F4F7} <a href="${c.photo}" download="${esc((c.title||'class').replace(/[^a-z0-9]+/gi,'-').toLowerCase())}-photo.jpg">Download the class photo</a></div>`:''}
+    ${(()=>{ let sl=c.supply_links; try{ if(typeof sl==='string') sl=JSON.parse(sl||'[]'); }catch(_){ sl=[]; } sl=(sl||[]).filter(x=>x&&x.url);
+        if(!sl.length) return c.own_materials?'':'';
+        const tot=sl.reduce((s,x)=>s+(+x.price||0)*(+x.qty||0),0);
+        return `<div class="meta" style="margin-top:6px"><b>Supplies for The Gibby to buy</b> (${money(tot)}${c.planned?` for ${c.planned} students`:''}):${sl.map(x=>`<div>\u2022 ${x.qty} \u00d7 ${money(x.price)} <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url.replace(/^https?:\/\/(www\.)?/,'').slice(0,48))}</a></div>`).join('')}</div>`; })()}
+    ${c.pay_per_student?`<div class="meta" style="margin-top:6px">Instructor's target: ${money(c.pay_per_student)} per student</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='instructor' ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Volunteer requested</div>`:''}
@@ -3280,7 +3308,7 @@ async function instrMine(){
                               ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
   // asked once the class has finished, and only until they answer
   const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
-  let paper=[], myPhone=''; try{ const pw=await api('/api/paperwork'); paper=pw.paperwork||[]; myPhone=pw.phone||''; }catch(_){}
+  let paper=[], myPhone='', bgForm=''; try{ const pw=await api('/api/paperwork'); paper=pw.paperwork||[]; myPhone=pw.phone||''; bgForm=pw.bg_form_name||''; }catch(_){}
   const paperOpen=paper.filter(x=>x.status==='requested');
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
@@ -3293,11 +3321,14 @@ async function instrMine(){
       ${paperOpen.map(x=>`<div class="card" id="pw${x.id}">
         <div class="row"><div><h3 style="font-size:1rem">${esc(x.label)}</h3><div class="meta">${esc(x.what.replace(/\s*\(https?:[^)]*\)/,''))}</div></div></div>
         ${x.kind==='phone'?`<input id="pwv${x.id}" type="tel" value="${esc(myPhone)}" placeholder="Your phone number" style="margin-top:8px">
-          <button class="btn dark" style="margin-top:8px" onclick="paperComplete(${x.id},'phone')">Save my number</button>`
+          <button class="btn dark" style="margin-top:8px" onclick="paperComplete(${x.id},'phone')">Save my number</button>
+          ${myPhone?`<label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'phone',true,true)"> The number on file (${esc(myPhone)}) is still current</label>`:''}`
         :`${x.kind==='w9'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer">\u{1F4C4} Open the blank W-9 form</a>`:''}
+          ${x.kind==='background'&&bgForm?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="/api/paperwork/background-form" target="_blank" rel="noopener noreferrer">\u{1F4C4} Open the background check form</a>`:''}
           <input type="file" id="pwf${x.id}" accept="image/*,application/pdf" style="display:none" onchange="paperComplete(${x.id},'${x.kind}')">
-          <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('pwf${x.id}').click()">${x.kind==='w9'?'\u{1F4F7} Upload my signed W-9 (photo or PDF)':'\u{1F4CE} Attach confirmation and mark done'}</button>
+          <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('pwf${x.id}').click()">${x.kind==='w9'?'\u{1F4F7} Upload my signed W-9 (photo or PDF)':(bgForm?'\u{1F4F7} Upload my completed form (photo or PDF)':'\u{1F4CE} Attach confirmation and mark done')}</button>
           ${x.kind==='background'?`<button class="btn ghost" style="margin-top:8px" onclick="paperComplete(${x.id},'background',true)">I have completed it (nothing to attach)</button>`:''}
+          <label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'${x.kind}',true,true)"> I've already ${x.kind==='w9'?'submitted a W-9':'completed a background check'} to The Gibby in ${new Date().getFullYear()}</label>
           <div class="meta" id="pws${x.id}" style="margin-top:6px"></div>`}
       </div>`).join('')}`:''}
     ${reqs.length?`<label>The Gibby is looking for (${reqs.length})</label>
@@ -3441,7 +3472,13 @@ function applyDraft(p){
   try{ const fl=$('#faqlist'); if(fl){ fl.innerHTML='';
     let fq=p.faq; if(typeof fq==='string') fq=JSON.parse(fq||'[]');
     (fq||[]).forEach(x=>faqAdd(x.q,x.a)); } }catch(_){} set('#f_max',p.max_p); set('#f_min',p.min_p);
-  set('#c_mat',p.material_cost); set('#f_room',p.room); set('#f_close',p.close_days);
+  set('#f_room',p.room); set('#f_close',p.close_days);
+  set('#c_plan', p.planned || p.max_p);
+  if(p.own_materials) set('#c_mat',p.material_cost);
+  try{ let sl=p.supply_links; if(typeof sl==='string') sl=JSON.parse(sl||'[]');
+    const box=$('#f_supplies'); if(box && sl && sl.length){ box.innerHTML=''; sl.forEach(x=>supAdd(x.url,x.price,x.qty)); } }catch(_){}
+  if(p.pay_per_student) set('#c_pps', p.pay_per_student);
+  else if(p.instructor_pay && (p.planned||p.max_p) && !p.waives_pay) set('#c_pps', Math.round(p.instructor_pay/(p.planned||p.max_p)));
   set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
@@ -3455,7 +3492,7 @@ function applyDraft(p){
   pick('#f_paym', p.pay_model||'flat');
   pick('#f_vol', p.needs_volunteer?'yes':'no');
   if(p.photo){ PHOTO=p.photo; $('#f_photo').innerHTML='<img src="'+p.photo+'">'; }
-  ageChanged(); descCount(); calc(); classTimeChanged();
+  ageChanged(); descCount(); ownToggle(); calc(); classTimeChanged();
   // restore the instructor's own prices last, so calc() does not overwrite them
   if(p.ticket_price){ $('#f_ticket').value=p.ticket_price; $('#f_ticket').dataset.t=1; }
   if(p.instructor_pay){ $('#f_pay').value=p.instructor_pay; $('#f_pay').dataset.t=1; }
@@ -3628,15 +3665,21 @@ function openForm(slot, draftPayload){
     <button type="button" class="btn ghost" style="margin-top:6px" onclick="faqAdd()">+ Add a question</button>
 
     <div class="fsec"><span>4</span><b>Pricing</b></div>
-    <label style="margin-top:0">Materials</label>
-    <label class="chk" style="margin:4px 0"><input type="checkbox" id="f_own" onchange="calc()"> I'm providing my own materials</label>
-    <label>Material cost per student ($)</label><input id="c_mat" type="number" value="8" oninput="calc()">
+    <label style="margin-top:0">Supplies The Gibby needs to buy</label>
+    <div class="hint">Paste a link to each item with its price and how many you need. The total is spread across your planned students and built into the ticket price.</div>
+    <div id="f_supplies"></div>
+    <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="supAdd()">+ Add another link</button>
+    <label class="chk" style="margin:12px 0 0;display:block"><input type="checkbox" id="f_own" onchange="ownToggle()"> I am purchasing all of my class's supplies and I estimate it to be
+      $<input id="c_mat" type="number" min="0" step="0.5" value="" oninput="calc()" style="width:84px;display:inline-block;margin:0 4px;padding:6px 8px"> per student</label>
     <div class="hint" id="matnote"></div>
 
+    <label>What do you hope to make per student? ($)</label>
+    <input id="c_pps" type="number" min="0" step="1" value="15" oninput="calc('pay')">
+    <div class="hint">The ticket price generates from this: your amount, plus materials, with The Gibby's share on top. Or type a ticket price at the bottom and we work it back.</div>
     <label>How is your pay worked out?</label>
     <div class="seg" id="f_paym">
-      <button class="on" data-v="flat" onclick="segPick(this)">Flat fee</button>
-      <button data-v="split" onclick="segPick(this)">60% of ticket sales</button></div>
+      <button class="on" data-v="flat" onclick="segPick(this);calc()">Flat fee</button>
+      <button data-v="split" onclick="segPick(this);calc()">60% of ticket sales</button></div>
     <div class="hint">Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
       ticket sales after materials, so it rises and falls with enrollment.</div>
     <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_donate" onchange="donateToggle()"> This event is donation-based (students pay what they want)</label>
@@ -3644,14 +3687,12 @@ function openForm(slot, draftPayload){
     <div class="hint" id="freenote" style="display:none"></div>
     <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
     <div class="hint">Optional. A deeper tool with material lists, class tiers and what-ifs for low
-      enrollment. It can fill the numbers below in for you.</div>
-    <div class="hint">Start from either end: type the <b>pay you want</b> and we suggest a ticket
-      price, or type a <b>ticket price</b> at the bottom and we work out what it pays. Planned
-      students is how many you expect to enroll.</div>
-    <div class="two"><div><label style="margin-top:0">Target pay ($)</label><input id="c_pay" type="number" value="200" oninput="calc('pay')"></div>
-      <div><label style="margin-top:0">Planned students</label><input id="c_plan" type="number" value="12" oninput="calc()"></div></div>
+      enrollment. It can fill the numbers in for you.</div>
+    <input type="hidden" id="c_pay">
+    <label>Planned students</label><input id="c_plan" type="number" value="12" oninput="calc()">
     <div class="calc">
       <div class="o"><span id="o_tlab">Recommended ticket${slot.series?' <small>(whole course)</small>':''}</span><b class="hero" id="o_t">$0</b></div>
+      <div class="o"><span>Materials per student</span><b id="o_m">$0</b></div>
       <div class="o"><span>Your pay @ planned${slot.series?' <small>(whole course)</small>':''}</span><b id="o_p">$0</b></div>
     </div>
     ${slot.series?`<div class="hint">One ticket covers all ${slot.weeks} sessions. Set the price for the full course, not per week.</div>`:''}
@@ -3665,7 +3706,8 @@ function openForm(slot, draftPayload){
       <button class="btn ghost" onclick="leaveForm()">Cancel</button>
       <button class="btn dark" onclick="submitClass()">Submit class</button></div></div>`;
   RESUB_INSTR = RESUB ? (RESUB.instructor_id||null) : null;
-  calc(); descCount(); loadTplOptions(); loadPrevOptions(); loadInstrOptions();
+  if(!document.querySelector('#f_supplies .suprow')) supAdd();
+  ownToggle(); calc(); descCount(); loadTplOptions(); loadPrevOptions(); loadInstrOptions();
   classTimeChanged();
   if(!draftPayload && window.RERUN){
     applyDraft(window.RERUN.payload);
@@ -3716,12 +3758,51 @@ function onPhoto(e){ const f=e.target.files[0]; if(!f)return;
   shrinkImage(f, 1400, 0.82).then(d=>{ PHOTO=d; $('#f_photo').innerHTML='<img src="'+PHOTO+'">'; })
     .catch(()=>alert('Could not read that image.')); }
 let CALC_DIR='pay';   // which end the instructor is working from: 'pay' or 'ticket'
+/* Supplies: one row per link (what, price, how many). The total, spread over the
+   planned students, is the materials cost that goes into the ticket. */
+function supAdd(url, price, qty){
+  const box=$('#f_supplies'); if(!box) return;
+  const d=document.createElement('div'); d.className='suprow';
+  d.style.cssText='display:grid;grid-template-columns:1fr 84px 64px 28px;gap:6px;align-items:center;margin-top:6px';
+  d.innerHTML=`<input class="sup_url" placeholder="Link to the item (Amazon, Blick, Michaels...)" value="${esc(url||'')}" oninput="calc()">
+    <input class="sup_price" type="number" min="0" step="0.01" placeholder="$ each" value="${price!=null?esc(price):''}" oninput="calc()" style="padding-left:8px;padding-right:4px">
+    <input class="sup_qty" type="number" min="1" step="1" placeholder="qty" value="${qty!=null?esc(qty):''}" oninput="calc()" style="padding-left:8px;padding-right:4px;text-align:center">
+    <button type="button" class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove();calc()" aria-label="Remove">\u00d7</button>`;
+  box.appendChild(d);
+}
+function collectSupplies(){
+  return [...document.querySelectorAll('#f_supplies .suprow')].map(r=>({
+    url:r.querySelector('.sup_url').value.trim(), price:+r.querySelector('.sup_price').value||0, qty:+r.querySelector('.sup_qty').value||0
+  })).filter(x=>x.url||x.price||x.qty);
+}
+function suppliesTotal(){ return collectSupplies().reduce((s,x)=>s+x.price*x.qty,0); }
+function validSupplies(){ return collectSupplies().filter(x=>x.url && x.price>0 && x.qty>0); }
+function ownToggle(){
+  const own=$('#f_own')&&$('#f_own').checked;
+  const box=$('#f_supplies'); if(box){ box.style.opacity=own?'.45':''; box.style.pointerEvents=own?'none':''; }
+  const btn=box&&box.nextElementSibling; if(btn) btn.style.display=own?'none':'';
+  if(own && $('#c_mat') && !$('#c_mat').value) $('#c_mat').value=8;
+  calc();
+}
+function materialsPerStudent(plan){
+  const own=$('#f_own')&&$('#f_own').checked;
+  if(own) return +$('#c_mat').value||0;
+  return Math.ceil(suppliesTotal()/Math.max(1,plan)*100)/100;
+}
 function calc(dir){
   if(dir) CALC_DIR=dir;
-  const plan=Math.max(1,+$('#c_plan').value||1), mat=+$('#c_mat').value||0;
+  if(!$('#c_plan')) return;
+  const plan=Math.max(1,+$('#c_plan').value||1);
   const own=$('#f_own') && $('#f_own').checked;
+  const mat=materialsPerStudent(plan);
   const reimb = own ? mat*plan : 0;             // instructor providing materials -> reimbursed
   const free=$('#f_free') && $('#f_free').checked;
+  const om=$('#o_m'); if(om) om.textContent=money(mat);
+  const note=$('#matnote');
+  if(note) note.textContent = own
+    ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is added to your pay.`
+    : (suppliesTotal()>0 ? `${money(suppliesTotal())} of supplies across ${plan} students is ${money(mat)} per student, built into the ticket.`
+                         : 'Add at least one link with a price and quantity, or tick the box if you are buying the supplies yourself.');
   const fn=$('#freenote');
   if(fn){
     fn.style.display = free ? '' : 'none';
@@ -3731,43 +3812,35 @@ function calc(dir){
       : '';
   }
   if($('#f_pay')) $('#f_pay').disabled = !!free;
-  if($('#c_pay')) $('#c_pay').disabled = !!free;
+  if($('#c_pps')) $('#c_pps').disabled = !!free;
   if(free){
-    if($('#c_pay')) $('#c_pay').value = 0;
+    if($('#c_pps')) $('#c_pps').value = 0;
     const ticket=+$('#f_ticket').value||0;
     if($('#f_pay')){ $('#f_pay').value = Math.round(reimb); delete $('#f_pay').dataset.t; }
     $('#o_t').textContent=money(ticket); $('#o_p').textContent=money(reimb);
     const lab=$('#o_tlab');
     if(lab && lab.firstChild && lab.firstChild.nodeType===3) lab.firstChild.textContent='Your ticket';
-    const note=$('#matnote');
-    if(note) note.textContent = own
-      ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is reimbursed to you.`
-      : 'The Gibby provides materials; the ticket price covers them.';
     return;
   }
-  let ticket;
+  let ticket, pps;
   if(CALC_DIR==='ticket'){
-    // They typed a ticket price: work the pay out from it.
+    // They typed a ticket price: work back what it pays per student.
     ticket = +$('#f_ticket').value||0;
-    const pool=Math.max(0,(ticket-mat)*plan);
-    if($('#c_pay')) $('#c_pay').value=Math.round(pool*0.6);
+    pps = Math.max(0, (ticket-mat)*0.6);
+    if($('#c_pps')) $('#c_pps').value=Math.round(pps*100)/100;
   } else {
-    // They typed the pay they want: recommend a ticket for it.
-    const pay=+$('#c_pay').value||0;
-    ticket=Math.ceil(mat + (pay/0.6)/plan);
+    // They said what they hope to make per student: the ticket generates from it.
+    pps = +$('#c_pps').value||0;
+    ticket = Math.ceil(mat + pps/0.6);
     if($('#f_ticket')) $('#f_ticket').value=ticket;
   }
-  const pool=Math.max(0,(ticket-mat)*plan);
-  const yourPay = pool*0.6 + reimb;
+  const yourPay = pps*plan + reimb;
+  if($('#c_pay')) $('#c_pay').value = Math.round(pps*plan);
   $('#o_t').textContent=money(ticket); $('#o_p').textContent=money(yourPay);
   const lab=$('#o_tlab');
   if(lab) lab.firstChild && lab.firstChild.nodeType===3
     ? lab.firstChild.textContent=(CALC_DIR==='ticket'?'Your ticket':'Recommended ticket')
     : null;
-  const note=$('#matnote');
-  if(note) note.textContent = own
-    ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is added to your pay.`
-    : 'The Gibby provides materials; the ticket price covers them.';
   if($('#f_pay') && !$('#f_pay').dataset.t)$('#f_pay').value=Math.round(yourPay);
 }
 function wordCount(s){ return (s||'').trim().split(/\s+/).filter(Boolean).length; }
@@ -3806,8 +3879,12 @@ function validateForm(){
   if(!(max>0)) add('#f_max','Max students','max');
   if(!(min>0)) add('#f_min','Min students','min');
   if(max>0 && min>0 && min>max) add('#f_min','Min students can’t be more than Max','min vs max');
-  const mat=num('c_mat');
-  if(mat===null || mat<0) add('#c_mat','Material cost per student','materials');
+  if($('#f_own')&&$('#f_own').checked){
+    const mat=num('c_mat');
+    if(mat===null || mat<0) add('#c_mat','Your estimated supply cost per student','materials');
+  } else if(!validSupplies().length){
+    add('#f_supplies','Supply links with a price and quantity (or tick that you are buying the supplies yourself)','supplies');
+  }
   const ticket=num('f_ticket'), pay=num('f_pay');
   const donation=$('#f_donate')&&$('#f_donate').checked;
   if(!donation && !(ticket>0)) add('#f_ticket','Ticket price','ticket');
@@ -3878,7 +3955,8 @@ function collectForm(){
     age_range: ages.join(', '), length:$('#f_len').value, pre_class:$('#f_pre').value,
     summary:$('#f_summary')?$('#f_summary').value.trim():'',
     needs_volunteer: kid && seg('#f_vol')==='yes',
-    own_materials: $('#f_own').checked, material_cost:+$('#c_mat').value,
+    own_materials: $('#f_own').checked, material_cost: materialsPerStudent(Math.max(1,+$('#c_plan').value||1)),
+    supply_links: collectSupplies(), planned:+$('#c_plan').value||0, pay_per_student:+($('#c_pps')?$('#c_pps').value:0)||0,
     alcohol: seg('#f_alc')==='yes', audit_ok: seg('#f_audit')==='yes',
     max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
@@ -3973,7 +4051,8 @@ function showReview(){
     <div class="rvrow"><b>Room</b><span>${esc(f.room)} &middot; booked ${esc(SUBMIT_SLOT.start)} &ndash; ${esc(SUBMIT_SLOT.end)}</span></div>
     <div class="rvrow"><b>Ages</b><span>${esc(ageLabel(selectedAges()))}</span></div>
     <div class="rvrow"><b>Students</b><span>${f.min_p} to ${f.max_p}${f.close_days?` &middot; registration closes ${f.close_days} day${f.close_days===1?'':'s'} before`:''}</span></div>
-    <div class="rvrow"><b>Ticket</b><span>${money(f.ticket_price)}${f.own_materials?` &middot; you supply materials (${money(f.material_cost)}/student, reimbursed)`:''}</span></div>
+    <div class="rvrow"><b>Ticket</b><span>${money(f.ticket_price)}${f.own_materials?` &middot; you supply materials (${money(f.material_cost)}/student, reimbursed)`:` &middot; materials ${money(f.material_cost)}/student`}</span></div>
+    <div class="rvrow"><b>Supplies</b><span>${f.own_materials?'You are buying them':`${(f.supply_links||[]).filter(x=>x.url).length} link${(f.supply_links||[]).filter(x=>x.url).length===1?'':'s'}, ${money((f.supply_links||[]).reduce((s,x)=>s+x.price*x.qty,0))} for The Gibby to buy`}</span></div>
     <div class="rvrow"><b>You earn</b><span>${earn}</span></div>
     <div class="two" style="margin-top:16px">
       <button class="btn ghost" onclick="closeReview()">Keep editing</button>
@@ -4005,7 +4084,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
