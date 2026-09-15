@@ -1583,34 +1583,62 @@ async function supplyAct(id, status){
 async function sendDigestNow(){
   const r=await api('/api/admin/send-digest','POST',{}); alert(r.ok?'Sent to every admin.':'Could not send: '+(r.error||''));
 }
+let RQ_SKILLS=[], RQ_EDIT=null;
+function rqToggleSkill(k){ const i=RQ_SKILLS.indexOf(k); if(i<0) RQ_SKILLS.push(k); else RQ_SKILLS.splice(i,1); rqDrawSkills(); }
+function rqCustomSkill(){ const v=($('#rq_custom').value||'').trim().slice(0,40); if(v && !RQ_SKILLS.includes(v)) RQ_SKILLS.push(v); $('#rq_custom').value=''; rqDrawSkills(); }
+function rqDrawSkills(){
+  const box=$('#rq_skills'); if(!box) return;
+  const all=[...new Set([...RQ_SKILLS, ...SKILL_IDEAS])];
+  box.innerHTML=all.map(k=>`<button type="button" class="skill ${RQ_SKILLS.includes(k)?'mine':''}" onclick="rqToggleSkill('${esc(k)}')">${RQ_SKILLS.includes(k)?esc(k)+' <b>\u00d7</b>':'<b>+</b> '+esc(k)}</button>`).join('');
+}
+function rqEdit(id){
+  const r=(window.__reqs||[]).find(x=>x.id===id); if(!r) return;
+  RQ_EDIT=id; RQ_SKILLS=(r.skills||[]).slice();
+  $('#rq_title').value=r.title||''; $('#rq_when').value=r.when_text||''; $('#rq_room').value=r.room||''; $('#rq_ages').value=r.ages||'';
+  $('#rq_desc').value=r.description||''; $('#rq_notes').value=r.notes||'';
+  rqDrawSkills(); $('#rq_formtitle').textContent='Editing: '+(r.title||''); $('#rq_btns').innerHTML=`<button class="btn ghost" onclick="rqCancelEdit()">Cancel</button><button class="btn dark" onclick="postRequest(false)">Save changes</button>`;
+  $('#rq_title').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function rqCancelEdit(){ RQ_EDIT=null; RQ_SKILLS=[]; adminRequests(); }
 async function adminRequests(){
-  const d=await api('/api/requests'); const rs=d.requests||[];
+  const d=await api('/api/requests'); const rs=d.requests||[]; window.__reqs=rs;
   const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
   const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
+      ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini">${esc(k)}</span>`).join('')}</div>`:''}
       ${r.description?`<div class="meta" style="margin-top:4px">${esc(r.description)}</div>`:''}
       ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}
       ${r.status==='claimed'?`<div class="meta" style="margin-top:4px;color:#3F7A32;font-weight:800">Claimed by ${esc(r.claimed_by_name||'?')} ${esc((r.claimed_at||'').slice(0,10))}${r.class_title?' · submitted as '+esc(r.class_title)+' ('+esc(r.class_status)+')':' · proposal in progress'}</div>`:''}</div>
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
+    <button class="btn ghost" style="margin-top:8px" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
   $('#tab').innerHTML=`<h2>Class <em>requests</em></h2>
     <p class="sub">Tell the teaching artists what the calendar needs. Every instructor is emailed, and the first to claim gets a proposal pre-filled with these details.</p>
-    <div class="card"><label>What would you like taught?</label><input id="rq_title" placeholder="e.g. Kids pottery">
+    <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">New request</h3><label>What would you like taught?</label><input id="rq_title" placeholder="e.g. Kids pottery">
       <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
       <div class="two"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
       <label>Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
       <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
-      <div class="two" style="margin-top:10px"><button class="btn ghost" onclick="postRequest(false)">Post it</button><button class="btn dark" onclick="postRequest(true)">Post it and email everyone</button></div>
+      <label>Skills (instructors can filter Wanted by these)</label>
+      <div class="skillcloud" id="rq_skills"></div>
+      <div class="two" style="margin-top:6px"><input id="rq_custom" placeholder="Another skill? Type it"><button class="btn ghost" onclick="rqCustomSkill()">Add</button></div>
+      <div class="two" id="rq_btns" style="margin-top:10px"><button class="btn ghost" onclick="postRequest(false)">Post it</button><button class="btn dark" onclick="postRequest(true)">Post it and email everyone</button></div>
       <div class="hint">Post it: the request appears on the instructors' Wanted tab only. Post and email: every instructor also gets a message about it.</div></div>
     <label style="margin-top:16px">Open (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing open.</div>'}
     <label style="margin-top:16px">Claimed (${claimed.length})</label>${claimed.map(card).join('')||'<div class="muted">None claimed yet.</div>'}
     ${closed.length?`<label style="margin-top:16px">Closed recently (${closed.length})</label>${closed.map(card).join('')}`:''}`;
+  rqDrawSkills();
 }
 async function postRequest(notify){
-  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, notify:!!notify};
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), notify:!!notify};
+  if(RQ_EDIT){
+    try{ await api('/api/requests/'+RQ_EDIT+'/edit','POST',b); }catch(e){ alert(e.message); return; }
+    RQ_EDIT=null; RQ_SKILLS=[]; alert('Saved.'); adminRequests(); return;
+  }
   const r=await api('/api/requests','POST',b);
   if(r.error){ alert(r.error); return; }
+  RQ_SKILLS=[];
   alert(notify ? 'Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.' : 'Posted. It is on the Wanted tab; nobody was emailed.'); adminRequests();
 }
 async function reqAction(id, action){
@@ -3446,17 +3474,24 @@ async function instrMine(){
 }
 /* Wanted: classes The Gibby would like taught. Claim one and the class title,
    description, ages and room are filled in; the instructor only picks the time. */
+let WANT_SKILL=null;
+function wantFilter(k){ WANT_SKILL = (k===WANT_SKILL) ? null : k; instrWanted(); }
 async function instrWanted(){
   let reqs=[]; try{ reqs=(await api('/api/requests')).requests||[]; }catch(_){}
-  const open=reqs.filter(r=>r.status==='open'), mine=reqs.filter(r=>r.status==='claimed' && ME && r.claimed_by===ME.id);
+  const openAll=reqs.filter(r=>r.status==='open'), mine=reqs.filter(r=>r.status==='claimed' && ME && r.claimed_by===ME.id);
+  const tags=[...new Set(openAll.flatMap(r=>r.skills||[]))].sort();
+  const my=new Set((ME&&ME.skills)||[]);
+  const open = WANT_SKILL==='__mine' ? openAll.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? openAll.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : openAll;
   $('#tab').innerHTML = `<h2>Classes <em>wanted</em></h2>
     <p class="sub">The Gibby would love someone to teach these. Claim one and you go straight to booking: the title, description and details are already filled in.</p>
+    ${tags.length?`<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">\u2728 My skills</button>`:''}${tags.map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
     ${open.length?open.map(r=>`<div class="card"><h3 style="font-size:1.05rem">${esc(r.title)}</h3>
         <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
+        ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini ${my.has(k)?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
         ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
         ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
         <button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">Claim this one</button></div>`).join('')
-      :'<div class="muted">Nothing is wanted right now. Check back after the next planning meeting.</div>'}
+      :(WANT_SKILL?'<div class="muted">Nothing wanted with that skill right now. Tap Show all.</div>':'<div class="muted">Nothing is wanted right now. Check back after the next planning meeting.</div>')}
     ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><h3 style="font-size:1rem">${esc(r.title)}</h3>
         <div class="meta">${r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'}</div></div>`).join('')}`:''}`;
 }
@@ -4173,7 +4208,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

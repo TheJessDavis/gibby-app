@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.75.0-send-to-ordering"
+VERSION = "10.76.0-wanted-skills"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -206,6 +206,8 @@ def init_db():
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
     try: c.execute("ALTER TABLE class_requests ADD COLUMN description TEXT")   # what students will read
+    except Exception: pass
+    try: c.execute("ALTER TABLE class_requests ADD COLUMN skills TEXT")        # JSON list of skill tags
     except Exception: pass
     try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
     except Exception: pass
@@ -3521,6 +3523,9 @@ class H(http.server.BaseHTTPRequestHandler):
             c.close()
             if u["role"] != "admin":
                 rows = [r for r in rows if r["status"] == "open" or r["claimed_by"] == u["id"]]
+            for r in rows:
+                try: r["skills"] = json.loads(r.get("skills") or "[]")
+                except Exception: r["skills"] = []
             return self.send_json({"requests": rows})
         if p == "/api/calendar/review":
             u = self.require("admin")
@@ -4798,10 +4803,11 @@ class H(http.server.BaseHTTPRequestHandler):
             if len(title) < 3: return self.send_json({"error":"Give the request a short title, like 'Kids pottery'."},400)
             c = db()
             desc = (b.get("description") or "").strip()[:1500]
-            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description)
-                         VALUES(?,?,?,?,?,'open',?,?,?)""",
+            skills = [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12]
+            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills)
+                         VALUES(?,?,?,?,?,'open',?,?,?,?)""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
-                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc))
+                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc, json.dumps(skills)))
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             instructors = emails_for(c, "WHERE role='instructor'")
             c.commit(); c.close()
@@ -4816,6 +4822,22 @@ class H(http.server.BaseHTTPRequestHandler):
                     + f"\nIf that is you, open the app and press Claim on the request. It pre-fills a class "
                     f"proposal so you only pick the time and add your details: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
             return self.send_json({"ok":True, "id":rid, "emailed":(len(instructors) if b.get("notify") else 0)})
+        mre = re.match(r"^/api/requests/(\d+)/edit$", p)
+        if mre:
+            u = self.require("admin")
+            if not u: return
+            rid = int(mre.group(1)); b = self.read_json(); c = db()
+            if not c.execute("SELECT 1 FROM class_requests WHERE id=?", (rid,)).fetchone():
+                c.close(); return self.send_json({"error":"not found"},404)
+            title = (b.get("title") or "").strip()[:120]
+            if len(title) < 3: c.close(); return self.send_json({"error":"Give the request a short title."},400)
+            skills = [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12]
+            c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=? WHERE id=?""",
+                      (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
+                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120],
+                       (b.get("description") or "").strip()[:1500], json.dumps(skills), rid))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         mrq = re.match(r"^/api/requests/(\d+)/(claim|close|reopen)$", p)
         if mrq:
             u = self.current_user()
