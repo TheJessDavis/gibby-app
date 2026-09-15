@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.74.1-post-quietly"
+VERSION = "10.75.0-send-to-ordering"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -209,7 +209,7 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
     except Exception: pass
-    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER")):
+    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER"), ("supplies_ordered_at","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except Exception: pass
     try: c.execute("ALTER TABLE email_log ADD COLUMN copies INTEGER DEFAULT 0")     # copies sent to the watch address
@@ -2120,6 +2120,32 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
     return cid
 
 SUPPLY_TO_DEFAULT = "mtruban@theeverett.com"    # who orders: every new request is emailed here (plus admins)
+
+def create_order_request(c, u, cid, row, lines, needed, notes):
+    """Record an order request and email the ordering address plus the admins.
+    Commits. Returns the new request id."""
+    items = "\n".join(f"{ln['qty']} x {ln['name']}" + (f" ({ln['link']})" if ln.get("link") else "") for ln in lines)[:4000]
+    c.execute("""INSERT INTO supply_requests(class_id,user_id,items,needed_by,notes,status,created,updated,lines)
+                 VALUES(?,?,?,?,?,'requested',?,?,?)""",
+              (cid or None, u["id"], items, needed, notes, now(), now(), json.dumps(lines)))
+    rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    to = [a for a in emails_for(c, "WHERE role='admin'")]
+    for extra in (_meta_get("supply_to") or SUPPLY_TO_DEFAULT).replace(";", ",").split(","):
+        if extra.strip() and "@" in extra: to.append(extra.strip())
+    seen = set(); recips = []
+    for a in to:
+        k = a.lower()
+        if k != (u.get("email") or "").lower() and k not in seen: seen.add(k); recips.append(a)
+    c.commit()
+    what = f"for \"{row['title']}\"" if row else "for studio stock"
+    body = (f"{u['name']} would like these ordered {what}" + (f" by {needed}" if needed else "") + ":\n\n"
+            + "\n".join(f"  • {ln['qty']} x {ln['name']}" + (f"\n    Link: {ln['link']}" if ln.get("link") else "") for ln in lines)
+            + (f"\n\nNotes: {notes}" if notes else "")
+            + (f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else ""))
+            + f"\n\nMark it ordered or ready under More > Supplies: {mailer.APP_URL}")
+    if recips:
+        mailer.send(recips, f"Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
+    return rid
 
 # Submission-deadline reminder campaign (Connections > Email). Every N days from
 # the start date until the deadline, plus the deadline morning itself.
@@ -4478,29 +4504,33 @@ class H(http.server.BaseHTTPRequestHandler):
             if not lines:      # the old free-text form still works
                 lines = [{"name": x.strip()[:160], "qty": 1, "link": ""} for x in (b.get("items") or "").splitlines() if x.strip()][:30]
             if not lines: c.close(); return self.send_json({"error":"Add at least one item."},400)
-            items = "\n".join(f"{ln['qty']} x {ln['name']}" + (f" ({ln['link']})" if ln["link"] else "") for ln in lines)[:4000]
             needed = (b.get("needed_by") or "").strip()[:40] or ((row["slot_date"] or "") if row else "")
             notes = (b.get("notes") or "").strip()[:500]
-            c.execute("""INSERT INTO supply_requests(class_id,user_id,items,needed_by,notes,status,created,updated,lines)
-                         VALUES(?,?,?,?,?,'requested',?,?,?)""",
-                      (cid or None, u["id"], items, needed, notes, now(), now(), json.dumps(lines)))
-            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-            to = [a for a in emails_for(c, "WHERE role='admin'")]
-            for extra in (_meta_get("supply_to") or SUPPLY_TO_DEFAULT).replace(";", ",").split(","):
-                if extra.strip() and "@" in extra: to.append(extra.strip())
-            seen = set(); recips = []
-            for a in to:
-                k = a.lower()
-                if k != (u.get("email") or "").lower() and k not in seen: seen.add(k); recips.append(a)
-            c.commit(); c.close()
-            what = f"for \"{row['title']}\"" if row else "for studio stock"
-            body = (f"{u['name']} would like these ordered {what}" + (f" by {needed}" if needed else "") + ":\n\n"
-                    + "\n".join(f"  • {ln['qty']} x {ln['name']}" + (f"\n    Link: {ln['link']}" if ln["link"] else "") for ln in lines)
-                    + (f"\n\nNotes: {notes}" if notes else "")
-                    + (f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else ""))
-                    + f"\n\nMark it ordered or ready under More > Supplies: {mailer.APP_URL}")
-            if recips:
-                mailer.send(recips, f"Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
+            rid = create_order_request(c, u, cid, (dict(row) if row else None), lines, needed, notes)
+            c.close()
+            return self.send_json({"ok":True, "id":rid})
+        mos = re.match(r"^/api/classes/(\d+)/order-supplies$", p)
+        if mos:
+            # One tap: the class form's supply links become an order request.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(mos.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"That is not your class."},403)
+            if row["supplies_ordered_at"] and not b.get("again"):
+                c.close(); return self.send_json({"error":f"Already sent to ordering on {row['supplies_ordered_at'][:10]}."},409)
+            try: links = json.loads(row["supply_links"] or "[]")
+            except Exception: links = []
+            lines = []
+            for x in links:
+                if not (x.get("url") or x.get("name")): continue
+                host = re.sub(r"^https?://(www\.)?", "", x.get("url") or "").split("/")[0]
+                lines.append({"name": (x.get("name") or f"Item from {host}" or "Item")[:160], "qty": max(1, int(x.get("qty") or 1)), "link": x.get("url") or ""})
+            if not lines: c.close(); return self.send_json({"error":"This class has no supply links to send."},400)
+            rid = create_order_request(c, u, cid, dict(row), lines, row["slot_date"] or "",
+                                       f"Shopping list from the class form ({row['planned'] or row['max_p'] or '?'} students planned).")
+            c.execute("UPDATE classes SET supplies_ordered_at=? WHERE id=?", (now(), cid)); c.commit(); c.close()
             return self.send_json({"ok":True, "id":rid})
         if p == "/api/admin/paperwork-settings":
             u = self.require("admin")
@@ -5231,7 +5261,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 except (TypeError, ValueError): price = 0.0
                 try: qty = max(0, int(float(x.get("qty") or 0)))
                 except (TypeError, ValueError): qty = 0
-                if url or price or qty: supply_links.append({"url": url, "price": price, "qty": qty})
+                nm = str(x.get("name") or "").strip()[:120]
+                if url or price or qty or nm: supply_links.append({"url": url, "price": price, "qty": qty, "name": nm})
             good_links = [x for x in supply_links if x["url"] and x["price"] > 0 and x["qty"] > 0]
             if not b.get("own_materials") and not good_links:
                 miss.append("supply links with price and quantity (or tick that you are buying the supplies yourself)")

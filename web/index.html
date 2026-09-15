@@ -1564,6 +1564,12 @@ async function showThanksCodes(classId, boxId){
   let codes=[]; try{ codes=(await api(classId?`/api/classes/${classId}/thanks-codes`:'/api/thanks-codes')).codes||[]; }catch(e){ box.innerHTML=esc(e.message); return; }
   box.innerHTML=codes.length?`<div class="card" style="margin-top:6px">${codes.map(k=>`<div class="meta" style="margin-bottom:4px"><b>${esc(k.code)}</b> · ${esc(k.name||k.email)}${classId?'':' · '+esc(k.class_title)} · ${k.redeemed?'<span class="pill appr">used</span>':k.expired?'<span class="pill inc">expired</span>':'<span class="pill pend">unused, expires '+esc(k.expires_at)+'</span>'}</div>`).join('')}</div>`:'<div class="muted">No personal codes issued yet.</div>';
 }
+async function sendToOrdering(id, again){
+  if(!confirm(again ? 'Send this shopping list to ordering again?' : 'Send this shopping list to ordering? The ordering address and the admins are emailed.')) return;
+  try{ await api('/api/classes/'+id+'/order-supplies','POST',{again:!!again}); alert('Sent to ordering.'); }
+  catch(e){ alert(e.message); return; }
+  location.reload();
+}
 async function saveSupplyTo(){
   try{ const r=await api('/api/admin/supply-settings','POST',{to:$('#sup_to').value}); alert('Saved. New requests go to: '+(r.to||'the admins only')); }
   catch(e){ alert(e.message); }
@@ -2488,7 +2494,9 @@ function cardCls(c){
     ${(()=>{ let sl=c.supply_links; try{ if(typeof sl==='string') sl=JSON.parse(sl||'[]'); }catch(_){ sl=[]; } sl=(sl||[]).filter(x=>x&&x.url);
         if(!sl.length) return c.own_materials?'':'';
         const tot=sl.reduce((s,x)=>s+(+x.price||0)*(+x.qty||0),0);
-        return `<div class="meta" style="margin-top:6px"><b>Supplies for The Gibby to buy</b> (${money(tot)}${c.planned?` for ${c.planned} students`:''}):${sl.map(x=>`<div>\u2022 ${x.qty} \u00d7 ${money(x.price)} <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url.replace(/^https?:\/\/(www\.)?/,'').slice(0,48))}</a></div>`).join('')}</div>`; })()}
+        return `<div class="meta" style="margin-top:6px"><b>Supplies for The Gibby to buy</b> (${money(tot)}${c.planned?` for ${c.planned} students`:''}):${sl.map(x=>`<div>\u2022 ${x.qty} \u00d7 ${money(x.price)}${x.name?' '+esc(x.name)+' \u00b7':''} <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url.replace(/^https?:\/\/(www\.)?/,'').slice(0,48))}</a></div>`).join('')}
+          ${actingRole()==='admin' ? (c.supplies_ordered_at ? `<div style="margin-top:6px;color:#3F7A32;font-weight:800">\u{1F9FA} Sent to ordering ${esc(c.supplies_ordered_at.slice(0,10))} <a href="#" onclick="sendToOrdering(${c.id},true);return false" style="font-weight:600">send again</a></div>`
+            : `<button class="btn ghost" style="margin-top:8px" onclick="sendToOrdering(${c.id},false)">\u{1F9FA} Send these to ordering</button>`) : ''}</div>`; })()}
     ${c.pay_per_student?`<div class="meta" style="margin-top:6px">Instructor's target: ${money(c.pay_per_student)} per student</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
@@ -3381,9 +3389,9 @@ async function instrMine(){
           <label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'${x.kind}',true,true)"> I've already ${x.kind==='w9'?'submitted a W-9':'completed a background check'} to The Gibby in ${new Date().getFullYear()}</label>
           <div class="meta" id="pws${x.id}" style="margin-top:6px"></div>`}
       </div>`).join('')}`:''}
-    ${reqs.length?`<div class="card" style="background:#DCE8F5;margin-bottom:10px"><div class="row"><div><h3 style="font-size:1rem">\u{1F4CC} ${reqs.length} class${reqs.length===1?'':'es'} The Gibby wants taught</h3>
-        <div class="meta">Claim one and the proposal is pre-filled; you just pick the time.</div></div>
-        <button class="btn dark" style="flex:none" onclick="renderInstr('wanted')">See them</button></div></div>`:''}
+    ${reqs.length?`<div class="card" style="background:#DCE8F5;margin-bottom:10px"><h3 style="font-size:1rem">\u{1F4CC} ${reqs.length} class${reqs.length===1?'':'es'} The Gibby wants taught</h3>
+        <div class="meta">Claim one and the proposal is pre-filled; you just pick the time.</div>
+        <button class="btn dark" style="margin-top:10px" onclick="renderInstr('wanted')">See them</button></div>`:''}
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
       <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. It goes out in your name, and replies come straight to you.</p>
       ${todo.map((c,i)=>`<details class="clsrow ${c.followup_status==='ready'?'cls-approved':'cls-back'}"${i===0&&todo.length===1?' open':''}>
@@ -3555,7 +3563,7 @@ function applyDraft(p){
   set('#c_plan', p.planned || p.max_p);
   if(p.own_materials) set('#c_mat',p.material_cost);
   try{ let sl=p.supply_links; if(typeof sl==='string') sl=JSON.parse(sl||'[]');
-    const box=$('#f_supplies'); if(box && sl && sl.length){ box.innerHTML=''; sl.forEach(x=>supAdd(x.url,x.price,x.qty)); } }catch(_){}
+    const box=$('#f_supplies'); if(box && sl && sl.length){ box.innerHTML=''; sl.forEach(x=>supAdd(x.url,x.price,x.qty,x.name)); } }catch(_){}
   if(p.pay_per_student) set('#c_pps', p.pay_per_student);
   else if(p.instructor_pay && (p.planned||p.max_p) && !p.waives_pay) set('#c_pps', Math.round(p.instructor_pay/(p.planned||p.max_p)));
   set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
@@ -3839,20 +3847,22 @@ function onPhoto(e){ const f=e.target.files[0]; if(!f)return;
 let CALC_DIR='pay';   // which end the instructor is working from: 'pay' or 'ticket'
 /* Supplies: one row per link (what, price, how many). The total, spread over the
    planned students, is the materials cost that goes into the ticket. */
-function supAdd(url, price, qty){
+function supAdd(url, price, qty, name){
   const box=$('#f_supplies'); if(!box) return;
   const d=document.createElement('div'); d.className='suprow';
   d.style.cssText='display:grid;grid-template-columns:1fr 84px 64px 28px;gap:6px;align-items:center;margin-top:6px';
   d.innerHTML=`<input class="sup_url" placeholder="Link to the item (Amazon, Blick, Michaels...)" value="${esc(url||'')}" oninput="calc()">
     <input class="sup_price" type="number" min="0" step="0.01" placeholder="$ each" value="${price!=null?esc(price):''}" oninput="calc()" style="padding-left:8px;padding-right:4px">
     <input class="sup_qty" type="number" min="1" step="1" placeholder="qty" value="${qty!=null?esc(qty):''}" oninput="calc()" style="padding-left:8px;padding-right:4px;text-align:center">
-    <button type="button" class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove();calc()" aria-label="Remove">\u00d7</button>`;
+    <button type="button" class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove();calc()" aria-label="Remove">\u00d7</button>
+    <input class="sup_name" placeholder="What is it? (optional, e.g. 11x14 canvases)" value="${esc(name||'')}" style="grid-column:1 / span 4;margin-top:0">`;
   box.appendChild(d);
 }
 function collectSupplies(){
   return [...document.querySelectorAll('#f_supplies .suprow')].map(r=>({
-    url:r.querySelector('.sup_url').value.trim(), price:+r.querySelector('.sup_price').value||0, qty:+r.querySelector('.sup_qty').value||0
-  })).filter(x=>x.url||x.price||x.qty);
+    url:r.querySelector('.sup_url').value.trim(), price:+r.querySelector('.sup_price').value||0, qty:+r.querySelector('.sup_qty').value||0,
+    name:(r.querySelector('.sup_name')?r.querySelector('.sup_name').value.trim():'')
+  })).filter(x=>x.url||x.price||x.qty||x.name);
 }
 function suppliesTotal(){ return collectSupplies().reduce((s,x)=>s+x.price*x.qty,0); }
 function validSupplies(){ return collectSupplies().filter(x=>x.url && x.price>0 && x.qty>0); }
@@ -4163,7 +4173,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
