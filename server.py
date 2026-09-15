@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.72.0-thankyou-photos"
+VERSION = "10.73.0-deadline-reminders"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1811,6 +1811,14 @@ FALL_MONTHS = {8, 9, 10, 11}
 
 def month_is_visible(c, month, today=None):
     if month in FALL_MONTHS: return True     # fall booking is open from day one
+    # An admin can open booking through a given month early (Connections > Email >
+    # Deadline reminders), e.g. so spring classes can be submitted before a deadline.
+    ot = _meta_get("open_through") or DEADLINE_DEFAULTS["open_through"]
+    try:
+        oy, om = (int(x) for x in ot.split("-")[:2])
+        if (season_year(month), month) <= (oy, om): return True
+    except ValueError:
+        pass
     months = [m for m in _avail_months(c) if m not in FALL_MONTHS]
     return month in set(months[:visible_month_count(today)])
 
@@ -2110,6 +2118,55 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
     return cid
 
 SUPPLY_TO_DEFAULT = "mtruban@theeverett.com"    # who orders: every new request is emailed here (plus admins)
+
+# Submission-deadline reminder campaign (Connections > Email). Every N days from
+# the start date until the deadline, plus the deadline morning itself.
+DEADLINE_DEFAULTS = {"what": "all spring classes (January through April)", "date": "2026-11-15",
+                     "start": "2026-09-30", "every": "14", "open_through": "2027-04"}
+
+def deadline_settings():
+    return {k: (_meta_get("deadline_" + k) or v) for k, v in DEADLINE_DEFAULTS.items()}
+
+def send_deadline_reminders(c, today, force=False, cfg=None):
+    """One reminder to every instructor on the campaign days. Returns the number sent."""
+    ds = deadline_settings()
+    try:
+        dl = datetime.date.fromisoformat(ds["date"]); st = datetime.date.fromisoformat(ds["start"]); every = max(1, int(ds["every"]))
+    except (ValueError, TypeError):
+        return 0
+    due = (today == dl) or (st <= today <= dl and (today - st).days % every == 0)
+    if not (due or force): return 0
+    try:
+        c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(0,?,?,0)",
+                  (f"deadline_{today.isoformat()}" + ("_manual" if force else ""), now()))
+    except sqlite3.IntegrityError:
+        return 0
+    left = (dl - today).days
+    when = dl.strftime("%A, %B %-d")
+    rows = c.execute("SELECT name, email FROM users WHERE role='instructor' AND deleted_at IS NULL AND email LIKE '%@%'").fetchall()
+    n = 0
+    for r in rows:
+        first = (r["name"] or "").split(" ")[0] or "there"
+        if left <= 0:
+            lead = f"Today is the last day to submit {ds['what']}."
+        elif left == 1:
+            lead = f"Tomorrow, {when}, is the deadline to submit {ds['what']}."
+        else:
+            lead = f"The deadline to submit {ds['what']} is {when}: {left} days from today."
+        body = (f"Hi {first},\n\nA reminder from The Gibby: {lead}\n\n"
+                f"Book your dates and submit each class in the app. Every class needs its own submission, "
+                f"and anything submitted after the deadline may not make the season's marketing.\n\n"
+                f"Open the app: {mailer.APP_URL}\n\n"
+                f"If you have already submitted everything you plan to teach, thank you, and ignore this.\n\n"
+                f"Thank you,\nThe Gibby")
+        subj = (f"Last day: {ds['what']} are due today" if left <= 0 else f"{left} days left: {ds['what']} are due {when}")
+        if mailer.send(r["email"], subj, body, cfg, copy=False): n += 1
+    c.execute("UPDATE email_log SET recipients=?, delivered=? WHERE class_id=0 AND email_type=?",
+              (n, 1 if n else 0, f"deadline_{today.isoformat()}" + ("_manual" if force else "")))
+    if n and mailer.COPY_TO:
+        mailer.send(mailer.COPY_TO, f"[Copy to {n} instructors] {subj}", f"(Sent to {n} instructor(s); this is one copy)\n\n{body}", cfg, copy=False)
+    print(f"[deadline] reminder sent to {n} instructor(s)")
+    return n
 
 THANKS_DEFAULTS = {"google_url": "", "facebook_url": "", "promo_code": "STUDENT2026",
                    "promo_pct": "15", "upcoming_url": "https://www.eventbrite.com/o/76506239933",
@@ -2463,6 +2520,11 @@ def run_scheduler(asof=None):
                     f"Thank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
                                else f"marketing request suppressed for {cls['title']}: {why}")
+    try:
+        n = send_deadline_reminders(c, today, cfg=cfg)
+        if n: actions.append(f"submission-deadline reminder to {n} instructors")
+    except Exception as e:
+        print("[deadline] error:", e)
     # Facebook's posting key has a hard expiry date; warn the admins at 14 days
     # and again at 2, instead of letting posts start failing silently. Uses
     # email_log's (class_id,type) uniqueness with class_id=0 for once-only.
@@ -3691,7 +3753,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     or "https://docs.google.com/spreadsheets/d/1ahKCK6Sb0S2PHWSOoZPJqPxO1XoN2e6QoD3DvWAmhr4",
             }
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
-                                   "drive": drive, "thanks": thanks_settings(),
+                                   "drive": drive, "thanks": thanks_settings(), "deadline": deadline_settings(),
                                    "backup": backup_status(),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
@@ -4799,6 +4861,19 @@ class H(http.server.BaseHTTPRequestHandler):
                 if k in b: _meta_set("thanks_" + k, (str(b.get(k) or "")).strip())
             mailer.COPY_TO = thanks_settings().get("copy_all") or ""
             return self.send_json({"ok": True, "thanks": thanks_settings()})
+        if p == "/api/admin/deadline-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            for k in DEADLINE_DEFAULTS:
+                if k in b: _meta_set("deadline_" + k, str(b.get(k) or "").strip())
+            if "open_through" in b: _meta_set("open_through", str(b.get("open_through") or "").strip())
+            return self.send_json({"ok": True, "deadline": deadline_settings()})
+        if p == "/api/admin/deadline-send":
+            u = self.require("admin")
+            if not u: return
+            c = db(); n = send_deadline_reminders(c, datetime.date.today(), force=True); c.commit(); c.close()
+            return self.send_json({"ok": True, "sent": n})
         if p == "/api/admin/mail-bridge":
             # Save the Gibby Mail Bridge (Apps Script on the gibby@ mailbox) the app sends through.
             u = self.require("admin")

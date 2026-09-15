@@ -1707,6 +1707,14 @@ async function adminConnections(){
       <div class="hint">Open studios and classes with no registrations never get the automatic after-class email or the instructor note nudge. Add more words here, e.g. "social club".</div>
       <div class="hint">Bulk sends (a whole class, everyone on Learn) arrive as one summary copy, not one per person. Leave blank to turn copies off.</div>
       <button class="btn ghost" style="margin-top:8px" onclick="saveThanks()">Save thank-you settings</button>
+      <div class="meta" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)"><b>Submission deadline reminders</b> (every instructor, on a schedule):</div>
+      <input id="dl_what" placeholder="What is due, e.g. all spring classes (January through April)" value="${esc((d.deadline||{}).what||'')}" style="margin-top:6px">
+      <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Deadline</label><input id="dl_date" type="date" value="${esc((d.deadline||{}).date||'')}"></div>
+        <div><label style="margin-top:0">First reminder</label><input id="dl_start" type="date" value="${esc((d.deadline||{}).start||'')}"></div></div>
+      <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Repeat every (days)</label><input id="dl_every" type="number" min="1" value="${esc((d.deadline||{}).every||'14')}"></div>
+        <div><label style="margin-top:0">Booking open through (YYYY-MM)</label><input id="dl_open" placeholder="2027-04" value="${esc((d.deadline||{}).open_through||'')}"></div></div>
+      <div class="hint">Reminders go out on the first date, every N days after, and on the deadline morning. Clear the deadline to stop them. "Booking open through" lets instructors book those months now instead of waiting for the usual month-end unlock.</div>
+      <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="saveDeadline()">Save reminders</button><button class="btn ghost" onclick="sendDeadlineNow()">Send one now</button></div>
       <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
       <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
       <button class="btn ghost" style="margin-top:8px" onclick="resendContracts()">Re-send unsigned contract emails</button>
@@ -1795,6 +1803,15 @@ async function reimbAct(id, action){
   const r=await api('/api/reimbursements/'+id+'/'+action,'POST',{note});
   if(r.error){ alert(r.error); return; }
   adminMoney();
+}
+async function saveDeadline(){
+  try{ await api('/api/admin/deadline-settings','POST',{what:$('#dl_what').value, date:$('#dl_date').value, start:$('#dl_start').value, every:$('#dl_every').value, open_through:$('#dl_open').value}); alert('Saved.'); }
+  catch(e){ alert(e.message); }
+}
+async function sendDeadlineNow(){
+  if(!confirm('Email every instructor the deadline reminder right now?')) return;
+  try{ const r=await api('/api/admin/deadline-send','POST',{}); alert('Sent to '+r.sent+' instructor'+(r.sent===1?'':'s')+'.'); }
+  catch(e){ alert(e.message); }
 }
 async function saveThanks(){
   const r=await api('/api/admin/thanks-settings','POST',{google_url:$('#th_google').value, facebook_url:$('#th_fb').value,
@@ -4113,7 +4130,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
