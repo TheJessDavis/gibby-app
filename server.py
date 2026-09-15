@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.74.0-wanted-tab"
+VERSION = "10.74.1-post-quietly"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4775,7 +4775,7 @@ class H(http.server.BaseHTTPRequestHandler):
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             instructors = emails_for(c, "WHERE role='instructor'")
             c.commit(); c.close()
-            if b.get("notify", True) and instructors:
+            if b.get("notify") and instructors:      # only when the admin chose "Post it and email everyone"
                 mailer.send(instructors, f"The Gibby is looking for: {title}",
                     f"Hello,\n\nThe Gibby would love someone to teach this:\n\n  {title}\n"
                     + (f"  When: {b.get('when_text')}\n" if b.get("when_text") else "")
@@ -4785,7 +4785,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     + (f"\n{b.get('notes').strip()}\n" if (b.get("notes") or "").strip() else "")
                     + f"\nIf that is you, open the app and press Claim on the request. It pre-fills a class "
                     f"proposal so you only pick the time and add your details: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
-            return self.send_json({"ok":True, "id":rid, "emailed":len(instructors)})
+            return self.send_json({"ok":True, "id":rid, "emailed":(len(instructors) if b.get("notify") else 0)})
         mrq = re.match(r"^/api/requests/(\d+)/(claim|close|reopen)$", p)
         if mrq:
             u = self.current_user()

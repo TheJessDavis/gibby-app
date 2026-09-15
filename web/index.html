@@ -1595,16 +1595,17 @@ async function adminRequests(){
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
       <label>Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
       <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
-      <button class="btn dark" style="margin-top:10px" onclick="postRequest()">Post it and email the instructors</button></div>
+      <div class="two" style="margin-top:10px"><button class="btn ghost" onclick="postRequest(false)">Post it</button><button class="btn dark" onclick="postRequest(true)">Post it and email everyone</button></div>
+      <div class="hint">Post it: the request appears on the instructors' Wanted tab only. Post and email: every instructor also gets a message about it.</div></div>
     <label style="margin-top:16px">Open (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing open.</div>'}
     <label style="margin-top:16px">Claimed (${claimed.length})</label>${claimed.map(card).join('')||'<div class="muted">None claimed yet.</div>'}
     ${closed.length?`<label style="margin-top:16px">Closed recently (${closed.length})</label>${closed.map(card).join('')}`:''}`;
 }
-async function postRequest(){
-  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value};
+async function postRequest(notify){
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, notify:!!notify};
   const r=await api('/api/requests','POST',b);
   if(r.error){ alert(r.error); return; }
-  alert('Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.'); adminRequests();
+  alert(notify ? 'Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.' : 'Posted. It is on the Wanted tab; nobody was emailed.'); adminRequests();
 }
 async function reqAction(id, action){
   const r=await api('/api/requests/'+id+'/'+action,'POST',{}); if(r.error){ alert(r.error); return; }
