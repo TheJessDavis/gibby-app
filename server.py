@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.73.0-deadline-reminders"
+VERSION = "10.73.1-fixes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4544,8 +4544,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                      VALUES(?,?,'done',?,?,?,?) ON CONFLICT(user_id,kind) DO NOTHING""",
                                   (uid, k, u["id"], now(), now(), usr["phone"]))
                         continue
-                    if cur and cur["status"] == "done" and not b.get("force"):
-                        continue            # already have it; use force to ask again
+                    if cur and not b.get("force"):
+                        continue            # already sent, or already asked; use force to ask again
                     c.execute("""INSERT INTO paperwork(user_id,kind,status,note,requested_by,requested_at,reminded_at,done_at)
                                  VALUES(?,?,'requested',?,?,?,NULL,NULL)
                                  ON CONFLICT(user_id,kind) DO UPDATE SET status='requested', note=excluded.note,
@@ -4553,10 +4553,20 @@ class H(http.server.BaseHTTPRequestHandler):
                               (uid, k, note, u["id"], now()))
                     asked.append({"kind": k, "note": note})
                 if not asked: skipped += 1; continue
-                subj, body = paperwork_email(dict(usr), asked)
-                if mailer.send(usr["email"], subj, body): emailed.append(usr["name"] or usr["email"])
+                emailed.append((dict(usr), asked))
             c.commit(); c.close()
-            return self.send_json({"ok":True, "emailed": emailed, "already_had_it": skipped})
+            # Emailing a dozen people through the bridge takes longer than the
+            # phone will wait for an answer: reply now, send in the background.
+            def _go(targets=emailed):
+                for usr, asked in targets:
+                    try:
+                        subj, body = paperwork_email(usr, asked)
+                        mailer.send(usr["email"], subj, body)
+                    except Exception as e:
+                        print("[paperwork] email failed:", usr.get("email"), e)
+            threading.Thread(target=_go, daemon=True).start()
+            return self.send_json({"ok":True, "queued": len(emailed), "names": [u["name"] or u["email"] for u, _ in emailed],
+                                   "already_had_it": skipped})
         mpc = re.match(r"^/api/paperwork/(\d+)/(complete|done|reopen)$", p)
         if mpc:
             pid, action = int(mpc.group(1)), mpc.group(2)
