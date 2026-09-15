@@ -2875,18 +2875,44 @@ async function sendReimburse(id){
   if(r.error){ st.textContent=r.error; return; }
   alert('Sent. The Gibby will review it.'); $('#rb'+id).innerHTML='';
 }
-function viewPhotos(id){ return boundary('photos', '#photos'+id, ()=>photosInner(id), false); }
-async function photosInner(id){
+function viewPhotos(id, sfx){ sfx=sfx||''; return boundary('photos', '#photos'+id+sfx, ()=>photosInner(id, sfx), false); }
+async function photosInner(id, sfx){
+  sfx=sfx||'';
   const d = await api('/api/classes/'+id+'/photos');
-  const ph = d.photos||[];
-  $('#photos'+id).innerHTML = `<div style="margin-top:8px">
-    ${ph.length?`<div style="display:flex;flex-wrap:wrap;gap:6px">${ph.map(p=>`<a href="${p.drive_link}" target="_blank" rel="noopener" title="${esc(p.filename||'')}">
-        ${p.thumb?`<img src="${p.thumb}" alt="" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`:`<span style="display:inline-block;width:84px;height:84px;border-radius:8px;border:1px solid var(--line);text-align:center;line-height:84px">\u{1F5BC}</span>`}</a>`).join('')}</div>
-      <div class="meta" style="margin-top:6px">${ph.length} photo${ph.length===1?'':'s'} on Drive${d.folder?` · <a href="${d.folder}" target="_blank" rel="noopener">open the folder</a>`:''}</div>`
+  const ph = (d.photos||[]).filter(p=>p.kind!=='video'), vids=(d.photos||[]).filter(p=>p.kind==='video');
+  const nThanks = ph.filter(p=>p.in_thanks).length;
+  $('#photos'+id+sfx).innerHTML = `<div style="margin-top:8px">
+    ${ph.length?`<div style="display:flex;flex-wrap:wrap;gap:6px">${ph.map(p=>`<div style="text-align:center">
+        <a href="${p.drive_link}" target="_blank" rel="noopener" title="${esc(p.filename||'')}">
+        ${p.thumb?`<img src="${p.thumb}" alt="" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:2px solid ${p.in_thanks?'#2c5b8a':'var(--line)'}">`:`<span style="display:inline-block;width:84px;height:84px;border-radius:8px;border:1px solid var(--line);background:var(--cream)"></span>`}</a>
+        ${d.thanks_sent?'':`<label class="chk" style="margin:2px 0 0;font-size:11px;justify-content:center"><input type="checkbox" ${p.in_thanks?'checked':''} onchange="thanksPhoto(${p.id},this.checked,${id},'${sfx}')"> in thank-you</label>`}</div>`).join('')}</div>
+      <div class="meta" style="margin-top:6px">${ph.length} photo${ph.length===1?'':'s'} on Drive${d.folder?` · <a href="${d.folder}" target="_blank" rel="noopener">open the folder</a>`:''}${d.thanks_sent?' · thank-you already sent':` · <b>${nThanks} of 5</b> in the thank-you email`}</div>`
       :'<div class="meta">No photos yet.</div>'}
-    <input type="file" id="pf${id}" accept="image/*" multiple style="margin-top:8px" onchange="uploadPhotos(${id})">
-    <div class="hint">Pick up to 12 photos from the class. They are resized on your phone and filed in the Gibby Class Photos folder on Drive. The Gibby may share one on Facebook after an admin approves it.</div>
-    <div id="pfstat${id}" class="meta"></div></div>`;
+    ${vids.length?`<div class="meta" style="margin-top:6px">Videos for marketing: ${vids.map(v=>`<a href="${esc(v.drive_link)}" target="_blank" rel="noopener">${esc(v.filename||'video')}</a>`).join(', ')}</div>`:''}
+    ${d.thanks_sent?'':`<label style="margin-top:10px">Photos for the thank-you email (up to 5)</label>
+    <input type="file" id="pf${id}${sfx}t" accept="image/*" multiple style="margin-top:4px" onchange="uploadPhotos(${id},'${sfx}',true)">
+    <div class="hint">These appear under your note in the thank-you email your students get. Photos only.</div>`}
+    <label style="margin-top:10px">More photos and videos for marketing</label>
+    <input type="file" id="pf${id}${sfx}" accept="image/*" multiple style="margin-top:4px" onchange="uploadPhotos(${id},'${sfx}',false)">
+    <input type="file" id="pv${id}${sfx}" accept="video/mp4,video/quicktime,video/*" style="margin-top:6px" onchange="uploadClassVideo(${id},'${sfx}',event)">
+    <div class="hint">Up to 12 photos at a time, videos up to 80MB. Filed under the class name on Drive. The Gibby may share them on Facebook or the website after an admin approves; students are not emailed again.</div>
+    <div id="pfstat${id}${sfx}" class="meta"></div></div>`;
+}
+async function thanksPhoto(pid, on, id, sfx){
+  try{ await api('/api/photos/'+pid+'/thanks','POST',{on}); }catch(e){ alert(e.message); }
+  photosInner(id, sfx);
+}
+async function uploadClassVideo(id, sfx, ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const st=$('#pfstat'+id+sfx);
+  if(f.size > 80*1024*1024){ st.textContent='That video is '+Math.round(f.size/1048576)+'MB; the limit is 80MB.'; return; }
+  st.textContent='Uploading your video… ('+Math.round(f.size/1048576)+'MB, this can take a minute)';
+  try{
+    const r=await fetch('/api/upload-video',{method:'POST',headers:{'X-CSRF-Token':CSRF,'Content-Type':f.type||'video/mp4'},body:f});
+    const j=await r.json(); if(!r.ok) throw new Error(j.error||'upload failed');
+    await api('/api/classes/'+id+'/videos','POST',{url:j.url, name:f.name});
+    st.textContent='Video saved for marketing.'; photosInner(id, sfx);
+  }catch(e){ st.textContent='Could not upload the video: '+e.message; }
 }
 function shrinkImage(file, maxSide, quality){
   return new Promise((res,rej)=>{
@@ -2898,8 +2924,9 @@ function shrinkImage(file, maxSide, quality){
     img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error('That file is not an image the browser can read.')); };
     img.src=url; });
 }
-async function uploadPhotos(id){
-  const inp=$('#pf'+id), st=$('#pfstat'+id); const files=[...inp.files].slice(0,12);
+async function uploadPhotos(id, sfx, forThanks){
+  sfx=sfx||'';
+  const inp=$('#pf'+id+sfx+(forThanks?'t':'')), st=$('#pfstat'+id+sfx); const files=[...inp.files].slice(0,forThanks?5:12);
   if(!files.length) return;
   const photos=[];
   for(let i=0;i<files.length;i++){
@@ -2908,9 +2935,9 @@ async function uploadPhotos(id){
     catch(e){ st.textContent=e.message; return; }
   }
   st.textContent='Sending '+photos.length+' photo'+(photos.length===1?'':'s')+' to Drive…';
-  let r; try{ r=await api('/api/classes/'+id+'/photos','POST',{photos}); }catch(e){ st.textContent='Upload failed: '+e.message; return; }
+  let r; try{ r=await api('/api/classes/'+id+'/photos','POST',{photos, for_thanks:!!forThanks}); }catch(e){ st.textContent='Upload failed: '+e.message; return; }
   st.textContent=(r.saved||[]).length+' saved.'+((r.failed||[]).length?' Could not save: '+r.failed.join('; '):'');
-  viewPhotos(id);
+  photosInner(id, sfx);
 }
 async function rosterInner(id){
   const {registrations, auditors} = await api('/api/class/'+id+'/registrations');
@@ -3350,6 +3377,8 @@ async function instrMine(){
           : c.followup_status==='ready'
             ? "Written. It goes to your students tomorrow morning with The Gibby's thank-you underneath. You can still change it until then."
             : "Goes out tomorrow morning with The Gibby's thank-you (review links and a discount) underneath. Skip it and The Gibby's thank-you goes alone."}</div>
+        <button class="btn ghost" style="margin-top:10px" onclick="viewPhotos(${c.id},'n')">\u{1F4F7} Add up to 5 photos from class to the thank-you</button>
+        <div id="photos${c.id}n"></div>
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
@@ -4084,7 +4113,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

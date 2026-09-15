@@ -9,7 +9,7 @@ approval). External posting (Eventbrite, Facebook, Instagram, Canva, Descene) an
 emails are behind a stubbed integration layer that logs what it *would* do,
 until real account credentials are available.
 """
-import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64, html
+import http.server, socketserver, json, sqlite3, os, hashlib, secrets, urllib.parse, datetime, http.cookies, random, re, base64, html, hmac
 import integrations, mailer, gcal, pdfgen, threading, time, io
 PROCESS_STARTED = time.time()
 
@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.71.1-paperwork-folder"
+VERSION = "10.72.0-thankyou-photos"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -246,6 +246,9 @@ def init_db():
         folder_link TEXT, filename TEXT, thumb TEXT, created TEXT)""")
     try: c.execute("ALTER TABLE class_photos ADD COLUMN social TEXT")
     except Exception: pass
+    for col, typ in (("kind","TEXT DEFAULT 'photo'"), ("in_thanks","INTEGER DEFAULT 0")):
+        try: c.execute(f"ALTER TABLE class_photos ADD COLUMN {col} {typ}")
+        except Exception: pass
     for col in ("promoted","reminded","followed_up","low_alerted"):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
@@ -1443,6 +1446,16 @@ def class_ics(cls):
     return "\r\n".join(lines) + "\r\n"
 
 _FEEDBACK_SECRET = None
+def photo_sig(pid):
+    return hmac.new(feedback_secret().encode(), f"photo:{pid}".encode(), hashlib.sha256).hexdigest()[:16]
+
+def thanks_photo_urls(c, class_id, limit=5):
+    """Public (signed, unguessable) URLs of the photos the instructor picked for
+    the thank-you, oldest first, at most five."""
+    rows = c.execute("""SELECT id FROM class_photos WHERE class_id=? AND in_thanks=1 AND social IS NOT NULL
+                        AND COALESCE(kind,'photo')='photo' ORDER BY id LIMIT ?""", (class_id, limit)).fetchall()
+    return [f"{mailer.APP_URL}/photo/{r['id']}-{photo_sig(r['id'])}.jpg" for r in rows]
+
 def feedback_secret():
     """Created once at startup (init_db); cached so no write ever happens inside
     another connection's transaction."""
@@ -1897,6 +1910,7 @@ EMAIL_RULES = {
     "followup_request":  {"statuses": ("approved",),  "future_only": False, "label": "follow-up writing request"},
     "followup_reminder": {"statuses": ("approved",),  "future_only": False, "label": "follow-up writing reminder"},
     "followup_late":     {"statuses": ("approved",),  "future_only": False, "label": "late instructor note to students"},
+    "marketing_request": {"statuses": ("approved",),  "future_only": False, "label": "photos and videos for marketing request"},
     "headcount":         {"statuses": ("approved",),  "future_only": True,  "label": "confirmed headcount"},
     # Nudges go to STAFF, never students. Policy: nothing reaches ticket holders
     # without a person (instructor or admin) pressing the button.
@@ -2233,6 +2247,7 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
     except sqlite3.IntegrityError:
         return False, "already sent (another job claimed it first)"
     cfg = cfg or mailer.load_email_config()
+    images = thanks_photo_urls(c, cid) if email_type == "followup" else []
     ok = 0; copies = 0
     for p in people:
         first = (p.get("name") or "").split(" ")[0] or "there"
@@ -2252,12 +2267,12 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
             body = body.replace("\n\nSee you at The Gibby,",
                 f"\n\nHow was it? Tap a star to tell us (takes ten seconds): {feedback_link(cid, p['email'])}\n\nSee you at The Gibby,", 1)
         kw = {"reply_to": instr["email"], "from_name": f"{iname} via The Gibby"} if (note.strip() and instr and instr["email"]) else {}
-        if mailer.send(p["email"], subj, body, cfg, copy=False, **kw):
+        if mailer.send(p["email"], subj, body, cfg, copy=False, images=images, **kw):
             ok += 1
             # Jess wants every single one, not a one-per-class summary.
             if mailer.COPY_TO and mailer.COPY_TO.lower() != p["email"].lower():
                 if mailer.send(mailer.COPY_TO, f"[Copy to {p['email']}] {subj}",
-                               f"(Sent to {p.get('name') or ''} {p['email']})\n\n{body}", cfg, copy=False):
+                               f"(Sent to {p.get('name') or ''} {p['email']})\n\n{body}", cfg, copy=False, images=images):
                     copies += 1
     c.execute("UPDATE email_log SET delivered=?, copies=? WHERE class_id=? AND email_type=?",
               (1 if ok else 0, copies, cid, email_type))
@@ -2409,7 +2424,8 @@ def run_scheduler(asof=None):
                     f"Follow-up notes: {mailer.APP_URL}\n\nTomorrow morning it goes to everyone who came, "
                     f"in your name, with The Gibby's thank-you underneath (review links and a discount on "
                     f"their next class). Replies come straight to you. If you skip it, The Gibby's "
-                    f"thank-you goes out on its own.{ask_q}\n\nThank you,\nThe Gibby", today, cfg)
+                    f"thank-you goes out on its own.\n\nWhile you are there, add up to five photos from class: "
+                    f"they appear in that thank-you email, right under your note.{ask_q}\n\nThank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} to write the follow-up: {cls['title']}"
                                if sent else f"follow-up request suppressed for {cls['title']}: {why}")
                 # One nudge that evening if the note is still unwritten.
@@ -2430,6 +2446,23 @@ def run_scheduler(asof=None):
             sent, why = send_after_class(c, cls, "followup", today, cfg)
             actions.append(f"after-class email for {cls['title']}: {why}" if sent
                            else f"after-class email suppressed for {cls['title']}: {why}")
+        if -6 <= end_days <= -3 and email_sent_at(c, cls["id"], "followup") and not followup_exempt(c, cls):
+            # The day after the thank-you went: one more ask, this time for
+            # marketing. Photos and videos here go to the Gibby's queue, never
+            # to students, and nothing posts without an admin's approval.
+            instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
+            if instr_row:
+                first = (instr_row["name"] or "").split(" ")[0] or "there"
+                sent, why = send_class_email(c, cls, "marketing_request", [instr_row["email"]],
+                    f"Got more pictures or a video from {cls['title']}?",
+                    f"Hi {first},\n\nThe thank-you for \"{cls['title']}\" has gone to your students. If you have "
+                    f"more pictures from class, or a short video, The Gibby would love them for marketing: "
+                    f"Facebook, the website and next season's listings.\n\nOpen the app, go to My classes, open the "
+                    f"class and tap Class photos: {mailer.APP_URL}\n\nPhotos are filed on Drive under the class name. "
+                    f"Nothing is posted anywhere until an admin approves it, and students are not emailed again.\n\n"
+                    f"Thank you,\nThe Gibby", today, cfg)
+                actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
+                               else f"marketing request suppressed for {cls['title']}: {why}")
     # Facebook's posting key has a hard expiry date; warn the admins at 14 days
     # and again at 2, instead of letting posts start failing silently. Uses
     # email_log's (class_id,type) uniqueness with class_id=0 for once-only.
@@ -2669,6 +2702,18 @@ class H(http.server.BaseHTTPRequestHandler):
         if p.startswith("/class-poster/"): return self.class_poster(p)
         if p.startswith("/contract-pdf/"): return self.contract_pdf_dl(p)
         if p.startswith("/media/"): return self.serve_media(p)
+        mpp = re.match(r"^/photo/(\d+)-([0-9a-f]{16})\.jpg$", p)
+        if mpp:
+            # A class photo for the thank-you email: only with its signature.
+            pid = int(mpp.group(1))
+            if not hmac.compare_digest(mpp.group(2), photo_sig(pid)): return self.send_error(404)
+            c = db(); r = c.execute("SELECT social FROM class_photos WHERE id=?", (pid,)).fetchone(); c.close()
+            if not r or not r["social"]: return self.send_error(404)
+            b64 = r["social"].split(",",1)[1] if "," in r["social"][:40] else r["social"]
+            data = base64.b64decode(b64)
+            self.send_response(200); self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "public, max-age=2592000")
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
         if p.startswith("/api/"): return self.api_get(p)
         return self.static(p)
 
@@ -3660,17 +3705,20 @@ class H(http.server.BaseHTTPRequestHandler):
             row = c.execute("SELECT instructor_id FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             rows = [dict(r) for r in c.execute("""SELECT p.id, p.drive_link, p.folder_link, p.filename, p.thumb, p.created,
+                COALESCE(p.kind,'photo') AS kind, COALESCE(p.in_thanks,0) AS in_thanks,
                 u.name AS by FROM class_photos p LEFT JOIN users u ON u.id=p.user_id
                 WHERE p.class_id=? ORDER BY p.id""",(cid,)).fetchall()]
+            thanks_sent = bool(email_sent_at(c, cid, "followup"))
             c.close()
-            return self.send_json({"photos": rows, "folder": (rows[-1]["folder_link"] if rows else None)})
+            folders = [r["folder_link"] for r in rows if r.get("folder_link")]
+            return self.send_json({"photos": rows, "folder": (folders[-1] if folders else None), "thanks_sent": thanks_sent})
         if p == "/api/photos/recent":
             # Admin/marketing: the latest class photos across every class.
             u = self.require("admin")
             if not u: return
             c = db()
             rows = [dict(r) for r in c.execute("""SELECT p.id, p.class_id, p.drive_link, p.folder_link, p.thumb, p.created,
-                cl.title, cl.slot_date, u.name AS by FROM class_photos p
+                COALESCE(p.kind,'photo') AS kind, p.filename, cl.title, cl.slot_date, u.name AS by FROM class_photos p
                 JOIN classes cl ON cl.id=p.class_id LEFT JOIN users u ON u.id=p.user_id
                 ORDER BY p.id DESC LIMIT 60""").fetchall()]
             c.close()
@@ -4228,6 +4276,11 @@ class H(http.server.BaseHTTPRequestHandler):
             photos = b.get("photos") or []
             if not photos: return self.send_json({"error":"No photos were attached."},400)
             if len(photos) > 12: return self.send_json({"error":"Up to 12 photos at a time, please."},400)
+            for_thanks = 1 if b.get("for_thanks") else 0
+            if for_thanks:
+                cq = db(); have = cq.execute("SELECT COUNT(*) FROM class_photos WHERE class_id=? AND in_thanks=1", (cid,)).fetchone()[0]; cq.close()
+                if have + len(photos) > 5:
+                    return self.send_json({"error": f"The thank-you email holds five photos. {have} already chosen; {max(0,5-have)} more can go in."},400)
             saved, failed = [], []
             for i, ph in enumerate(photos):
                 b64 = (ph.get("b64") or "")
@@ -4243,8 +4296,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 thumb = (ph.get("thumb") or "")[:60000]
                 social = (ph.get("social") or "")[:400000]
                 c = db()
-                c.execute("""INSERT INTO class_photos(class_id,user_id,drive_id,drive_link,folder_link,filename,thumb,social,created)
-                             VALUES(?,?,?,?,?,?,?,?,?)""", (cid, u["id"], res.get("id"), res.get("link"), res.get("folder"), name, thumb, social, now()))
+                c.execute("""INSERT INTO class_photos(class_id,user_id,drive_id,drive_link,folder_link,filename,thumb,social,created,kind,in_thanks)
+                             VALUES(?,?,?,?,?,?,?,?,?,'photo',?)""", (cid, u["id"], res.get("id"), res.get("link"), res.get("folder"), name, thumb, social, now(), for_thanks))
                 pid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
                 try: ensure_social_draft(c, cls, pid, u["id"])
                 except Exception as e: print("[social] draft not created:", e)
@@ -4505,6 +4558,36 @@ class H(http.server.BaseHTTPRequestHandler):
                     + (f"\n\nFile: {fname}" + (f"\nOn Drive: {link}" if link else " (open it from People in the app)") if fname else "")
                     + f"\n\nSee everyone's paperwork under People: {mailer.APP_URL}")
             return self.send_json({"ok":True, "drive_link": link})
+        mpt = re.match(r"^/api/photos/(\d+)/thanks$", p)
+        if mpt:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            b = self.read_json(); c = db()
+            ph = c.execute("SELECT p.*, cl.instructor_id FROM class_photos p JOIN classes cl ON cl.id=p.class_id WHERE p.id=?", (int(mpt.group(1)),)).fetchone()
+            if not ph: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and ph["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"forbidden"},403)
+            want = 1 if b.get("on") else 0
+            if want and (ph["kind"] or "photo") != "photo": c.close(); return self.send_json({"error":"Only photos go in the thank-you."},400)
+            if want and c.execute("SELECT COUNT(*) FROM class_photos WHERE class_id=? AND in_thanks=1 AND id<>?", (ph["class_id"], ph["id"])).fetchone()[0] >= 5:
+                c.close(); return self.send_json({"error":"The thank-you email holds five photos. Untick one first."},400)
+            c.execute("UPDATE class_photos SET in_thanks=? WHERE id=?", (want, ph["id"])); c.commit(); c.close()
+            return self.send_json({"ok":True})
+        mvd = re.match(r"^/api/classes/(\d+)/videos$", p)
+        if mvd:
+            # A marketing video already uploaded to /media/ (see /api/upload-video).
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(mvd.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"That is not your class."},403)
+            url = str(b.get("url") or "").strip()
+            if "/media/" not in url: c.close(); return self.send_json({"error":"Upload the video first."},400)
+            name = re.sub(r"[^A-Za-z0-9._ -]+", "-", str(b.get("name") or "video"))[:80]
+            c.execute("""INSERT INTO class_photos(class_id,user_id,drive_link,filename,created,kind,in_thanks)
+                         VALUES(?,?,?,?,?,'video',0)""", (cid, u["id"], url, name, now()))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/admin/supply-settings":
             u = self.require("admin")
             if not u: return

@@ -77,7 +77,18 @@ def text_to_html(body):
     flush_para(); flush_list()
     return "".join(out)
 
-def html_email(subject, body, from_name=None):
+def photo_grid(images):
+    """Up to five class photos, two per row, under the email text."""
+    if not images: return ""
+    cells = "".join(f'<td style="padding:4px;width:50%"><img src="{u}" alt="" width="270" style="display:block;width:100%;max-width:270px;height:auto;border-radius:12px;border:1px solid #E7DECB"></td>' for u in images[:5])
+    rows, imgs = [], list(images[:5])
+    while imgs:
+        pair = imgs[:2]; imgs = imgs[2:]
+        rows.append("<tr>" + "".join(f'<td style="padding:4px;width:50%;vertical-align:top"><img src="{u}" alt="" width="270" style="display:block;width:100%;max-width:270px;height:auto;border-radius:12px;border:1px solid #E7DECB"></td>' for u in pair) + ("<td></td>" if len(pair) == 1 else "") + "</tr>")
+    return ('<p style="margin:18px 0 6px;font-size:13px;color:#6b665c;font-weight:700">From class</p>'
+            '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">' + "".join(rows) + "</table>")
+
+def html_email(subject, body, from_name=None, images=None):
     import html as _h
     who = _h.escape(from_name or "The Gibby")
     return f"""<!doctype html><html><body style="margin:0;padding:0;background:#F5EFE3;font-family:'Helvetica Neue',Arial,'Segoe UI',sans-serif;color:#171512">
@@ -89,7 +100,7 @@ def html_email(subject, body, from_name=None):
 </tr></table></td></tr>
 <tr><td style="background:#FBF7EF;border:1px solid #E7DECB;border-radius:18px;padding:26px 28px;font-size:16px">
 <h1 style="font-family:Georgia,serif;font-size:22px;line-height:1.3;margin:0 0 16px">{_h.escape(subject)}</h1>
-{text_to_html(body)}
+{text_to_html(body)}{photo_grid(images)}
 </td></tr>
 <tr><td style="padding:16px 10px 0;font-size:12px;color:#6b665c;line-height:1.5">Sent by {who} through the Gibby Class Manager · Gibby Center for the Arts, 51 W Main St, Middletown, DE<br>
 <a href="{APP_URL}" style="color:#6b665c">{APP_URL}</a></td></tr>
@@ -120,7 +131,7 @@ def bridge_available():
     b = bridge_config()
     return bool(b["enabled"] and b["url"])
 
-def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from_name=None):
+def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from_name=None, images=None):
     """Returns True when the bridge accepted the message; raises with the
     bridge's own reason otherwise (old script version, alias missing, quota)."""
     b = bridge_config()
@@ -129,7 +140,7 @@ def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from
     # One message per recipient: students must never see each other's addresses.
     for one in recips:
         payload = {"key": b["key"], "action": "email", "to": [one], "subject": subject,
-                   "body": body, "html": html_email(subject, body, from_name), "from": cfg["mail_from"],
+                   "body": body, "html": html_email(subject, body, from_name, images), "from": cfg["mail_from"],
                    "name": from_name or "The Gibby", "attachments": atts}
         if reply_to: payload["replyTo"] = reply_to
         req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
@@ -180,7 +191,7 @@ def _copy(subject, body, recips, cfg, from_name=None):
     except Exception as e:
         print("[email] copy failed:", e)
 
-def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True):
+def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
@@ -199,7 +210,7 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
     errors = []
     if bridge_available():
         try:
-            if send_via_bridge(recips, subject, body, cfg, attachments, reply_to, from_name):
+            if send_via_bridge(recips, subject, body, cfg, attachments, reply_to, from_name, images):
                 LAST_ERROR = ""; LAST_ROUTE = "bridge"
                 print(f"[email] SENT via bridge to={recips} subject={subject!r}")
                 if copy: _copy(subject, body, recips, cfg, from_name)
@@ -219,7 +230,7 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
             if reply_to: msg["Reply-To"] = reply_to
             msg["Subject"] = subject
             msg.set_content(body)
-            msg.add_alternative(html_email(subject, body, from_name), subtype="html")
+            msg.add_alternative(html_email(subject, body, from_name, images), subtype="html")
             for fn, data, mime in (attachments or []):
                 mt, _, st = (mime or "application/octet-stream").partition("/")
                 msg.add_attachment(data, maintype=mt, subtype=st or "octet-stream", filename=fn)
