@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.71.0-pricing-supplies"
+VERSION = "10.71.1-paperwork-folder"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1307,15 +1307,16 @@ def ensure_social_draft(c, cls, photo_id, user_id):
               (cls["id"], photo_id, social_draft_message(cls, instr["name"] if instr else ""), user_id, now()))
     return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-def push_photo_to_drive(cls, filename, b64, mime="image/jpeg"):
+def push_photo_to_drive(cls, filename, b64, mime="image/jpeg", root=None):
     """File one after-class photo under Gibby Class Photos/<class title> on Drive
-    through the calendar bridge. Returns {id, link, folder} or raises."""
+    through the calendar bridge. root switches the top folder (bridge v18+, e.g.
+    'Gibby Paperwork'; an older bridge ignores it). Returns {id, link, folder} or raises."""
     cfg = gcal.load_gcal_config()
     if not cfg.get("webhook_url"):
         raise RuntimeError("the Google bridge is not configured")
     folder = re.sub(r"[\\/:*?\"<>|]+", " ", cls.get("title") or "class").strip()[:80]
     if cls.get("slot_date"): folder = f"{folder} ({cls['slot_date']})"
-    payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "photo",
+    payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "photo", "root": root or "Gibby Class Photos",
                           "folder": folder, "filename": filename, "b64": b64, "mime": mime}).encode()
     req = urllib.request.Request(cfg["webhook_url"], data=payload,
         headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
@@ -4484,8 +4485,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 fname = re.sub(r"[^A-Za-z0-9._-]+", "-", (b.get("name") or "file"))[:80]
                 # Best effort: a copy on Drive too, under Paperwork - <name>.
                 try:
-                    res = push_photo_to_drive({"title": f"Paperwork - {owner['name'] or owner['email']}"},
-                                              f"{PAPERWORK_KINDS[r['kind']]['label']} - {fname}", fb64, fmime)
+                    res = push_photo_to_drive({"title": owner['name'] or owner['email']},
+                                              f"{PAPERWORK_KINDS[r['kind']]['label']} - {fname}", fb64, fmime, root="Gibby Paperwork")
                     link = res.get("link")
                 except Exception as e:
                     print("[paperwork] drive copy failed:", e)

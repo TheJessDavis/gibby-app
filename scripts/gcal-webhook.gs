@@ -141,9 +141,10 @@ function doPost(e) {
 
   if (body.action === 'photo') {
     // After-class photos: Gibby Class Photos / <class title> / <file>.
-    var root;
-    var rit = DriveApp.getFoldersByName('Gibby Class Photos');
-    root = rit.hasNext() ? rit.next() : DriveApp.createFolder('Gibby Class Photos');
+    // body.root picks the top folder: 'Gibby Class Photos' (default) or 'Gibby Paperwork'.
+    var root, rootName = String(body.root || 'Gibby Class Photos');
+    var rit = DriveApp.getFoldersByName(rootName);
+    root = rit.hasNext() ? rit.next() : DriveApp.createFolder(rootName);
     var sub = root, subName = String(body.folder || '').trim();
     if (subName) {
       var sit = root.getFoldersByName(subName);
