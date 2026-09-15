@@ -2270,7 +2270,7 @@ async function adminApprovals(){
     ${fu.classes.map(c=>`<div class="card">
       <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
         <div class="meta">${esc(c.instructor_name)} &middot; ended ${esc(c.end_date||'')}</div></div>
-        ${c.exempt?`<span class="pill pend">no email: ${esc(c.exempt)}</span>`:c.note_written?'<span class="pill appr">note written</span>':'<span class="pill inc">no note</span>'}</div>
+        ${c.exempt?`<span class="pill pend">no email: ${esc(c.exempt)}</span>`:c.note_written?'<span class="pill appr">note written</span>':c.followup_status==='declined'?'<span class="pill pend">no note (instructor\'s choice)</span>':'<span class="pill inc">no note</span>'}</div>
       <div class="meta" style="margin-top:8px">
         ${c.thanks_sent_at
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}. <b>${c.register_clicks||0} Register click${c.register_clicks===1?'':'s'}</b> on the next-classes links.`
@@ -2346,6 +2346,11 @@ async function skipAllFeedback(){
   if(!confirm('Skip every questionnaire that is waiting?')) return;
   try{ await api('/api/feedback/skip-all','POST',{}); }
   catch(e){ alert(e.message); return; }
+  instrMine();
+}
+async function skipFollowup(id){
+  if(!confirm('Skip the note for this class? Students still get The Gibby\'s thank-you.')) return;
+  try{ await api('/api/classes/'+id+'/followup-note','POST',{skip:true}); }catch(e){ alert(e.message); return; }
   instrMine();
 }
 async function saveFollowup(id, save){
@@ -3392,10 +3397,12 @@ async function instrMine(){
   const [mine, dr] = await Promise.all([api('/api/classes/mine'), api('/api/drafts')]);
   const classes = mine.classes; window.__classes=classes;
   const drafts = dr.drafts || [];
-  const todo = classes.filter(c=>c.followup_status==='awaiting_instructor'||c.followup_status==='ready'
-                              ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()));
+  // Open studios and empty classes never need a note; neither does a class whose
+  // instructor said "no note from me".
+  const todo = classes.filter(c=>!c.followup_exempt && (c.followup_status==='awaiting_instructor'||c.followup_status==='ready'
+                              ||(c.followup_status==='sent_generic'&&!(c.followup_note||'').trim()&&!c.note_declined)));
   // asked once the class has finished, and only until they answer
-  const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at);
+  const feedbackDue = classes.filter(c=>c.followup_status && !c.fb_submitted_at && !c.followup_exempt);
   let paper=[], myPhone='', bgForm=''; try{ const pw=await api('/api/paperwork'); paper=pw.paperwork||[]; myPhone=pw.phone||''; bgForm=pw.bg_form_name||''; }catch(_){}
   const paperOpen=paper.filter(x=>x.status==='requested');
   let reqs=[]; try{ reqs=((await api('/api/requests')).requests||[]).filter(r=>r.status==='open'); }catch(_){}
@@ -3454,6 +3461,7 @@ async function instrMine(){
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
           <button class="btn dark" onclick="saveFollowup(${c.id},false)">${c.followup_status==='sent_generic'?'Send my note now':c.followup_status==='ready'?'Update note':'Send'}</button></div>
+        <button class="btn ghost" style="margin-top:8px" onclick="skipFollowup(${c.id})">No note from me${c.followup_status==='sent_generic'?'':' (The Gibby\'s thank-you goes on its own)'}</button>
       </div></details>`).join('')}`:''}
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
       <p class="sub" style="margin-top:2px">Optional, and a big help. Three taps and two boxes, just for The Gibby. Students never see this. It goes straight into planning next season.${feedbackDue.length>1?` <a href="#" onclick="skipAllFeedback();return false">Skip all ${feedbackDue.length}</a>`:''}</p>
@@ -4230,7 +4238,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

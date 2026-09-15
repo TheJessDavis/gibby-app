@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.77.0-instructor-todo"
+VERSION = "10.78.0-skip-note"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -211,7 +211,7 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
     except Exception: pass
-    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER"), ("supplies_ordered_at","TEXT")):
+    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER"), ("supplies_ordered_at","TEXT"), ("note_declined","INTEGER DEFAULT 0")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except Exception: pass
     try: c.execute("ALTER TABLE email_log ADD COLUMN copies INTEGER DEFAULT 0")     # copies sent to the watch address
@@ -3650,11 +3650,15 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("instructor")
             if not u: return
             rows = self._classes("WHERE c.instructor_id=? ", (u["id"],))
+            cq = db()
             for cl in rows:
+                try: cl["followup_exempt"] = followup_exempt(cq, cl)
+                except Exception: cl["followup_exempt"] = ""
                 ses = _class_sessions_local(cl)
                 cl["cal_start"] = ses[0][0].strftime("%Y%m%dT%H%M%S") if ses else None
                 cl["cal_end"] = ses[0][1].strftime("%Y%m%dT%H%M%S") if ses else None
                 d = _class_date(cl); cl["sort_key"] = d.isoformat() if d else "9999"
+            cq.close()
             rows.sort(key=lambda x: (x["sort_key"], x.get("id") or 0))
             return self.send_json({"classes": rows})
         if p == "/api/classes/all":
@@ -5986,6 +5990,16 @@ class H(http.server.BaseHTTPRequestHandler):
                           (note, new_status, now() if new_status == "ready" else None, cid))
                 c.commit(); c.close()
                 print(f"[followup] admin {u['email']} edited the note for class #{cid}")
+                return self.send_json({"ok":True, "status":new_status})
+            if b.get("skip"):
+                # "No note from me": The Gibby's thank-you goes on its own, and the
+                # card stops asking. Only before anything with a note has gone out.
+                if cur in ("sent", "sent_late"):
+                    c.close(); return self.send_json({"error":"Your note already went to the students."},409)
+                new_status = "sent_generic" if cur == "sent_generic" else "declined"
+                c.execute("UPDATE classes SET followup_note='', followup_status=?, followup_reminded_at=COALESCE(followup_reminded_at, ?), note_declined=1 WHERE id=?",
+                          (new_status, now(), cid))
+                c.commit(); c.close()
                 return self.send_json({"ok":True, "status":new_status})
             if b.get("save"):
                 c.execute("UPDATE classes SET followup_note=? WHERE id=?", (note, cid))
