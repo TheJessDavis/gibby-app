@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.78.0-skip-note"
+VERSION = "10.79.0-materials-sheet"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -211,7 +211,7 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
     except Exception: pass
-    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER"), ("supplies_ordered_at","TEXT"), ("note_declined","INTEGER DEFAULT 0")):
+    for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER"), ("supplies_ordered_at","TEXT"), ("note_declined","INTEGER DEFAULT 0"), ("supply_notes","TEXT")):
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} {typ}")
         except Exception: pass
     try: c.execute("ALTER TABLE email_log ADD COLUMN copies INTEGER DEFAULT 0")     # copies sent to the watch address
@@ -1128,6 +1128,79 @@ def daily_treasurer_if_due():
     today = datetime.date.today().isoformat()
     if _meta_get("last_treasurer_day") == today: return
     if sweep_treasurer_sheet(): _meta_set("last_treasurer_day", today)
+
+MATERIALS_SEASONS = [  # tab name, first (year, month), last (year, month)
+    ("Fall 2026",   (2026, 9),  (2026, 12)),
+    ("Spring 2027", (2027, 1),  (2027, 4)),
+    ("Summer 2027", (2027, 5),  (2027, 8)),
+]
+
+def materials_season(d):
+    if not d: return None
+    for name, lo, hi in MATERIALS_SEASONS:
+        if lo <= (d.year, d.month) <= hi: return name
+    return None
+
+def sweep_materials_sheet():
+    """'Gibby Materials' on Drive: every submitted class's supply list, one row
+    per item, on a tab per season (Fall 2026, Spring 2027, Summer 2027). The
+    whole tab is rewritten each time, so it always mirrors the app. Needs bridge
+    v19 (the sheet action's tab option)."""
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"): return None
+    c = db()
+    rows_db = [dict(r) for r in c.execute("""SELECT cl.*, u.name AS instr_name FROM classes cl JOIN users u ON u.id=cl.instructor_id
+        WHERE cl.deleted_at IS NULL AND cl.status IN ('pending','graphic_review','instructor_review','approved','incomplete')
+        ORDER BY cl.id""").fetchall()]
+    c.close()
+    headers = ["Class", "Instructor", "First session", "Status", "Who buys", "Item", "Qty", "Price each", "Line total",
+               "Link", "Materials $/student", "Planned students", "Materials notes", "Class id", "Updated"]
+    tabs = {name: [] for name, _, _ in MATERIALS_SEASONS}
+    for cl in rows_db:
+        tab = materials_season(_class_date(cl))
+        if not tab: continue
+        try: links = json.loads(cl.get("supply_links") or "[]")
+        except Exception: links = []
+        who = "Instructor (reimbursed)" if cl.get("own_materials") else "The Gibby"
+        base = [cl.get("title") or "", cl.get("instr_name") or "", cl.get("slot_date") or "", cl.get("status") or "", who]
+        tail = [cl.get("material_cost") or 0, cl.get("planned") or cl.get("max_p") or "", cl.get("supply_notes") or "", cl["id"], now()[:16]]
+        if links:
+            for x in links:
+                url = x.get("url") or ""
+                name = x.get("name") or (re.sub(r"^https?://(www\.)?", "", url).split("/")[0] if url else "")
+                qty = x.get("qty") or 0; price = x.get("price") or 0
+                tabs[tab].append(base + [name, qty, price, round(qty * price, 2), url] + tail)
+        else:
+            tabs[tab].append(base + ["(no links: instructor buys their own)" if cl.get("own_materials") else "(none listed)", "", "", "", ""] + tail)
+    link = None
+    for tab, rows in tabs.items():
+        try:
+            payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "sheet", "name": "Gibby Materials",
+                                  "tab": tab, "headers": headers, "rows": rows}).encode()
+            res = {}
+            for attempt in (1, 2, 3):      # Apps Script answers 404 now and then; try again
+                try:
+                    req = urllib.request.Request(cfg["webhook_url"], data=payload,
+                        headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+                    with urllib.request.urlopen(req, timeout=90) as r:
+                        res = json.loads(r.read().decode("utf-8", "replace"))
+                    break
+                except urllib.error.HTTPError as e:
+                    if attempt == 3: raise
+                    time.sleep(3)
+            if res.get("ok"):
+                link = res.get("link") or link
+                print(f"[materials] {tab}: {len(rows)} rows")
+            else:
+                print("[materials] bridge refused:", res)
+        except Exception as ex:
+            print(f"[materials] {tab} failed:", ex)
+    if link: _meta_set("materials_sheet_link", link)
+    return link
+
+def materials_sheet_soon():
+    """Rebuild the materials sheet in the background after a class changes."""
+    threading.Thread(target=sweep_materials_sheet, daemon=True).start()
 
 def sweep_master_sheet():
     """Keep 'Gibby Classes Master Sheet' on Google Drive current: one row per
@@ -2687,6 +2760,8 @@ def scheduler_loop():
             except Exception as e: print("[instructor-email] error:", e)
             try: send_admin_digest()
             except Exception as e: print("[digest] error:", e)
+            try: sweep_materials_sheet()
+            except Exception as e: print("[materials] sweep error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
@@ -3495,7 +3570,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 except Exception: r["lines"] = []
             c.close()
             out = {"supplies": rows}
-            if u["role"] == "admin": out["to"] = _meta_get("supply_to") or SUPPLY_TO_DEFAULT
+            if u["role"] == "admin":
+                out["to"] = _meta_get("supply_to") or SUPPLY_TO_DEFAULT
+                out["materials_sheet_link"] = _meta_get("materials_sheet_link")
             return self.send_json(out)
         if p == "/api/reimbursements":
             u = self.current_user()
@@ -4701,6 +4778,12 @@ class H(http.server.BaseHTTPRequestHandler):
                          VALUES(?,?,?,?,?,'video',0)""", (cid, u["id"], url, name, now()))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        if p == "/api/admin/materials-sheet":
+            u = self.require("admin")
+            if not u: return
+            link = sweep_materials_sheet()
+            return self.send_json({"ok": bool(link), "link": link or _meta_get("materials_sheet_link"),
+                                   "error": "" if link else "The Google bridge did not answer; try again in a minute."})
         if p == "/api/admin/supply-settings":
             u = self.require("admin")
             if not u: return
@@ -5419,8 +5502,10 @@ class H(http.server.BaseHTTPRequestHandler):
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-            c.execute("UPDATE classes SET class_time=?, supply_links=?, pay_per_student=?, planned=? WHERE id=?",
-                      (f"{cs} \u2013 {ce}", json.dumps(good_links), pps or None, planned or None, new_id))
+            c.execute("UPDATE classes SET class_time=?, supply_links=?, pay_per_student=?, planned=?, supply_notes=? WHERE id=?",
+                      (f"{cs} \u2013 {ce}", json.dumps(good_links), pps or None, planned or None,
+                       (b.get("supply_notes") or "").strip()[:1500] or None, new_id))
+            materials_sheet_soon()
             if video:
                 c.execute("UPDATE classes SET video=? WHERE id=?", (video, new_id))
             if faq:

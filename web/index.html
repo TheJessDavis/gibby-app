@@ -88,6 +88,7 @@
   .clsrow .rowt b{display:block;font-size:14.5px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .clsrow .rowt span{font-size:12px;color:rgba(23,21,18,.62)}
   .rowchev{font-size:22px;line-height:1;color:rgba(23,21,18,.45);transition:transform .15s;flex:none}
+  .xdismiss{flex:none;width:30px;height:30px;border-radius:50%;border:1.5px solid var(--line);background:var(--white);font-size:18px;line-height:1;color:var(--ink-soft);cursor:pointer;padding:0}
   .clsrow[open]>summary .rowchev, #pastwrap[open]>summary .rowchev{transform:rotate(90deg)}
   .clsrow>.clscard, .clsrow>.card{margin:0 8px 8px;box-shadow:none}
   .foldsum{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;font-weight:800;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:rgba(23,21,18,.6);padding:10px 12px;border-radius:12px;background:#EFE9DC}
@@ -821,25 +822,31 @@ function pfPickPhoto(ev){
 }
 /* ---------------- first-login guided tour ---------------- */
 // Bump this whenever the tour content changes; everyone then sees it once more.
-const TOUR_VERSION = 2;
+const TOUR_VERSION = 3;
 const TOUR_INSTRUCTOR = [
-  ['\u{1F44B}','Welcome to the Gibby Class Manager','This is where you propose classes, sign your contract, and watch sign-ups roll in. Here is the one-minute lay of the land.', null, ''],
-  ['\u{1F5D3}\uFE0F','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. The time either side of your class is yours for setup and cleanup.', '#bnav [data-tab="open"]', 'The Book tab, bottom left'],
-  ['\u{1F4DD}','One form, then we take it from here','Describe your class once: photo, price, ages, description (40 to 75 words). Start from a template or copy a past class so repeats take thirty seconds. When you submit, The Gibby reviews it.', '#bnav [data-tab="open"]', 'The form opens after you pick a time in Book'],
-  ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Nothing for you to post.', '#bnav [data-tab="mine"]', 'Watch its status in My classes'],
-  ['\u{1F58A}\uFE0F','Sign your contract in the app','After approval, My classes shows a Read-and-sign button. Sign with your finger and a PDF copy lands in your email.', '#bnav [data-tab="mine"]', 'My classes, on the class card'],
-  ['\u{1F3A8}','My classes is your home base','Sign-ups appear there as people register (synced from Eventbrite hourly). You will get your roster by email the evening before class.', '#bnav [data-tab="mine"]', 'The My classes tab'],
-  ['\u{1F393}','Learn: take a colleague\'s class free','The Learn tab lists classes other teaching artists have opened up. Resident teaching artists take them free, as full participants, with no paying seat used. Your own classes can be opened up too, when you submit or later from My classes.', '#bnav [data-tab="audit"]', 'The Learn tab, bottom bar'],
-  ['\u{1F464}','One tip: fill in your profile','Your photo and skills show on your classes, and your address pre-fills every contract so you never type it twice. That is the tour!', '#bnav [data-tab="profile"]', 'The Profile tab, bottom right'],
+  ['\u{1F44B}','Welcome to the Gibby Class Manager','This is where you propose classes, sign your contract, send your students a thank-you, and watch sign-ups roll in. Here is the two-minute lay of the land.', null, ''],
+  ['✅','My classes starts with your to-do list','Anything that needs your hand sits at the top: a contract to sign, a class sent back to fix, paperwork The Gibby asked for, a note to write. Tap a line and it takes you straight there.', '#bnav [data-tab="mine"]', 'The My classes tab'],
+  ['\u{1F5D3}️','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. For a course, tick the weeks; untick any date you need to skip. The time either side of your class is yours for setup and cleanup.', '#bnav [data-tab="open"]', 'The Book tab, bottom left'],
+  ['\u{1F4DD}','One form, priced from what you hope to make','Describe the class once: photo, ages, a 40 to 75 word description. Tell us what you hope to make per student and the ticket price generates itself. Paste a link, price and quantity for each supply, with as much detail as you can, or tick that you are buying your own. Save a draft any time.', '#bnav [data-tab="open"]', 'After you pick a time'],
+  ['\u{1F4CC}','Wanted: classes The Gibby is looking for','The Wanted tab lists classes The Gibby would love someone to teach. Filter by skill, tap Claim, and the title, description and details are filled in for you. You just pick the time.', '#bnav [data-tab="wanted"]', 'The Wanted tab'],
+  ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Then My classes shows a Read-and-sign button for your contract. Sign with your finger and a PDF lands in your email.', '#bnav [data-tab="mine"]', 'My classes, in the to-do list'],
+  ['\u{1F4E9}','After class: a note, photos, and a personal code for every student','The morning after your class you are asked for a short note. Add up to five photos from class. Both go to your students in the thank-you email, in your name, with a one-time discount code for each of them. Skip the note if you like; The Gibby’s thank-you still goes.', '#bnav [data-tab="mine"]', 'My classes, Follow-up notes'],
+  ['\u{1F4E7}','Email your students any time','Email my students, at the top of My classes, sends a branded email in your name with your links and sign-off. Your next three classes are offered automatically, and replies come straight to you.', '#bnav [data-tab="mine"]', 'Email my students, top of My classes'],
+  ['\u{1F9FA}','Need something bought?','Ask the Gibby to order, also at the top of My classes: pick the class, paste a link, say how many. It goes to the person who orders and you hear when it is ready.', '#bnav [data-tab="mine"]', 'Ask the Gibby to order'],
+  ['\u{1F393}','Learn: take a colleague’s class free','The Learn tab lists classes other teaching artists have opened up. Resident teaching artists take them free, as full participants. Your own classes can be opened too, from the class card.', '#bnav [data-tab="audit"]', 'The Learn tab'],
+  ['\u{1F464}','Last tip: fill in your profile','Photo, phone, skills, social links and how you sign off. Your links and sign-off go on every email you send; your skills match you with Wanted classes; your address pre-fills every contract. That is the tour!', '#bnav [data-tab="profile"]', 'The Profile tab, bottom right'],
 ];
 const TOUR_ADMIN = [
-  ['\u{1F44B}','Welcome, admin','You approve classes and the app does the posting. Here is the one-minute tour.', null, ''],
-  ['\u2705','Approvals is the engine room','New submissions wait there. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the instructor their contract.', '#bnav [data-tab="approvals"]', 'The Approvals tab, bottom bar'],
-  ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes: the dashboard surfaces them. Emails to students are never sent without a person pressing the button.', '#bnav [data-tab="dashboard"]', 'The Home tab, bottom left'],
-  ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted) and an instructor payouts ledger with mark-as-paid.', '#bnav [data-tab="more"]', 'Under More, then Money'],
-  ['\u{1F393}','The Learn tab','Instructors can open a class to other teaching artists, who then take it free. Those classes show on the instructors\' Learn tab, and a class card in Approvals says when one allows it.', '#bnav [data-tab="approvals"]', 'On class cards in Approvals'],
-  ['\u22EF','Everything else lives under More','Slots, templates, marketing announcements, connections, backups, the audit trail. The Connections tab also has Back up now and health checks.', '#bnav [data-tab="more"]', 'The More tab, bottom right'],
-  ['\u2B50','Handy tricks','Any class card: save it as a template, print a flyer with a QR code, or download the signed contract PDF. Submitting for another instructor? The form has a picker. That is the tour!', '#bnav [data-tab="approvals"]', 'Any class card, e.g. in Approvals'],
+  ['\u{1F44B}','Welcome, admin','You approve classes and the app does the posting, the emailing and the paperwork chasing. Here is the two-minute tour.', null, ''],
+  ['✅','Approvals is the engine room','New submissions wait there with the instructor’s per-student target, ticket, and supply list. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the contract. Send back with a note and the instructor fixes and resubmits.', '#bnav [data-tab="approvals"]', 'The Approvals tab'],
+  ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes, order requests waiting. Post a class request from here too. Nothing posts to Facebook or goes to students without a person pressing the button.', '#bnav [data-tab="dashboard"]', 'The Home tab, bottom left'],
+  ['\u{1F465}','People: paperwork in one place','Each instructor shows W-9, background check and phone status. Request paperwork picks who to ask (new members by default); they upload in the app, a reminder follows in three days, and files land in the Gibby Paperwork folder on Drive.', '#bnav [data-tab="people"]', 'The People tab'],
+  ['\u{1F4CC}','Requests: what you want taught','Under More > Requests, post a class with a description and skill tags. Post it quietly or email everyone. Instructors claim it from their Wanted tab and the proposal arrives pre-filled.', '#bnav [data-tab="more"]', 'More, then Requests'],
+  ['\u{1F9FA}','Supplies and the Materials spreadsheet','Every class’s supply links compile into the Gibby Materials spreadsheet, one tab per season. Instructors’ order requests land under More > Supplies and are emailed to the ordering address; mark them Ordered and Ready.', '#bnav [data-tab="more"]', 'More, then Supplies'],
+  ['\u{1F4E9}','After-class emails run themselves','Two mornings after a class, students get a thank-you with the instructor’s note and photos, review links, and a personal one-time discount code. You can edit the note before it goes and see every copy. Open studios and empty classes are skipped.', '#bnav [data-tab="approvals"]', 'Approvals, After-class emails'],
+  ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted), an instructor payouts ledger with mark-as-paid, and reimbursement requests.', '#bnav [data-tab="more"]', 'Under More, then Money'],
+  ['\u{1F4E3}','Marketing waits for your yes','Photos instructors upload become Facebook post drafts you approve or decline. Instructor emails and announcements go out branded, and you get a copy of every email the app sends.', '#bnav [data-tab="more"]', 'More, then Marketing'],
+  ['⋯','Everything else lives under More','Slots, templates, connections (review links, thank-you settings, deadline reminders), backups, the email log and the audit trail. That is the tour!', '#bnav [data-tab="more"]', 'The More tab, bottom right'],
 ];
 let TOUR_I = 0, TOUR_STEPS_CUR = null;
 function startTour(){
@@ -1505,6 +1512,9 @@ async function adminSupplies(){
        :`<button class="btn ghost" onclick="supplyAct(${s.id},'requested')">Reopen</button><span></span>`}</div></div>`;
   $('#tab').innerHTML=`<h2>Order <em>requests</em></h2>
     <p class="sub">Instructors ask from My classes: the class, a link to the exact item and how many. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
+    <div class="card"><h3 style="font-size:1rem;margin:0 0 4px">Materials spreadsheet</h3>
+      <div class="meta">Every class's supply list, one tab per season (Fall 2026, Spring 2027, Summer 2027), rebuilt from the app every hour and after each submission.</div>
+      <div class="two" style="margin-top:8px">${d.materials_sheet_link?`<a class="btn dark" style="text-align:center" href="${esc(d.materials_sheet_link)}" target="_blank" rel="noopener noreferrer">Open Gibby Materials</a>`:'<span class="muted">Not built yet.</span>'}<button class="btn ghost" onclick="rebuildMaterials()">Rebuild now</button></div></div>
     <div class="card"><label style="margin-top:0">New requests are emailed to</label>
       <input id="sup_to" value="${esc(d.to||'')}" placeholder="mtruban@theeverett.com">
       <div class="hint">Comma-separated. Admins are always included, and Jess gets her usual copy.</div>
@@ -1571,6 +1581,10 @@ async function sendToOrdering(id, again){
   try{ await api('/api/classes/'+id+'/order-supplies','POST',{again:!!again}); alert('Sent to ordering.'); }
   catch(e){ alert(e.message); return; }
   location.reload();
+}
+async function rebuildMaterials(){
+  try{ const r=await api('/api/admin/materials-sheet','POST',{}); if(r.ok){ alert('Materials spreadsheet rebuilt.'); adminSupplies(); } else alert(r.error||'Could not rebuild.'); }
+  catch(e){ alert(e.message); }
 }
 async function saveSupplyTo(){
   try{ const r=await api('/api/admin/supply-settings','POST',{to:$('#sup_to').value}); alert('Saved. New requests go to: '+(r.to||'the admins only')); }
@@ -2530,8 +2544,8 @@ function cardCls(c){
         if(!sl.length) return c.own_materials?'':'';
         const tot=sl.reduce((s,x)=>s+(+x.price||0)*(+x.qty||0),0);
         return `<div class="meta" style="margin-top:6px"><b>Supplies for The Gibby to buy</b> (${money(tot)}${c.planned?` for ${c.planned} students`:''}):${sl.map(x=>`<div>\u2022 ${x.qty} \u00d7 ${money(x.price)}${x.name?' '+esc(x.name)+' \u00b7':''} <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url.replace(/^https?:\/\/(www\.)?/,'').slice(0,48))}</a></div>`).join('')}
-          ${actingRole()==='admin' ? (c.supplies_ordered_at ? `<div style="margin-top:6px;color:#3F7A32;font-weight:800">\u{1F9FA} Sent to ordering ${esc(c.supplies_ordered_at.slice(0,10))} <a href="#" onclick="sendToOrdering(${c.id},true);return false" style="font-weight:600">send again</a></div>`
-            : `<button class="btn ghost" style="margin-top:8px" onclick="sendToOrdering(${c.id},false)">\u{1F9FA} Send these to ordering</button>`) : ''}</div>`; })()}
+          ${c.supply_notes?`<div style="margin-top:4px"><i>Notes:</i> ${esc(c.supply_notes)}</div>`:''}
+          ${actingRole()==='admin' ? `<div style="margin-top:4px;color:#6b665c">Compiled in the Materials spreadsheet (More > Supplies).</div>` : ''}</div>`; })()}
     ${c.pay_per_student?`<div class="meta" style="margin-top:6px">Instructor's target: ${money(c.pay_per_student)} per student</div>`:''}
     ${c.links&&c.links.trim()?`<div class="meta" style="margin-top:6px">Links:${c.links.split(/\r?\n/).filter(l=>l.trim()).map(l=>` <a href="${esc(l.trim())}" target="_blank" rel="noopener noreferrer">${esc(l.trim())}</a>`).join('')}</div>`:''}
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
@@ -3466,7 +3480,7 @@ async function instrMine(){
     ${feedbackDue.length?`<label style="margin-top:18px">How did it go? (${feedbackDue.length})</label>
       <p class="sub" style="margin-top:2px">Optional, and a big help. Three taps and two boxes, just for The Gibby. Students never see this. It goes straight into planning next season.${feedbackDue.length>1?` <a href="#" onclick="skipAllFeedback();return false">Skip all ${feedbackDue.length}</a>`:''}</p>
       ${feedbackDue.map((c,i)=>`<details class="clsrow"${i===0&&feedbackDue.length===1?' open':''}>
-        <summary><div class="rowt"><b>${esc(c.title)}</b><span>${esc(c.slot_date||'')} · ${c.enrolled} of ${c.max_p} booked</span></div><span class="rowchev">\u203A</span></summary>
+        <summary><div class="rowt"><b>${esc(c.title)}</b><span>${esc(c.slot_date||'')} · ${c.enrolled} of ${c.max_p} booked</span></div><button class="xdismiss" title="Not for this one" onclick="event.preventDefault();event.stopPropagation();skipFeedback(${c.id})">\u00d7</button><span class="rowchev">\u203A</span></summary>
         <div class="card">
         <label style="margin-top:10px">Would you teach this again?</label>
         <div class="seg" id="fba${c.id}"><button data-v="no" onclick="segPick(this)">No</button><button data-v="maybe" onclick="segPick(this)">Maybe</button><button class="on" data-v="yes" onclick="segPick(this)">Yes</button></div>
@@ -3629,6 +3643,7 @@ function applyDraft(p){
   if(p.own_materials) set('#c_mat',p.material_cost);
   try{ let sl=p.supply_links; if(typeof sl==='string') sl=JSON.parse(sl||'[]');
     const box=$('#f_supplies'); if(box && sl && sl.length){ box.innerHTML=''; sl.forEach(x=>supAdd(x.url,x.price,x.qty,x.name)); } }catch(_){}
+  set('#f_supnotes', p.supply_notes);
   if(p.pay_per_student) set('#c_pps', p.pay_per_student);
   else if(p.instructor_pay && (p.planned||p.max_p) && !p.waives_pay) set('#c_pps', Math.round(p.instructor_pay/(p.planned||p.max_p)));
   set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
@@ -3818,12 +3833,14 @@ function openForm(slot, draftPayload){
 
     <div class="fsec"><span>4</span><b>Pricing</b></div>
     <label style="margin-top:0">Supplies The Gibby needs to buy</label>
-    <div class="hint">Paste a link to each item with its price and how many you need. The total is spread across your planned students and built into the ticket price.</div>
+    <div class="hint">One line per item: paste the link to the exact product, the price, how many, and say what it is. Be as specific as you can (brand, size, color, count per pack). Everything here compiles straight into The Gibby's Materials spreadsheet for the season, so the more detail, the fewer questions later. The total is spread across your planned students and built into the ticket price.</div>
     <div id="f_supplies"></div>
     <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="supAdd()">+ Add another link</button>
     <label class="chk" style="margin:12px 0 0;display:block"><input type="checkbox" id="f_own" onchange="ownToggle()"> I am purchasing all of my class's supplies and I estimate it to be
       $<input id="c_mat" type="number" min="0" step="0.5" value="" oninput="calc()" style="width:84px;display:inline-block;margin:0 4px;padding:6px 8px"> per student</label>
     <div class="hint" id="matnote"></div>
+    <label>Anything else about materials? <span style="color:var(--ink-soft);font-weight:600">(optional, but helpful)</span></label>
+    <textarea id="f_supnotes" rows="2" placeholder="Things already in the studio you will use, substitutions that are fine, what to buy first if money is tight, prep needed before class..."></textarea>
 
     <label>What do you hope to make per student? ($)</label>
     <input id="c_pps" type="number" min="0" step="1" value="15" oninput="calc('pay')">
@@ -3920,7 +3937,7 @@ function supAdd(url, price, qty, name){
     <input class="sup_price" type="number" min="0" step="0.01" placeholder="$ each" value="${price!=null?esc(price):''}" oninput="calc()" style="padding-left:8px;padding-right:4px">
     <input class="sup_qty" type="number" min="1" step="1" placeholder="qty" value="${qty!=null?esc(qty):''}" oninput="calc()" style="padding-left:8px;padding-right:4px;text-align:center">
     <button type="button" class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove();calc()" aria-label="Remove">\u00d7</button>
-    <input class="sup_name" placeholder="What is it? (optional, e.g. 11x14 canvases)" value="${esc(name||'')}" style="grid-column:1 / span 4;margin-top:0">`;
+    <input class="sup_name" placeholder="What is it? e.g. Blick Studio canvas 11x14, pack of 12" value="${esc(name||'')}" style="grid-column:1 / span 4;margin-top:0">`;
   box.appendChild(d);
 }
 function collectSupplies(){
@@ -4111,6 +4128,7 @@ function collectForm(){
     needs_volunteer: kid && seg('#f_vol')==='yes',
     own_materials: $('#f_own').checked, material_cost: materialsPerStudent(Math.max(1,+$('#c_plan').value||1)),
     supply_links: collectSupplies(), planned:+$('#c_plan').value||0, pay_per_student:+($('#c_pps')?$('#c_pps').value:0)||0,
+    supply_notes: $('#f_supnotes') ? $('#f_supnotes').value.trim() : '',
     alcohol: seg('#f_alc')==='yes', audit_ok: seg('#f_audit')==='yes',
     max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
@@ -4238,7 +4256,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
