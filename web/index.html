@@ -77,6 +77,18 @@
   #tab .clscard.cls-back{background:var(--pink)}
   #tab .clscard.cls-off{background:#E9E4D8}
   .clstop{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .qhint{display:inline-block;margin:2px 0 6px}
+  .qhint>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);background:var(--white);font-size:12px;font-weight:800;color:var(--ink-soft)}
+  .qhint>summary::-webkit-details-marker{display:none}
+  .qhint[open]>summary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .qhint>div{font-size:12.5px;color:var(--ink-soft);line-height:1.45;margin:6px 0 2px;padding:8px 10px;background:var(--cream);border-radius:10px}
+  .morefold{margin:14px 0 6px}
+  .morefold>summary{list-style:none;cursor:pointer;background:#EFE9DC;border-radius:14px;padding:12px 14px;font-weight:800;font-size:14px}
+  .morefold>summary::-webkit-details-marker{display:none}
+  .morefold>summary small{display:block;font-weight:600;font-size:12px;color:var(--ink-soft);margin-top:2px}
+  .morefold>summary::after{content:"\203A";float:right;font-size:22px;line-height:1;color:rgba(23,21,18,.45);transition:transform .15s}
+  .morefold[open]>summary::after{transform:rotate(90deg)}
+  .morefold>summary+*{margin-top:12px}
   .todoline{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:10px 6px;font:inherit;color:var(--ink);cursor:pointer}
   .todoline:last-child{border-bottom:0} .todoline b{flex:1;font-size:14px;line-height:1.3} .todoline>span:first-child{font-size:18px}
   .clsrow{border-radius:14px;margin-bottom:8px;overflow:hidden;background:#EFE9DC}
@@ -3572,6 +3584,10 @@ function classList(classes){
     ${up.length?`<label style="margin-top:14px">Coming up (${up.length})</label><p class="sub" style="margin-top:2px">Tap a class to see everything about it.</p>${up.map(row).join('')}`:''}
     ${past.length?`<details id="pastwrap" style="margin-top:14px"><summary class="foldsum">Past and cancelled (${past.length}) <span class="rowchev">\u203A</span></summary>${past.map(row).join('')}</details>`:''}`;
 }
+function openMore(sel){
+  const d=$('#fmore'); if(d) d.open=true;
+  const el=sel&&$(sel); if(el){ el.scrollIntoView({behavior:'smooth',block:'center'}); }
+}
 function jumpTo(sel){
   const el=document.querySelector(sel); if(!el) return;
   let d=el.closest('details'); while(d){ d.open=true; d=d.parentElement && d.parentElement.closest('details'); }
@@ -3726,28 +3742,28 @@ function openForm(slot, draftPayload){
       <div class="bb-sub">${slot.room?esc(slot.room)+' · ':''}this window includes your setup and cleanup time</div>
     </div>
 
-    <div class="fsec"><span>1</span><b>The class</b></div>
     <label style="margin-top:0">When does the class itself run?</label>
     <div class="two">
       <div><select id="f_cstart" onchange="classTimeChanged()">${timeOpts(slot.start, slot.end, 'start')}</select></div>
       <div><select id="f_cend" onchange="classTimeChanged()">${timeOpts(slot.start, slot.end, 'end')}</select></div></div>
-    <div class="hint">This is what students are told and what goes on Eventbrite. The time either side
-      of it is yours for setting up and clearing away.</div>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>This is what students are told and what goes on Eventbrite. The time either side
+      of it is yours for setting up and clearing away.</div></details>
     ${slot.series?`<div class="card" style="margin-bottom:14px" id="fsessions">${sessionCardHTML(slot)}</div>`:''}
     <div class="err" id="ferr"></div>
     <div class="two">
       <div><label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select></div>
       <div><label>Or copy a past class</label><select id="f_prev" onchange="applyPrev()"><option value="">Pick one&hellip;</option></select></div>
     </div>
-    <div class="hint">Copying brings over everything except the date and times, so a repeat class is a
-      thirty-second job. Adjust whatever changed.</div>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Copying brings over everything except the date and times, so a repeat class is a
+      thirty-second job. Adjust whatever changed.</div></details>
     ${ME&&ME.role==='admin'?`<label>Who is teaching this class?</label>
     <select id="f_instr" onchange="instrPickChanged()"><option value="">Me (${esc(ME.name)})</option></select>
     <div id="f_newinstr" style="display:none">
       <div class="two" style="margin-top:8px"><input id="f_ni_name" placeholder="Their full name"><input id="f_ni_email" placeholder="their@email.com"></div>
-      <div class="hint">Their email is required: it becomes their sign-in and where their contract goes. They get a welcome email with a link to set their password.</div>
+      <details class="qhint"><summary aria-label="Help">?</summary><div>Their email is required: it becomes their sign-in and where their contract goes. They get a welcome email with a link to set their password.</div></details>
     </div>
-    <div class="hint">Submitting for someone else? Pick them here and the class, contract and emails all go to them.</div>`:''}
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Submitting for someone else? Pick them here and the class, contract and emails all go to them.</div></details>`:''}
+    <div class="fsec"><span>1</span><b>The class</b></div>
     <label>Class title</label><input id="f_title">
 
     <label>One-line teaser</label>
@@ -3765,22 +3781,50 @@ function openForm(slot, draftPayload){
       the night, and who it suits.</div></div>
     </details>
 
-    ${slot.room
-      ? `<input type="hidden" id="f_room" value="${esc(slot.room)}">`
-      : `<label>Room</label>
-         <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>`}
-
-    <label>Class length</label>
-    <!-- Derived from the class start/end above so the two can never disagree.
-         Kept as a hidden input so everything that reads #f_len still works. -->
-    <input type="hidden" id="f_len">
-    <div class="hint" id="f_lenout" style="margin-top:0">Set your class start and end times above.</div>
-
     <div class="fsec"><span>2</span><b>Who it&rsquo;s for</b></div>
     <label style="margin-top:0">Age range (choose all that apply)</label>
     <div class="chkgrid" id="f_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
     <div class="hint" id="f_agepreview"></div>
 
+    <div class="fsec"><span>3</span><b>The photo</b></div>
+    <label style="margin-top:0">Photo for the graphic</label>
+    <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
+    <input id="f_file" type="file" accept="image/*" class="hidden" onchange="onPhoto(event)">
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Bright, close-up, and no text on the image. The poster adds the words, so a busy
+      photo fights the headline. A finished piece or hands mid-make works best.</div></details>
+
+    <div class="fsec"><span>4</span><b>Pricing</b></div>
+    <label>How do students pay?</label>
+    <div class="seg" id="f_pricemode">
+      <button class="on" data-v="ticket" onclick="segPick(this);setDonation(false)">A ticket price</button>
+      <button data-v="donation" onclick="segPick(this);setDonation(true)">Donation-based</button></div>
+    <div class="hint" id="donhint" style="display:none">Students pay what they want at checkout (Eventbrite’s donation ticket). No ticket price is set; your pay is a flat fee agreed with The Gibby.</div>
+    <label id="ppslab">What do you hope to make per student? ($)</label>
+    <input id="c_pps" type="number" min="0" step="1" value="15" oninput="calc('pay')">
+    <div class="hint" id="ppshint">The ticket price generates from this: your amount, plus materials, with The Gibby's share on top. Or type a ticket price at the bottom and we work it back.</div>
+    <input type="checkbox" id="f_donate" onchange="donateToggle()" style="display:none">
+    <input type="hidden" id="c_pay">
+    <label>Planned students</label><input id="c_plan" type="number" value="12" oninput="calc()">
+    <div class="calc">
+      <div class="o"><span id="o_tlab">Recommended ticket${slot.series?' <small>(whole course)</small>':''}</span><b class="hero" id="o_t">$0</b></div>
+      <div class="o"><span>Materials per student</span><b id="o_m">$0</b></div>
+      <div class="o"><span>Your pay @ planned${slot.series?' <small>(whole course)</small>':''}</span><b id="o_p">$0</b></div>
+    </div>
+    ${slot.series?`<details class="qhint"><summary aria-label="Help">?</summary><div>One ticket covers all ${slot.weeks} sessions. Set the price for the full course, not per week.</div></details>`:''}
+    <div class="hint" id="matline"></div>
+    <details id="fmore" class="morefold"><summary>Add more details <small>supplies, students, links, FAQ, video, pay details</small></summary>
+    <label style="margin-top:0">Supplies</label>
+    <label style="margin-top:0">Supplies The Gibby needs to buy</label>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>One line per item: paste the link to the exact product, the price, how many, and say what it is. Be as specific as you can (brand, size, color, count per pack). Everything here compiles straight into The Gibby's Materials spreadsheet for the season, so the more detail, the fewer questions later. The total is spread across your planned students and built into the ticket price.</div></details>
+    <div id="f_supplies"></div>
+    <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="supAdd()">+ Add another link</button>
+    <label class="chk" style="margin:12px 0 0;display:block"><input type="checkbox" id="f_own" onchange="ownToggle()"> I am purchasing all of my class's supplies and I estimate it to be
+      $<input id="c_mat" type="number" min="0" step="0.5" value="" oninput="calc()" style="width:84px;display:inline-block;margin:0 4px;padding:6px 8px"> per student</label>
+    <div class="hint" id="matnote"></div>
+    <label>Anything else about materials? <span style="color:var(--ink-soft);font-weight:600">(optional, but helpful)</span></label>
+    <textarea id="f_supnotes" rows="2" placeholder="Things already in the studio you will use, substitutions that are fine, what to buy first if money is tight, prep needed before class..."></textarea>
+
+    <label>Students</label>
     <div id="f_volwrap" class="hidden">
       <label>Do you need a volunteer to assist with this class?</label>
       <div class="seg" id="f_vol"><button class="on" data-v="no" onclick="segPick(this)">No</button><button data-v="yes" onclick="segPick(this)">Yes</button></div>
@@ -3793,7 +3837,7 @@ function openForm(slot, draftPayload){
     <label>Can other resident teaching artists &ldquo;audit&rdquo; this class?</label>
     <div class="seg" id="f_audit"><button class="on" data-v="no" onclick="segPick(this)">No</button>
       <button data-v="yes" onclick="segPick(this)">Yes</button></div>
-    <div class="hint">Say yes and your class is listed on the Learn tab for the Gibby's other teaching artists to take free, as full participants. It does not use a paying seat. You can change this any time from My classes.</div>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Say yes and your class is listed on the Learn tab for the Gibby's other teaching artists to take free, as full participants. It does not use a paying seat. You can change this any time from My classes.</div></details>
 
     <label>Anything students need to bring or do before class? <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <textarea id="f_pre" placeholder="e.g. Email a photo of your pet at least 3 days before class."></textarea>
@@ -3810,68 +3854,47 @@ function openForm(slot, draftPayload){
       <option value="5">5 days before</option>
       <option value="7">1 week before</option>
       <option value="14">2 weeks before</option></select>
-    <div class="hint">Eventbrite stops selling at this point, so your headcount is settled before you shop for materials.</div>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Eventbrite stops selling at this point, so your headcount is settled before you shop for materials.</div></details>
 
-    <div class="fsec"><span>3</span><b>The poster</b></div>
-    <label style="margin-top:0">Photo for the graphic</label>
-    <div class="photo" id="f_photo" onclick="document.getElementById('f_file').click()">Tap to add a class photo</div>
-    <input id="f_file" type="file" accept="image/*" class="hidden" onchange="onPhoto(event)">
-    <div class="hint">Bright, close-up, and no text on the image. The poster adds the words, so a busy
-      photo fights the headline. A finished piece or hands mid-make works best.</div>
+    ${slot.room
+      ? `<input type="hidden" id="f_room" value="${esc(slot.room)}">`
+      : `<label>Room</label>
+         <select id="f_room"><option value="Large Room"${slot.room==='Studio'?'':' selected'}>Large Room (holds 65)</option><option value="Studio"${slot.room==='Studio'?' selected':''}>Studio (holds 24)</option></select>`}
 
+    <label>Class length</label>
+    <!-- Derived from the class start/end above so the two can never disagree.
+         Kept as a hidden input so everything that reads #f_len still works. -->
+    <input type="hidden" id="f_len">
+    <div class="hint" id="f_lenout" style="margin-top:0">Set your class start and end times above.</div>
+
+    <label>Links, video and FAQ</label>
     <label>Links <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
     <textarea id="f_links" placeholder="Add any links, one per line: supply lists, inspiration, examples, your portfolio."></textarea>
     <label>Video <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
-    <div class="hint">Record on your phone and upload it straight from your camera roll (MP4 or iPhone video, up to 80MB). It plays on The Gibby's website, and the Eventbrite page links to it.</div>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Record on your phone and upload it straight from your camera roll (MP4 or iPhone video, up to 80MB). It plays on The Gibby's website, and the Eventbrite page links to it.</div></details>
     <input type="file" id="f_vfile" accept="video/mp4,video/quicktime,video/*" style="display:none" onchange="videoPick(event)">
     <div id="vstat" class="hint"></div>
     <button type="button" class="btn ghost" id="vbtn" onclick="document.getElementById('f_vfile').click()">Upload a video</button>
     <label>FAQ <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
-    <div class="hint">Answer common questions once: "Do I need experience?", "What should I wear?", "Can I bring my kid?" They appear on the Eventbrite page under "Good to know".</div>
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Answer common questions once: "Do I need experience?", "What should I wear?", "Can I bring my kid?" They appear on the Eventbrite page under "Good to know".</div></details>
     <div id="faqlist"></div>
     <button type="button" class="btn ghost" style="margin-top:6px" onclick="faqAdd()">+ Add a question</button>
 
-    <div class="fsec"><span>4</span><b>Pricing</b></div>
-    <label style="margin-top:0">Supplies The Gibby needs to buy</label>
-    <div class="hint">One line per item: paste the link to the exact product, the price, how many, and say what it is. Be as specific as you can (brand, size, color, count per pack). Everything here compiles straight into The Gibby's Materials spreadsheet for the season, so the more detail, the fewer questions later. The total is spread across your planned students and built into the ticket price.</div>
-    <div id="f_supplies"></div>
-    <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="supAdd()">+ Add another link</button>
-    <label class="chk" style="margin:12px 0 0;display:block"><input type="checkbox" id="f_own" onchange="ownToggle()"> I am purchasing all of my class's supplies and I estimate it to be
-      $<input id="c_mat" type="number" min="0" step="0.5" value="" oninput="calc()" style="width:84px;display:inline-block;margin:0 4px;padding:6px 8px"> per student</label>
-    <div class="hint" id="matnote"></div>
-    <label>Anything else about materials? <span style="color:var(--ink-soft);font-weight:600">(optional, but helpful)</span></label>
-    <textarea id="f_supnotes" rows="2" placeholder="Things already in the studio you will use, substitutions that are fine, what to buy first if money is tight, prep needed before class..."></textarea>
-
-    <label>How do students pay?</label>
-    <div class="seg" id="f_pricemode">
-      <button class="on" data-v="ticket" onclick="segPick(this);setDonation(false)">A ticket price</button>
-      <button data-v="donation" onclick="segPick(this);setDonation(true)">Donation-based</button></div>
-    <div class="hint" id="donhint" style="display:none">Students pay what they want at checkout (Eventbrite’s donation ticket). No ticket price is set; your pay is a flat fee agreed with The Gibby.</div>
-    <label id="ppslab">What do you hope to make per student? ($)</label>
-    <input id="c_pps" type="number" min="0" step="1" value="15" oninput="calc('pay')">
-    <div class="hint" id="ppshint">The ticket price generates from this: your amount, plus materials, with The Gibby's share on top. Or type a ticket price at the bottom and we work it back.</div>
+    <label>Pay details</label>
     <label>How is your pay worked out?</label>
     <div class="seg" id="f_paym">
       <button class="on" data-v="flat" onclick="segPick(this);calc()">Flat fee</button>
       <button data-v="split" onclick="segPick(this);calc()">60% of ticket sales</button></div>
-    <div class="hint">Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
-      ticket sales after materials, so it rises and falls with enrollment.</div>
-    <input type="checkbox" id="f_donate" onchange="donateToggle()" style="display:none">
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
+      ticket sales after materials, so it rises and falls with enrollment.</div></details>
     <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_free" onchange="calc()"> I'm donating my teaching time for this class</label>
     <div class="hint" id="freenote" style="display:none"></div>
     <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
-    <div class="hint">Optional. A deeper tool with material lists, class tiers and what-ifs for low
-      enrollment. It can fill the numbers in for you.</div>
-    <input type="hidden" id="c_pay">
-    <label>Planned students</label><input id="c_plan" type="number" value="12" oninput="calc()">
-    <div class="calc">
-      <div class="o"><span id="o_tlab">Recommended ticket${slot.series?' <small>(whole course)</small>':''}</span><b class="hero" id="o_t">$0</b></div>
-      <div class="o"><span>Materials per student</span><b id="o_m">$0</b></div>
-      <div class="o"><span>Your pay @ planned${slot.series?' <small>(whole course)</small>':''}</span><b id="o_p">$0</b></div>
-    </div>
-    ${slot.series?`<div class="hint">One ticket covers all ${slot.weeks} sessions. Set the price for the full course, not per week.</div>`:''}
+    <details class="qhint"><summary aria-label="Help">?</summary><div>Optional. A deeper tool with material lists, class tiers and what-ifs for low
+      enrollment. It can fill the numbers in for you.</div></details>
     <div class="two" style="margin-top:12px"><div><label style="margin-top:0">Ticket price ($)</label><input id="f_ticket" type="number" oninput="calc('ticket')"></div>
       <div><label style="margin-top:0">Your pay ($)</label><input id="f_pay" type="number" oninput="this.dataset.t=1"></div></div>
+    </details>
     <div class="hint" id="draftnote">${DRAFT_ID?'Resumed from a saved draft.':''}</div>
     <div id="todobar"></div>
     <button class="btn ghost" style="margin-top:6px" onclick="saveDraft()">Save as draft</button>
@@ -3979,6 +4002,11 @@ function calc(dir){
     ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is added to your pay.`
     : (suppliesTotal()>0 ? `${money(suppliesTotal())} of supplies across ${plan} students is ${money(mat)} per student, built into the ticket.`
                          : 'Add at least one link with a price and quantity, or tick the box if you are buying the supplies yourself.');
+  const ml=$('#matline');
+  if(ml) ml.innerHTML = own
+    ? `Materials: you are buying them (${money(mat)} per student, reimbursed). <a href="#" onclick="openMore('#f_own');return false">Change</a>`
+    : (suppliesTotal()>0 ? `Materials: ${validSupplies().length} item${validSupplies().length===1?'':'s'}, ${money(suppliesTotal())} total, ${money(mat)} per student. <a href="#" onclick="openMore('#f_supplies');return false">Edit</a>`
+                         : `<b>Materials needed:</b> add supply links, or tick that you are buying them yourself. <a href="#" onclick="openMore('#f_supplies');return false">Add supplies</a>`);
   const fn=$('#freenote');
   if(fn){
     fn.style.display = free ? '' : 'none';
@@ -4095,7 +4123,8 @@ function markMissing(miss){
 }
 function jumpToFirst(miss){
   const el=miss.length && $(miss[0].sel);
-  if(el){ el.scrollIntoView({block:'center',behavior:'smooth'}); if(el.focus) el.focus({preventScroll:true}); }
+  if(el){ let d=el.closest('details'); while(d){ d.open=true; d=d.parentElement&&d.parentElement.closest('details'); }
+    el.scrollIntoView({block:'center',behavior:'smooth'}); if(el.focus) el.focus({preventScroll:true}); }
 }
 /* The what's-left bar: lives above the submit buttons, ticks down as they go, and
    tapping it jumps to the first gap. */
@@ -4277,7 +4306,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMore','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
