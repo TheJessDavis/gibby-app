@@ -77,6 +77,10 @@
   #tab .clscard.cls-back{background:var(--pink)}
   #tab .clscard.cls-off{background:#E9E4D8}
   .clstop{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  #busybar{display:none;position:fixed;top:0;left:0;right:0;height:4px;z-index:200;background:linear-gradient(90deg,#171512 0 40%,#F2C94C 40% 60%,#171512 60%);background-size:200% 100%;animation:busyslide .9s linear infinite}
+  @keyframes busyslide{from{background-position:200% 0}to{background-position:0 0}}
+  body.busy .btn{pointer-events:none}
+  body.busy .btn.dark,body.busy .btn.green,body.busy .btn.warn{opacity:.75}
   .qhint{display:inline-block;margin:2px 0 6px}
   .qhint>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;border:1.5px solid var(--line);background:var(--white);font-size:12px;font-weight:800;color:var(--ink-soft)}
   .qhint>summary::-webkit-details-marker{display:none}
@@ -379,18 +383,38 @@ function refreshSession(){
   return REFRESHING;
 }
 const NO_REFRESH = ['/api/login','/api/refresh','/api/logout','/api/me'];
+/* Every tap answers visibly: a thin bar runs along the top while the app is
+   talking to the server, the pressed button says "Working…", and the action
+   buttons cannot be tapped again until it is done. */
+let BUSY_N=0, LAST_BTN=null;
+document.addEventListener('click', e=>{ const b=e.target.closest && e.target.closest('button.btn'); if(b) LAST_BTN=b; }, true);
+function busy(delta){
+  BUSY_N=Math.max(0, BUSY_N+delta);
+  let bar=document.getElementById('busybar');
+  if(!bar){ bar=document.createElement('div'); bar.id='busybar'; document.body.appendChild(bar); }
+  const on=BUSY_N>0;
+  bar.style.display=on?'block':'none';
+  document.body.classList.toggle('busy', on);
+  if(on && LAST_BTN && !LAST_BTN.dataset.label){ LAST_BTN.dataset.label=LAST_BTN.innerHTML; LAST_BTN.innerHTML='Working\u2026'; }
+  if(!on && LAST_BTN && LAST_BTN.dataset.label){ if(document.body.contains(LAST_BTN)) LAST_BTN.innerHTML=LAST_BTN.dataset.label; delete LAST_BTN.dataset.label; LAST_BTN=null; }
+}
 async function api(path, method='GET', body, _retried){
+  if(method!=='GET' && !_retried) busy(1);
+  try{ return await _api(path, method, body, _retried); }
+  finally{ if(method!=='GET' && !_retried) busy(-1); }
+}
+async function _api(path, method='GET', body, _retried){
   const headers = body ? {'Content-Type':'application/json'} : {};
   if(method !== 'GET' && CSRF) headers['X-CSRF-Token'] = CSRF;
   const r = await fetch(path,{method,headers,body:body?JSON.stringify(body):undefined});
   if(r.status===401 && !_retried && !NO_REFRESH.includes(path)){
-    if(await refreshSession()) return api(path, method, body, true);
+    if(await refreshSession()) return _api(path, method, body, true);
   }
   const j = await r.json().catch(()=>({}));
   // Token went stale (session rotated in another tab): re-sync once and retry.
   if(r.status===403 && j.csrf && !_retried){
     const me = await fetch('/api/me').then(x=>x.json()).catch(()=>null);
-    if(me && me.csrf_token){ noteCsrf(me); return api(path, method, body, true); }
+    if(me && me.csrf_token){ noteCsrf(me); return _api(path, method, body, true); }
   }
   noteCsrf(j);
   if(!r.ok) throw Object.assign(new Error(j.error||(r.status>=500?'The server hit a problem (HTTP '+r.status+'). It may still have gone through; check before trying again.':'Request failed (HTTP '+r.status+')')), {data:j, status:r.status,

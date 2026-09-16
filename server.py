@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.82.1-no-duplicate-emails"
+VERSION = "10.83.0-instant-buttons"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2910,12 +2910,14 @@ class H(http.server.BaseHTTPRequestHandler):
         p = urllib.parse.urlparse(self.path).path
         if not p.startswith("/api/"): return self.send_error(404)
         self._body_read = False
+        mailer.defer_in_this_thread(True)     # emails from this request go out in the background
         try:
             # Single choke point: every state-changing request is checked here, so a new
             # endpoint cannot forget to protect itself.
             if not self.csrf_ok(p): return
             return self.api_post(p)
         finally:
+            mailer.defer_in_this_thread(False)
             # A handler that never read its body (or a 403/404 before it got there)
             # would leave those bytes on the keep-alive socket, where they become
             # the start of the NEXT request line: "{}GET ..." -> 501 for the caller.
@@ -4466,7 +4468,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("from_name"): kw["from_name"] = str(b["from_name"]).strip()[:80]
             delivered = mailer.send(to, "Gibby Class Manager test email",
                 "This is a test from your Gibby Class Manager. If you received this, email is working."
-                + (f"\n\nReplies to this test should go to {kw['reply_to']}." if kw.get("reply_to") else ""), cfg, **kw)
+                + (f"\n\nReplies to this test should go to {kw['reply_to']}." if kw.get("reply_to") else ""), cfg, wait=True, **kw)
             return self.send_json({"ok":True, "to":to, "from":cfg["mail_from"],
                 "live": bool(cfg["email_live"] and (cfg["smtp_host"] or mailer.bridge_available())), "delivered": bool(delivered),
                 "smtp_host": cfg.get("smtp_host"), "smtp_port": cfg.get("smtp_port"),

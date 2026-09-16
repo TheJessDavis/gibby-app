@@ -224,14 +224,51 @@ def _dedupe(recips, subject, body):
         _RECENT[k] = now_; fresh.append(r)
     return fresh
 
-def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None):
+import threading, queue
+_tl = threading.local()          # _tl.defer = True inside an HTTP request: emails go to the queue
+_queue = queue.Queue()
+
+def defer_in_this_thread(on):
+    """Request handlers turn this on: their emails are queued and sent by the
+    worker below, so a tap answers in milliseconds instead of waiting on Gmail.
+    The scheduler thread leaves it off and keeps sending synchronously."""
+    _tl.defer = bool(on)
+
+def _worker():
+    while True:
+        args, kwargs = _queue.get()
+        try:
+            _send_now(*args, **kwargs)
+        except Exception as e:
+            print("[email] queued send failed:", e)
+        finally:
+            _queue.task_done()
+
+threading.Thread(target=_worker, daemon=True, name="email-worker").start()
+
+def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None, wait=False):
+    """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF.
+    Inside a request (see defer_in_this_thread) the message is queued and True is
+    returned at once; pass wait=True when the caller needs the real outcome."""
+    if getattr(_tl, "defer", False) and not wait:
+        recips = [to] if isinstance(to, str) else list(to)
+        recips = [r for r in recips if r and "@" in r]
+        if not recips: return False
+        fresh = _dedupe(recips, subject, body)
+        if not fresh: return True
+        _queue.put(((fresh, subject, body), dict(cfg=cfg, attachments=attachments, reply_to=reply_to, from_name=from_name, copy=copy, images=images, _deduped=True)))
+        return True
+    return _send_now(to, subject, body, cfg=cfg, attachments=attachments, reply_to=reply_to, from_name=from_name, copy=copy, images=images)
+
+def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None, _deduped=False):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
     recips = [r for r in recips if r and "@" in r]
     if not recips:
         print(f"[email] no valid recipient for {subject!r}"); return False
-    recips = _dedupe(recips, subject, body)
+    if not _deduped:
+        recips = _dedupe(recips, subject, body)
     if not recips:
         return True          # already sent moments ago; nothing more to do
     # Every email links back to the app, so nobody has to hunt for the address.
