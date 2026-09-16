@@ -3842,16 +3842,21 @@ function openForm(slot, draftPayload){
     <label>Anything else about materials? <span style="color:var(--ink-soft);font-weight:600">(optional, but helpful)</span></label>
     <textarea id="f_supnotes" rows="2" placeholder="Things already in the studio you will use, substitutions that are fine, what to buy first if money is tight, prep needed before class..."></textarea>
 
-    <label>What do you hope to make per student? ($)</label>
+    <label>How do students pay?</label>
+    <div class="seg" id="f_pricemode">
+      <button class="on" data-v="ticket" onclick="segPick(this);setDonation(false)">A ticket price</button>
+      <button data-v="donation" onclick="segPick(this);setDonation(true)">Donation-based</button></div>
+    <div class="hint" id="donhint" style="display:none">Students pay what they want at checkout (Eventbrite’s donation ticket). No ticket price is set; your pay is a flat fee agreed with The Gibby.</div>
+    <label id="ppslab">What do you hope to make per student? ($)</label>
     <input id="c_pps" type="number" min="0" step="1" value="15" oninput="calc('pay')">
-    <div class="hint">The ticket price generates from this: your amount, plus materials, with The Gibby's share on top. Or type a ticket price at the bottom and we work it back.</div>
+    <div class="hint" id="ppshint">The ticket price generates from this: your amount, plus materials, with The Gibby's share on top. Or type a ticket price at the bottom and we work it back.</div>
     <label>How is your pay worked out?</label>
     <div class="seg" id="f_paym">
       <button class="on" data-v="flat" onclick="segPick(this);calc()">Flat fee</button>
       <button data-v="split" onclick="segPick(this);calc()">60% of ticket sales</button></div>
     <div class="hint">Flat fee pays the agreed amount whatever the turnout. The split pays 60% of
       ticket sales after materials, so it rises and falls with enrollment.</div>
-    <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_donate" onchange="donateToggle()"> This event is donation-based (students pay what they want)</label>
+    <input type="checkbox" id="f_donate" onchange="donateToggle()" style="display:none">
     <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="f_free" onchange="calc()"> I'm donating my teaching time for this class</label>
     <div class="hint" id="freenote" style="display:none"></div>
     <button class="btn ghost" style="margin-top:8px" onclick="openPricingGuide()">Open the full pricing guide</button>
@@ -3994,6 +3999,16 @@ function calc(dir){
     return;
   }
   let ticket, pps;
+  const donation=$('#f_donate')&&$('#f_donate').checked;
+  if(donation){
+    pps=+$('#c_pps').value||0;
+    const yourPay=pps*plan+reimb;
+    if($('#f_ticket')) $('#f_ticket').value='';
+    $('#o_t').textContent='Pay what you want'; $('#o_p').textContent=money(yourPay);
+    const lab=$('#o_tlab'); if(lab && lab.firstChild && lab.firstChild.nodeType===3) lab.firstChild.textContent='Ticket';
+    if($('#f_pay') && !$('#f_pay').dataset.t) $('#f_pay').value=Math.round(yourPay);
+    return;
+  }
   if(CALC_DIR==='ticket'){
     // They typed a ticket price: work back what it pays per student.
     ticket = +$('#f_ticket').value||0;
@@ -4062,9 +4077,15 @@ function validateForm(){
   if(!($('#f_free')&&$('#f_free').checked) && !(pay>0)) add('#f_pay','Your pay','pay');
   return miss;
 }
+function setDonation(on){ const cb=$('#f_donate'); if(cb){ cb.checked=!!on; } donateToggle(); }
 function donateToggle(){
   const on=$('#f_donate')&&$('#f_donate').checked, t=$('#f_ticket');
   if(t){ t.disabled=!!on; if(on) t.value=''; }
+  const seg=$('#f_pricemode'); if(seg) seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===(on?'donation':'ticket')));
+  const dh=$('#donhint'); if(dh) dh.style.display=on?'':'none';
+  const pl=$('#ppslab'); if(pl) pl.textContent = on ? 'Flat fee you would like per student ($)' : 'What do you hope to make per student? ($)';
+  const ph=$('#ppshint'); if(ph) ph.textContent = on ? 'There is no ticket to work out. Your pay at the planned headcount is suggested below as a flat fee.' : "The ticket price generates from this: your amount, plus materials, with The Gibby's share on top. Or type a ticket price at the bottom and we work it back.";
+  const pm=$('#f_paym'); if(pm && on){ pm.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v==='flat')); }
   calc();
 }
 let SUBMIT_TRIED=false, AUTOSAVE_T=null;
@@ -4256,7 +4277,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
