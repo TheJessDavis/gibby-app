@@ -65,8 +65,13 @@ def text_to_html(body):
         mbtn = _re.match(r"^([A-Za-z][^:]{1,90}):\s*(https?://\S+)$", s)
         if mbtn and "•" not in s:
             flush_para(); flush_list()
+            # The words before the colon become the button. A dangling "at" / "here"
+            # / "to" reads as if the label were cut off, so trim it.
+            label = _re.sub(r"\s+(at|here|to|from|via|on)$", "", mbtn.group(1).strip(), flags=_re.I).rstrip(",;")
+            label = _re.sub(r"^(after that|then|now),?\s+", "", label, flags=_re.I)
+            label = label[:1].upper() + label[1:]
             out.append(f'<p style="margin:6px 0 18px"><a href="{mbtn.group(2)}" style="display:inline-block;background:#171512;color:#fff;text-decoration:none;'
-                       f'padding:12px 20px;border-radius:999px;font-weight:700">{_h.escape(mbtn.group(1))}</a></p>')
+                       f'padding:12px 20px;border-radius:999px;font-weight:700">{_h.escape(label)}</a></p>')
             continue
         mb = _re.match(r"^(?:[•\-–]|\d+\.)\s+(.*)$", s)
         if mb and (raw.startswith(" ") or s.startswith("•") or s.startswith("- ")):

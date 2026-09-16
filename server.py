@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.79.1-donation-choice"
+VERSION = "10.79.2-email-buttons"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4193,7 +4193,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"You've been set up on the Gibby Class Manager, {intro}\n\n"
                     f"Your username is this email address. Choose your password here (link good for 7 days):\n\n"
                     f"{proto}://{host}/?reset={tok}\n\n"
-                    f"After that, sign in any time at: {mailer.APP_URL}\n\n"
+                    f"After that, sign in any time from the app's home page.\n\nOpen the Gibby Class Manager: {mailer.APP_URL}\n\n"
                     + (PROFILE_ASK + "\n\n" if role == "instructor" else "") +
                     f"See you at The Gibby!")
             else:
@@ -4204,7 +4204,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"Your username: {email}\n"
                     f"Your temporary password: {pw}\n\n"
                     + ("The app will ask you to choose your own password as soon as you sign in.\n\n" if mc else "")
-                    + f"Sign in here: {mailer.APP_URL}\n\n"
+                    + f"Sign in: {mailer.APP_URL}\n\n"
                     + (PROFILE_ASK + "\n\n" if role == "instructor" else "") +
                     f"See you at The Gibby!")
             c.commit(); c.close()
@@ -5550,7 +5550,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if on_behalf: who += f" on behalf of {on_behalf}"
             mailer.send(admins, "New class submission",
                 f"{who} for {when}.\n\n"
-                f"Review and approve it here: {mailer.APP_URL}/#review-{new_id}")
+                f"Review and approve it: {mailer.APP_URL}/#review-{new_id}")
             return self.send_json({"ok":True})
         if p == "/api/admin/compact-db":
             u = self.require("admin")
@@ -6775,7 +6775,7 @@ def invite_instructor(c, name, email, proto, host):
         f"their classes.\n\n"
         f"Your username is this email address. Choose your password here (link good for 7 days):\n\n"
         f"{proto}://{host}/?reset={tok}\n\n"
-        f"After that, sign in any time at: {mailer.APP_URL}\n\n"
+        f"After that, sign in any time from the app's home page.\n\nOpen the Gibby Class Manager: {mailer.APP_URL}\n\n"
         + PROFILE_ASK + "\n\n"
         f"See you at The Gibby!")
     return uid, name
