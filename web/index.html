@@ -601,18 +601,18 @@ function renderProfile(){
   </div>`;
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['slots','\u{1F39F}\uFE0F','Slots'],['requests','\u{1F4CC}','Requests'],['supplies','\u{1F9FA}','Supplies'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
-  ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['connections','\u{1F50C}','Connections'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
+const MORE_ITEMS=[['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
+  ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['email','\u2709\uFE0F','Email'],['integrations','\u{1F50C}','Integrations'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 function buildBnav(role, active){
   document.body.classList.remove('formopen'); closeMore();
   const b=$('#bnav'); if(!b) return;
   const item=(k,icon,label,go)=>`<button data-tab="${k}" class="${active===k?'on':''}" onclick="${go}">
       <span class="bi">${icon}</span><span class="bl">${label}</span></button>`;
   if(role==='admin'){
-    const inMore = MORE_ITEMS.some(m=>m[0]===active);
+    const inMore = MORE_ITEMS.some(m=>m[0]===active) || ['connections','ebimport','calreview','supplies'].includes(active);
     b.innerHTML = item('dashboard','\u{1F3E0}','Home',"renderAdmin('dashboard')")
       + item('approvals','\u2705','Approvals',"renderAdmin('approvals')")
-      + item('calendar','\u{1F5D3}\uFE0F','Calendar',"renderAdmin('calendar')")
+      + item('requests','\u{1F4CC}','Requests',"renderAdmin('requests')")
       + item('people','\u{1F465}','People',"renderAdmin('people')")
       + `<button data-tab="more" class="${inMore?'on':''}" onclick="openMore()"><span class="bi">\u22EF</span><span class="bl">More</span></button>`;
   } else {
@@ -853,12 +853,12 @@ const TOUR_ADMIN = [
   ['✅','Approvals is the engine room','New submissions wait there with the instructor’s per-student target, ticket, and supply list. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the contract. Send back with a note and the instructor fixes and resubmits.', '#bnav [data-tab="approvals"]', 'The Approvals tab'],
   ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes, order requests waiting. Post a class request from here too. Nothing posts to Facebook or goes to students without a person pressing the button.', '#bnav [data-tab="dashboard"]', 'The Home tab, bottom left'],
   ['\u{1F465}','People: paperwork in one place','Each instructor shows W-9, background check and phone status. Request paperwork picks who to ask (new members by default); they upload in the app, a reminder follows in three days, and files land in the Gibby Paperwork folder on Drive.', '#bnav [data-tab="people"]', 'The People tab'],
-  ['\u{1F4CC}','Requests: what you want taught','Under More > Requests, post a class with a description and skill tags. Post it quietly or email everyone. Instructors claim it from their Wanted tab and the proposal arrives pre-filled.', '#bnav [data-tab="more"]', 'More, then Requests'],
-  ['\u{1F9FA}','Supplies and the Materials spreadsheet','Every class’s supply links compile into the Gibby Materials spreadsheet, one tab per season. Instructors’ order requests land under More > Supplies and are emailed to the ordering address; mark them Ordered and Ready.', '#bnav [data-tab="more"]', 'More, then Supplies'],
+  ['\u{1F4CC}','Requests: what you want taught','On the Requests tab, post a class with a description and skill tags; the Orders side holds instructors\u2019 supply requests. Post it quietly or email everyone. Instructors claim it from their Wanted tab and the proposal arrives pre-filled.', '#bnav [data-tab="requests"]', 'The Requests tab'],
+  ['\u{1F9FA}','Supplies and the Materials spreadsheet','Every class’s supply links compile into the Gibby Materials spreadsheet, one tab per season. Instructors’ order requests land under More > Supplies and are emailed to the ordering address; mark them Ordered and Ready.', '#bnav [data-tab="requests"]', 'Requests, then Orders'],
   ['\u{1F4E9}','After-class emails run themselves','Two mornings after a class, students get a thank-you with the instructor’s note and photos, review links, and a personal one-time discount code. You can edit the note before it goes and see every copy. Open studios and empty classes are skipped.', '#bnav [data-tab="approvals"]', 'Approvals, After-class emails'],
   ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted), an instructor payouts ledger with mark-as-paid, and reimbursement requests.', '#bnav [data-tab="more"]', 'Under More, then Money'],
   ['\u{1F4E3}','Marketing waits for your yes','Photos instructors upload become Facebook post drafts you approve or decline. Instructor emails and announcements go out branded, and you get a copy of every email the app sends.', '#bnav [data-tab="more"]', 'More, then Marketing'],
-  ['⋯','Everything else lives under More','Slots, templates, connections (review links, thank-you settings, deadline reminders), backups, the email log and the audit trail. That is the tour!', '#bnav [data-tab="more"]', 'The More tab, bottom right'],
+  ['⋯','Everything else lives under More','Calendar, slots, templates, Email settings (review links, thank-you, deadline reminders), Integrations and backups, the email log and the audit trail. That is the tour!', '#bnav [data-tab="more"]', 'The More tab, bottom right'],
 ];
 let TOUR_I = 0, TOUR_STEPS_CUR = null;
 function startTour(){
@@ -1018,7 +1018,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminConnections, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequestsHub, supplies:adminRequestsHub,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1032,6 +1032,7 @@ async function loadNavBadges(){
       if(n>0) b.insertAdjacentHTML('beforeend', `<span class="navbadge">${n}</span>`); };
     put('approvals', c.needs_you);
     put('dashboard', c.failed);
+    put('requests', c.orders||0);
   }catch(_){/* badges are decoration; the queues are the truth */}
 }
 async function adminDashboard(){
@@ -1045,13 +1046,13 @@ async function adminDashboard(){
       <div class="row"><div><h3>\u26a0 Email is not going out</h3>
         <div class="meta">The last email the app tried to send was rejected, so instructors and admins are not getting notifications, invitations or contracts.</div></div></div>
       <div class="meta" style="margin-top:8px;color:#B4442C">${esc(d.email_error)}</div>
-      <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('connections')">Open Connections to send a test</button></div>`:''}
+      <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('email')">Open Email settings to send a test</button></div>`:''}
     <div class="card"><div class="row"><div><h3>Need a class taught?</h3>
         <div class="meta">Post a title and description; every instructor is emailed and the first to claim gets a pre-filled proposal.</div></div></div>
       <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('requests')">\u{1F4CC} Post a class request \u2192</button></div>
     ${d.supplies_waiting?`<div class="card"><div class="row"><div><h3>Supplies requested</h3>
         <div class="meta">${d.supplies_waiting} request${d.supplies_waiting===1?'':'s'} from instructors waiting to be ordered.</div></div></div>
-      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('supplies')">Open Supplies \u2192</button></div>`:''}
+      <button class="btn dark" style="margin-top:10px" onclick="HUB_MODE='orders';renderAdmin('requests')">Open orders \u2192</button></div>`:''}
     ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
       <div class="row"><div><h3>⚠ Publishing needs attention</h3>
         <div class="meta">${d.publish_failures.length} step${d.publish_failures.length===1?'':'s'} could not be posted after ${5} tries. The class itself is still approved.</div></div></div>
@@ -1522,7 +1523,7 @@ async function adminSupplies(){
       ${s.status==='requested'?`<button class="btn warn" onclick="supplyAct(${s.id},'declined')">Decline</button><button class="btn dark" onclick="supplyAct(${s.id},'ordered')">Ordered</button>`
        :s.status==='ordered'?`<span></span><button class="btn green" onclick="supplyAct(${s.id},'ready')">Ready at the Gibby</button>`
        :`<button class="btn ghost" onclick="supplyAct(${s.id},'requested')">Reopen</button><span></span>`}</div></div>`;
-  $('#tab').innerHTML=`<h2>Order <em>requests</em></h2>
+  $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
     <p class="sub">Instructors ask from My classes: the class, a link to the exact item and how many. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
     <div class="card"><h3 style="font-size:1rem;margin:0 0 4px">Materials spreadsheet</h3>
       <div class="meta">Every class's supply list, one tab per season (Fall 2026, Spring 2027, Summer 2027), rebuilt from the app every hour and after each submission.</div>
@@ -1611,7 +1612,15 @@ async function supplyAct(id, status){
 async function sendDigestNow(){
   const r=await api('/api/admin/send-digest','POST',{}); alert(r.ok?'Sent to every admin.':'Could not send: '+(r.error||''));
 }
-let RQ_SKILLS=[], RQ_EDIT=null;
+let RQ_SKILLS=[], RQ_EDIT=null, HUB_MODE='wanted';
+function hubBar(){
+  return `<div class="seg" style="margin-bottom:12px"><button class="${HUB_MODE==='wanted'?'on':''}" onclick="HUB_MODE='wanted';adminRequestsHub()">\u{1F4CC} Classes wanted</button><button class="${HUB_MODE==='orders'?'on':''}" onclick="HUB_MODE='orders';adminRequestsHub()">\u{1F9FA} Orders</button></div>`;
+}
+async function adminRequestsHub(){
+  if(ADMIN_TAB==='supplies') HUB_MODE='orders';
+  ADMIN_TAB='requests';
+  if(HUB_MODE==='orders') await adminSupplies(); else await adminRequests();
+}
 function rqToggleSkill(k){ const i=RQ_SKILLS.indexOf(k); if(i<0) RQ_SKILLS.push(k); else RQ_SKILLS.splice(i,1); rqDrawSkills(); }
 function rqCustomSkill(){ const v=($('#rq_custom').value||'').trim().slice(0,40); if(v && !RQ_SKILLS.includes(v)) RQ_SKILLS.push(v); $('#rq_custom').value=''; rqDrawSkills(); }
 function rqDrawSkills(){
@@ -1640,9 +1649,9 @@ async function adminRequests(){
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
     <button class="btn ghost" style="margin-top:8px" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
-  $('#tab').innerHTML=`<h2>Class <em>requests</em></h2>
+  $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
     <p class="sub">Tell the teaching artists what the calendar needs. Every instructor is emailed, and the first to claim gets a proposal pre-filled with these details.</p>
-    <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">New request</h3><label>What would you like taught?</label><input id="rq_title" placeholder="e.g. Kids pottery">
+    <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">Post a class you want taught</h3><label>What would you like taught?</label><input id="rq_title" placeholder="e.g. Kids pottery">
       <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
       <div class="two"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
@@ -1735,12 +1744,13 @@ async function doEbImport(){
   alert((r.imported||[]).length+' brought in.'+((r.skipped||[]).length?'\n\nSkipped:\n'+r.skipped.join('\n'):''));
   adminEbImport();
 }
-async function adminConnections(){
+async function adminIntegrations(){
   const d=await api('/api/integrations'); const integrations=d.integrations;
   const pill=s=>s==='connected'?'<span class="pill appr">connected</span>':s==='attention'?'<span class="pill inc">needs attention</span>':'<span class="pill pend">not connected</span>';
-  $('#tab').innerHTML=`<h2>Platform <em>connections</em></h2>
+  $('#tab').innerHTML=`<h2>Integrations</h2>
     <p class="sub">${integrations.filter(i=>i.status==='connected').length} of ${integrations.length} connected. Posting is currently <b>${d.live?'LIVE':'dry-run (safe)'}</b>.</p>
-    ${integrations.map(it=>`<div class="card"><div class="row"><div><h3>${esc(it.name)}</h3><div class="meta">${esc(it.method)}</div></div>${pill(it.status)}</div>
+    <p class="hint">Connected services fold away; open one to manage it.</p>
+    ${integrations.map(it=>`<details class="card" style="padding:0" ${it.status==='connected'?'':'open'}><summary style="cursor:pointer;padding:14px 16px;list-style:none"><div class="row"><div><h3 style="margin:0">${esc(it.name)}</h3><div class="meta">${esc(it.method)}</div></div>${pill(it.status)}</div></summary><div style="padding:0 16px 14px">
       ${it.id==='website'
         ? `<div class="meta" style="margin-top:8px">No keys needed. The Art Workshops page on theeverett.org embeds the app and shows every published class on its own.</div>`
         : `<div class="meta" style="margin-top:8px">API keys: <b style="color:${it.configured?'#3F7A32':'#B45309'}">${it.id==='descene'?'no API (manual)':(it.configured?'present':'missing')}</b></div>
@@ -1751,17 +1761,36 @@ async function adminConnections(){
         <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('ebimport')">Bring in classes already on Eventbrite</button>
         <div class="hint">Classes posted straight on Eventbrite show up here so you can attach them to their instructor. They are not re-posted anywhere.</div>`:''}
       ${it.id==='facebook'?`<button class="btn ghost" style="margin-top:8px" onclick="testFacebook()">Verify Page token</button>
-        <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div>`).join('')}
+        <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div></div></details>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button>
       <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('calreview')">Review the calendar against the app</button>
       <div class="hint">Lists every calendar event and whether it belongs to a class in the app. Remove the leftovers with a tick; nothing is deleted on its own.</div></div>
-    <div class="card"><div class="row"><div><h3>Email</h3><div class="meta">Reminders, cancellations, approvals &amp; password resets. Sent as gibby@everetttheatre.com through the Gibby Mail Bridge, with Gmail SMTP as the fallback.</div></div></div>
-      <div class="meta" style="margin-top:8px">Mail bridge web app URL and key (from the Gibby Mail Bridge script on the gibby@ account):</div>
-      <input id="mb_url" placeholder="https://script.google.com/macros/s/.../exec" style="margin-top:6px">
-      <input id="mb_key" placeholder="Shared key" style="margin-top:6px">
-      <button class="btn ghost" style="margin-top:8px" onclick="saveMailBridge()">Save mail bridge</button>
-      <div class="meta" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)"><b>After-class thank-you</b> (sent two mornings after every class):</div>
+    <details class="card" style="padding:0"><summary style="cursor:pointer;padding:14px 16px;list-style:none"><div class="row"><div><h3 style="margin:0">Backups</h3><div class="meta">${d.backup&&d.backup.ok
+        ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
+          +(d.backup.verified?' · verified: '+d.backup.verified.classes+' classes, '+d.backup.verified.registrations+' registrations, '+d.backup.verified.users+' accounts':'')
+        : 'No backup has run yet.'}</div></div>${d.backup&&d.backup.ok?'<span class="pill appr">protected</span>':'<span class="pill inc">at risk</span>'}</div></summary><div style="padding:0 16px 14px">
+      <div class="meta" style="margin-top:8px">A full copy of the database (classes, registrations, accounts, contracts and signatures) is snapshotted every night into the <b>Gibby Backups</b> folder on Drive.</div>
+      ${d.backup&&d.backup.link?`<a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.backup.link}" target="_blank">Open the latest backup on Drive</a>`:''}
+      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="${d.drive.backups}" target="_blank" rel="noopener">\u{1F4C1} Open the backups folder on Drive</a>
+      <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button>
+      <div class="meta" style="margin-top:10px">${d.compact&&d.compact.ok
+        ? 'Compacted '+esc((d.compact.at||'').slice(0,10))+': '+Math.round(d.compact.before_bytes/1048576)+' MB \u2192 '+Math.round(d.compact.after_bytes/1048576)+' MB'
+        : 'Old audit entries can hold large images. Compacting removes those blobs (never the history itself) and reclaims disk.'}</div>
+      <button class="btn ghost" style="margin-top:6px" onclick="compactDb()">Compact database</button></div></details>
+    <details class="card" style="padding:0"><summary style="cursor:pointer;padding:14px 16px;list-style:none"><div class="row"><div><h3 style="margin:0">Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div></summary><div style="padding:0 16px 14px">
+      <a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.drive.contracts}" target="_blank" rel="noopener">\u{1F4C1} Open the contracts folder on Drive</a>
+      <button class="btn ghost" style="margin-top:8px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
+      <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div></details>
+    <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
+}
+async function adminEmail(){
+  const d=await api('/api/integrations');
+  const bridgeSet = !!(d.mail_bridge && (d.mail_bridge.dedicated||d.mail_bridge.url));
+  $('#tab').innerHTML=`<h2>Email</h2>
+    <p class="sub">Everything the app sends goes as gibby@everetttheatre.com. You get a copy of every email.</p>
+    <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Thank-you emails</h3><div class="meta">Sent two mornings after every class, with the instructor\u2019s note and photos, review links and a personal code.</div>ith Gmail SMTP as the fallback.</div></div></div>
+
       <input id="th_google" placeholder="Google review link" value="${esc((d.thanks||{}).google_url||'')}" style="margin-top:6px">
       <input id="th_fb" placeholder="Facebook page or review link" value="${esc((d.thanks||{}).facebook_url||'')}" style="margin-top:6px">
       <div class="two" style="margin-top:6px"><input id="th_code" placeholder="Fallback promo code" value="${esc((d.thanks||{}).promo_code||'')}"><input id="th_pct" placeholder="% off" value="${esc((d.thanks||{}).promo_pct||'')}"></div>
@@ -1774,7 +1803,7 @@ async function adminConnections(){
       <div class="hint">Open studios and classes with no registrations never get the automatic after-class email or the instructor note nudge. Add more words here, e.g. "social club".</div>
       <div class="hint">Bulk sends (a whole class, everyone on Learn) arrive as one summary copy, not one per person. Leave blank to turn copies off.</div>
       <button class="btn ghost" style="margin-top:8px" onclick="saveThanks()">Save thank-you settings</button>
-      <div class="meta" style="margin-top:14px;padding-top:10px;border-top:1px solid var(--line)"><b>Submission deadline reminders</b> (every instructor, on a schedule):</div>
+    </div><div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Submission deadline reminders</h3><div class="meta">Every instructor, on a schedule.</div>
       <input id="dl_what" placeholder="What is due, e.g. all spring classes (January through April)" value="${esc((d.deadline||{}).what||'')}" style="margin-top:6px">
       <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Deadline</label><input id="dl_date" type="date" value="${esc((d.deadline||{}).date||'')}"></div>
         <div><label style="margin-top:0">First reminder</label><input id="dl_start" type="date" value="${esc((d.deadline||{}).start||'')}"></div></div>
@@ -1782,31 +1811,22 @@ async function adminConnections(){
         <div><label style="margin-top:0">Booking open through (YYYY-MM)</label><input id="dl_open" placeholder="2027-04" value="${esc((d.deadline||{}).open_through||'')}"></div></div>
       <div class="hint">Reminders go out on the first date, every N days after, and on the deadline morning. Clear the deadline to stop them. "Booking open through" lets instructors book those months now instead of waiting for the usual month-end unlock.</div>
       <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="saveDeadline()">Save reminders</button><button class="btn ghost" onclick="sendDeadlineNow()">Send one now</button></div>
-      <button class="btn ghost" style="margin-top:10px" onclick="testEmail()">Send test email to me</button>
+    </div><div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Send now</h3>
+      <button class="btn ghost" style="margin-top:6px" onclick="testEmail()">Send test email to me</button>
       <button class="btn ghost" style="margin-top:8px" onclick="announceLearn()">Email everyone about the Learn classes</button>
       <button class="btn ghost" style="margin-top:8px" onclick="resendContracts()">Re-send unsigned contract emails</button>
       <button class="btn ghost" style="margin-top:8px" onclick="sendDigestNow()">Send the Monday digest now</button>
       <div class="hint">The week-ahead digest goes to every admin each Monday at 7 AM on its own: this week's sessions, under-minimum classes, unsigned contracts, flags, supply requests, and what is waiting for approval.</div>
       <div class="hint">Every instructor with a contract waiting gets the "ready to sign" email again. Unsigned contracts also get one reminder 3 days after they are sent.</div>
       <div class="hint">Sends one email to every account listing the classes currently open on the Learn tab.</div></div>
-    <div class="card"><div class="row"><div><h3>Backups</h3><div class="meta">${d.backup&&d.backup.ok
-        ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
-          +(d.backup.verified?' · verified: '+d.backup.verified.classes+' classes, '+d.backup.verified.registrations+' registrations, '+d.backup.verified.users+' accounts':'')
-        : 'No backup has run yet.'}</div></div>${d.backup&&d.backup.ok?'<span class="pill appr">protected</span>':'<span class="pill inc">at risk</span>'}</div>
-      <div class="meta" style="margin-top:8px">A full copy of the database (classes, registrations, accounts, contracts and signatures) is snapshotted every night into the <b>Gibby Backups</b> folder on Drive.</div>
-      ${d.backup&&d.backup.link?`<a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.backup.link}" target="_blank">Open the latest backup on Drive</a>`:''}
-      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="${d.drive.backups}" target="_blank" rel="noopener">\u{1F4C1} Open the backups folder on Drive</a>
-      <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button>
-      <div class="meta" style="margin-top:10px">${d.compact&&d.compact.ok
-        ? 'Compacted '+esc((d.compact.at||'').slice(0,10))+': '+Math.round(d.compact.before_bytes/1048576)+' MB \u2192 '+Math.round(d.compact.after_bytes/1048576)+' MB'
-        : 'Old audit entries can hold large images. Compacting removes those blobs (never the history itself) and reclaims disk.'}</div>
-      <button class="btn ghost" style="margin-top:6px" onclick="compactDb()">Compact database</button></div>
-    <div class="card"><div class="row"><div><h3>Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div>
-      <a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.drive.contracts}" target="_blank" rel="noopener">\u{1F4C1} Open the contracts folder on Drive</a>
-      <button class="btn ghost" style="margin-top:8px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
-      <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div>
-    <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
+    <details class="card" style="padding:0"><summary style="cursor:pointer;padding:14px 16px;list-style:none"><div class="row"><div><h3 style="margin:0">Mail bridge</h3><div class="meta">Set up once. ${bridgeSet?'Connected: sending through the Gibby Mail Bridge.':'Not set: emails fall back to the calendar bridge or SMTP.'}</div></div>${bridgeSet?'<span class="pill appr">set</span>':'<span class="pill inc">not set</span>'}</div></summary><div style="padding:0 16px 14px">
+      <div class="meta" style="margin-top:8px">Mail bridge web app URL and key (from the Gibby Mail Bridge script on the gibby@ account):</div>
+      <input id="mb_url" placeholder="https://script.google.com/macros/s/.../exec" style="margin-top:6px">
+      <input id="mb_key" placeholder="Shared key" style="margin-top:6px">
+      <button class="btn ghost" style="margin-top:8px" onclick="saveMailBridge()">Save mail bridge</button>
+    </div></details>`;
 }
+
 async function backupNow(){
   const b=event&&event.target; if(b){ b.disabled=true; b.textContent='Backing up\u2026'; }
   try{
@@ -2794,9 +2814,11 @@ async function openEditForm(id){
     if(r.status && r.status!=='pending'){ alert('This submission is no longer pending. Someone else has already acted on it.'); return adminApprovals(); }
     if(r.also_reviewing) alert(`Heads up: ${r.also_reviewing.name} opened this submission at ${r.also_reviewing.since}.\n\nIf you both decide, only the first one counts.`);
   }catch(_){ /* advisory only; never block the edit form on it */ }
+  hideBnav();
   $('#view').innerHTML=`
-    <h2>Edit &amp; <em>return</em></h2>
-    <p class="sub">Make changes, then send to ${esc(c.instructor_name)} to approve before it publishes.</p>
+    <button class="btn ghost" style="padding:8px 14px;margin-bottom:10px" onclick="renderAdmin('approvals')">\u2190 Back to Approvals</button>
+    <h2>Edit <em>class</em></h2>
+    <p class="sub">Small fix? <b>Save changes</b> keeps it right where it is. Bigger change? <b>Send to ${esc(c.instructor_name)}</b> and they approve it before it publishes.</p>
     <div class="err" id="eerr"></div>
     <label>Class title</label><input id="e_title" value="${esc(c.title)}">
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
@@ -2815,15 +2837,17 @@ async function openEditForm(id){
     <label>Note to instructor (what you changed)</label><textarea id="e_note" placeholder="e.g. Raised the ticket to \$40 so materials are covered."></textarea>
     <div style="height:80px"></div>
     <div class="fab"><div class="two">
-      <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>
-      <button class="btn dark" onclick="submitEdit(${id})">Send to instructor</button></div></div>`;
+      <button class="btn ghost" onclick="submitEdit(${id},true)">Save changes</button>
+      <button class="btn dark" onclick="submitEdit(${id},false)">Send to instructor</button></div></div>`;
 }
 /* Edit a PUBLISHED class. Same fields as the review edit, but saving pushes the
    changes straight onto the live Eventbrite listing, the calendar booking and
    the website - in place, nothing republished, nothing duplicated. */
 function openLiveEdit(id){
+  hideBnav();
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
   $('#view').innerHTML=`
+    <button class="btn ghost" style="padding:8px 14px;margin-bottom:10px" onclick="renderAdmin('approvals')">\u2190 Back</button>
     <h2>Edit <em>this class</em></h2>
     <p class="sub">${c.status==='approved'
       ? 'This class is published. Saving updates Eventbrite, the calendar and the website in place - same listing, same links. Students are not emailed.'
@@ -2866,15 +2890,15 @@ async function submitLiveEdit(id){
     renderAdmin('approvals');
   }catch(e){ showErr('eerr',(e.data&&e.data.error)||e.message); }
 }
-async function submitEdit(id){
+async function submitEdit(id, quiet){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
-    headline:$('#e_head').value, subtitle:$('#e_sub').value, note:$('#e_note').value};
-  try{ await api('/api/classes/'+id+'/edit','POST',body); renderAdmin('approvals'); }
+    headline:$('#e_head').value, subtitle:$('#e_sub').value, note:$('#e_note').value, quiet:!!quiet};
+  try{ await api('/api/classes/'+id+'/edit','POST',body); if(quiet) alert('Saved. The class stays where it was.'); renderAdmin('approvals'); }
   catch(e){ showErr('eerr',e.message); }
 }
 async function instrApprove(id){ await api('/api/classes/'+id+'/instructor-approve','POST'); renderInstr('mine'); }
@@ -3584,7 +3608,7 @@ function classList(classes){
     ${up.length?`<label style="margin-top:14px">Coming up (${up.length})</label><p class="sub" style="margin-top:2px">Tap a class to see everything about it.</p>${up.map(row).join('')}`:''}
     ${past.length?`<details id="pastwrap" style="margin-top:14px"><summary class="foldsum">Past and cancelled (${past.length}) <span class="rowchev">\u203A</span></summary>${past.map(row).join('')}</details>`:''}`;
 }
-function openMore(sel){
+function openMoreDetails(sel){
   const d=$('#fmore'); if(d) d.open=true;
   const el=sel&&$(sel); if(el){ el.scrollIntoView({behavior:'smooth',block:'center'}); }
 }
@@ -4004,9 +4028,9 @@ function calc(dir){
                          : 'Add at least one link with a price and quantity, or tick the box if you are buying the supplies yourself.');
   const ml=$('#matline');
   if(ml) ml.innerHTML = own
-    ? `Materials: you are buying them (${money(mat)} per student, reimbursed). <a href="#" onclick="openMore('#f_own');return false">Change</a>`
-    : (suppliesTotal()>0 ? `Materials: ${validSupplies().length} item${validSupplies().length===1?'':'s'}, ${money(suppliesTotal())} total, ${money(mat)} per student. <a href="#" onclick="openMore('#f_supplies');return false">Edit</a>`
-                         : `<b>Materials needed:</b> add supply links, or tick that you are buying them yourself. <a href="#" onclick="openMore('#f_supplies');return false">Add supplies</a>`);
+    ? `Materials: you are buying them (${money(mat)} per student, reimbursed). <a href="#" onclick="openMoreDetails('#f_own');return false">Change</a>`
+    : (suppliesTotal()>0 ? `Materials: ${validSupplies().length} item${validSupplies().length===1?'':'s'}, ${money(suppliesTotal())} total, ${money(mat)} per student. <a href="#" onclick="openMoreDetails('#f_supplies');return false">Edit</a>`
+                         : `<b>Materials needed:</b> add supply links, or tick that you are buying them yourself. <a href="#" onclick="openMoreDetails('#f_supplies');return false">Add supplies</a>`);
   const fn=$('#freenote');
   if(fn){
     fn.style.display = free ? '' : 'none';
@@ -4306,7 +4330,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMore','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

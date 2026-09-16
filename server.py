@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.80.0-progressive-form"
+VERSION = "10.81.0-admin-nav"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3504,8 +3504,9 @@ class H(http.server.BaseHTTPRequestHandler):
             q = lambda w: c.execute(f"SELECT COUNT(*) FROM classes WHERE deleted_at IS NULL AND {w}").fetchone()[0]
             needs = q("status='pending'") + q("status='graphic_review'")
             failed = c.execute("SELECT COUNT(*) FROM job_queue WHERE status='failed'").fetchone()[0]
+            orders = c.execute("SELECT COUNT(*) FROM supply_requests WHERE status='requested'").fetchone()[0]
             c.close()
-            return self.send_json({"needs_you": needs, "failed": failed})
+            return self.send_json({"needs_you": needs, "failed": failed, "orders": orders})
         if p == "/api/social":
             u = self.require("admin")
             if not u: return
@@ -6316,6 +6317,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
+            if b.get("quiet"):
+                # A small fix (a capital letter, a typo): save it and leave the class
+                # exactly where it was. No status change, no email, no approval loop.
+                vals.append(cid)
+                c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
+                audit(c, cid, row["status"], row["status"], u["id"])
+                c.commit(); c.close()
+                return self.send_json({"ok":True, "quiet":True})
             sets += ["status=?","admin_note=?"]; vals += ["instructor_review", b.get("note","")]
             vals.append(cid)
             c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
