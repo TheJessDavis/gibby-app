@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.81.0-admin-nav"
+VERSION = "10.82.0-opportunities"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -209,6 +209,11 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN skills TEXT")        # JSON list of skill tags
     except Exception: pass
+    try: c.execute("ALTER TABLE class_requests ADD COLUMN kind TEXT DEFAULT 'teach'")   # teach | help | sell
+    except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS request_interest(
+        id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL, user_id INTEGER NOT NULL, note TEXT,
+        status TEXT DEFAULT 'raised', created TEXT, decided_at TEXT, UNIQUE(request_id, user_id))""")
     try: c.execute("ALTER TABLE paperwork ADD COLUMN self_reported INTEGER DEFAULT 0")   # "I already did this in 2026"
     except Exception: pass
     for col, typ in (("supply_links","TEXT"), ("pay_per_student","REAL"), ("planned","INTEGER"), ("supplies_ordered_at","TEXT"), ("note_declined","INTEGER DEFAULT 0"), ("supply_notes","TEXT")):
@@ -946,6 +951,16 @@ def publish_now(c, cls, actor_id=None, spawn=True):
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
     c.execute("UPDATE classes SET status='approved' WHERE id=?",(cls["id"],))
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
+    if cls.get("needs_volunteer") and not c.execute("SELECT 1 FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone():
+        # The instructor asked for an assistant: that becomes a Help card on the
+        # Opportunities tab the moment the class is real. Closes itself after class.
+        c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,class_id)
+                     VALUES(?,?,?,?,?,'open',?,?,?,?,'help',?)""",
+                  (f"Assist {(instr.get('name') or 'the instructor').split(' ')[0]} with {cls.get('title')}",
+                   "Posted automatically because the instructor asked for a volunteer assistant.",
+                   cls.get("room") or "", cls.get("age_label") or cls.get("age_range") or "",
+                   f"{cls.get('slot_date') or ''} {cls.get('class_time') or cls.get('slot_time') or ''}".strip(),
+                   actor_id, now(), (cls.get("description") or "")[:600], "[]", cls["id"]))
     # Demo students exist so DEV screens have data. On a live install they are
     # poison: fake enrollment numbers, and real-looking addresses that would
     # receive real emails. Only seed when nothing is live.
@@ -2624,6 +2639,13 @@ def run_scheduler(asof=None):
                 actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
                                else f"marketing request suppressed for {cls['title']}: {why}")
     try:
+        for r in c.execute("SELECT r.id, cl.slot_date, cl.session_dates, cl.is_series FROM class_requests r JOIN classes cl ON cl.id=r.class_id WHERE r.kind='help' AND r.status='open' AND r.class_id IS NOT NULL").fetchall():
+            end = _class_end_date(dict(r)) or _class_date(dict(r))
+            if end and end < today:
+                c.execute("UPDATE class_requests SET status='closed', closed_at=? WHERE id=?", (now(), r["id"]))
+    except Exception as e:
+        print("[opportunities] auto-close error:", e)
+    try:
         n = send_deadline_reminders(c, today, cfg=cfg)
         if n: actions.append(f"submission-deadline reminder to {n} instructors")
     except Exception as e:
@@ -3598,12 +3620,26 @@ class H(http.server.BaseHTTPRequestHandler):
                  LEFT JOIN classes cl ON cl.id=r.class_id
                  WHERE r.status!='closed' OR r.closed_at>=? ORDER BY r.status='open' DESC, r.id DESC""",
                  ((datetime.datetime.now()-datetime.timedelta(days=30)).isoformat(timespec="seconds"),)).fetchall()]
+            inter = [dict(x) for x in c.execute("""SELECT i.*, us.name, us.email, us.phone, us.skills AS user_skills FROM request_interest i
+                                                    JOIN users us ON us.id=i.user_id ORDER BY i.id""").fetchall()]
             c.close()
+            by_req = {}
+            for x in inter: by_req.setdefault(x["request_id"], []).append(x)
             if u["role"] != "admin":
-                rows = [r for r in rows if r["status"] == "open" or r["claimed_by"] == u["id"]]
+                rows = [r for r in rows if r["status"] == "open" or r["claimed_by"] == u["id"]
+                        or any(x["user_id"] == u["id"] for x in by_req.get(r["id"], []))]
             for r in rows:
                 try: r["skills"] = json.loads(r.get("skills") or "[]")
                 except Exception: r["skills"] = []
+                r["kind"] = r.get("kind") or "teach"
+                mine = [x for x in by_req.get(r["id"], []) if x["user_id"] == u["id"]]
+                r["my_interest"] = mine[0]["status"] if mine else None
+                if u["role"] == "admin":
+                    r["interest"] = [{"id": x["id"], "user_id": x["user_id"], "name": x["name"], "email": x["email"], "phone": x["phone"] or "",
+                                      "skills": json.loads(x["user_skills"] or "[]"), "note": x["note"] or "", "status": x["status"], "created": x["created"]}
+                                     for x in by_req.get(r["id"], [])]
+                else:
+                    r["interest_count"] = len(by_req.get(r["id"], []))
             return self.send_json({"requests": rows})
         if p == "/api/calendar/review":
             u = self.require("admin")
@@ -4892,23 +4928,28 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             desc = (b.get("description") or "").strip()[:1500]
             skills = [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12]
-            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills)
-                         VALUES(?,?,?,?,?,'open',?,?,?,?)""",
+            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell") else "teach"
+            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind)
+                         VALUES(?,?,?,?,?,'open',?,?,?,?,?)""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
-                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc, json.dumps(skills)))
+                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc, json.dumps(skills), kind))
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             instructors = emails_for(c, "WHERE role='instructor'")
             c.commit(); c.close()
             if b.get("notify") and instructors:      # only when the admin chose "Post it and email everyone"
+                lead = {"teach": "The Gibby would love someone to teach this:", "help": "The Gibby is looking for a helping hand:",
+                        "sell": "An opportunity to sell or show your work:"}[kind]
+                act = {"teach": "press Claim on it. It pre-fills a class proposal so you only pick the time and add your details",
+                       "help": "press I can help on it and The Gibby will confirm with you",
+                       "sell": "press I want to sell or show on it and The Gibby will be in touch"}[kind]
                 mailer.send(instructors, f"The Gibby is looking for: {title}",
-                    f"Hello,\n\nThe Gibby would love someone to teach this:\n\n  {title}\n"
+                    f"Hello,\n\n{lead}\n\n  {title}\n"
                     + (f"  When: {b.get('when_text')}\n" if b.get("when_text") else "")
                     + (f"  Room: {b.get('room')}\n" if b.get("room") else "")
                     + (f"  Ages: {b.get('ages')}\n" if b.get("ages") else "")
                     + (f"\n{desc}\n" if desc else "")
                     + (f"\n{b.get('notes').strip()}\n" if (b.get("notes") or "").strip() else "")
-                    + f"\nIf that is you, open the app and press Claim on the request. It pre-fills a class "
-                    f"proposal so you only pick the time and add your details: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
+                    + f"\nIf that is you, open the Opportunities tab in the app and {act}: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
             return self.send_json({"ok":True, "id":rid, "emailed":(len(instructors) if b.get("notify") else 0)})
         mre = re.match(r"^/api/requests/(\d+)/edit$", p)
         if mre:
@@ -4920,11 +4961,62 @@ class H(http.server.BaseHTTPRequestHandler):
             title = (b.get("title") or "").strip()[:120]
             if len(title) < 3: c.close(); return self.send_json({"error":"Give the request a short title."},400)
             skills = [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12]
-            c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=? WHERE id=?""",
+            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell") else None
+            c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=?, kind=COALESCE(?,kind) WHERE id=?""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
                        (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120],
-                       (b.get("description") or "").strip()[:1500], json.dumps(skills), rid))
+                       (b.get("description") or "").strip()[:1500], json.dumps(skills), kind, rid))
             c.commit(); c.close()
+            return self.send_json({"ok":True})
+        mri = re.match(r"^/api/requests/(\d+)/interest$", p)
+        if mri:
+            # "I can help" / "I want to sell or show": several people may raise a hand.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            rid = int(mri.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM class_requests WHERE id=?", (rid,)).fetchone()
+            if not row or row["status"] != "open": c.close(); return self.send_json({"error":"That opportunity is no longer open."},409)
+            if (row["kind"] or "teach") == "teach": c.close(); return self.send_json({"error":"Teaching requests are claimed, not volunteered for."},400)
+            if b.get("withdraw"):
+                c.execute("DELETE FROM request_interest WHERE request_id=? AND user_id=? AND status='raised'", (rid, u["id"]))
+                c.commit(); c.close(); return self.send_json({"ok":True, "status":None})
+            note = (b.get("note") or "").strip()[:500]
+            c.execute("""INSERT INTO request_interest(request_id,user_id,note,status,created) VALUES(?,?,?,'raised',?)
+                         ON CONFLICT(request_id,user_id) DO UPDATE SET note=excluded.note""", (rid, u["id"], note, now()))
+            admins = emails_for(c, "WHERE role='admin'")
+            owner = c.execute("SELECT name,email FROM users u JOIN classes cl ON cl.instructor_id=u.id WHERE cl.id=?", (row["class_id"],)).fetchone() if row["class_id"] else None
+            c.commit(); c.close()
+            verb = "can help with" if row["kind"] == "help" else "wants to sell or show at"
+            mailer.send(admins, f"{u['name']} {verb}: {row['title']}",
+                f"{u['name']} raised a hand on the Opportunities tab for \"{row['title']}\"."
+                + (f"\n\nTheir note: {note}" if note else "") + f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else "")
+                + f"\n\nConfirm or decline them under Requests: {mailer.APP_URL}")
+            if owner and owner["email"] and owner["email"].lower() != (u.get("email") or "").lower():
+                mailer.send(owner["email"], f"{u['name']} offered to assist with {row['title']}",
+                    f"Hi {(owner['name'] or '').split(' ')[0] or 'there'},\n\n{u['name']} offered to assist with \"{row['title']}\". "
+                    f"The Gibby will confirm them and let you both know.\n\nThanks,\nThe Gibby")
+            return self.send_json({"ok":True, "status":"raised"})
+        mrd = re.match(r"^/api/requests/(\d+)/interest/(\d+)/(confirm|decline)$", p)
+        if mrd:
+            u = self.require("admin")
+            if not u: return
+            rid, iid, action = int(mrd.group(1)), int(mrd.group(2)), mrd.group(3); c = db()
+            row = c.execute("SELECT * FROM class_requests WHERE id=?", (rid,)).fetchone()
+            it = c.execute("SELECT i.*, us.name, us.email FROM request_interest i JOIN users us ON us.id=i.user_id WHERE i.id=? AND i.request_id=?", (iid, rid)).fetchone()
+            if not row or not it: c.close(); return self.send_json({"error":"not found"},404)
+            c.execute("UPDATE request_interest SET status=?, decided_at=? WHERE id=?", ("confirmed" if action == "confirm" else "declined", now(), iid))
+            c.commit(); c.close()
+            first = (it["name"] or "").split(" ")[0] or "there"
+            if action == "confirm":
+                mailer.send(it["email"], f"You're confirmed: {row['title']}",
+                    f"Hi {first},\n\nThank you! The Gibby has confirmed you for \"{row['title']}\"."
+                    + (f"\n\nWhen: {row['when_text']}" if row["when_text"] else "") + (f"\nWhere: {row['room']}" if row["room"] else "")
+                    + (f"\n\n{row['description']}" if row["description"] else "")
+                    + f"\n\nIt is on your to-do list in the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby")
+            else:
+                mailer.send(it["email"], f"About {row['title']}",
+                    f"Hi {first},\n\nThank you for raising your hand for \"{row['title']}\". This time The Gibby has gone another way, "
+                    f"but please keep an eye on the Opportunities tab.\n\nThank you,\nThe Gibby")
             return self.send_json({"ok":True})
         mrq = re.match(r"^/api/requests/(\d+)/(claim|close|reopen)$", p)
         if mrq:
@@ -4940,6 +5032,8 @@ class H(http.server.BaseHTTPRequestHandler):
                           ("closed" if action == "close" else "open", now() if action == "close" else None, rid))
                 c.commit(); c.close(); return self.send_json({"ok":True})
             # claim: make a pre-filled draft for this instructor and hand it back
+            if (row.get("kind") or "teach") != "teach":
+                c.close(); return self.send_json({"error":"Raise your hand on this one instead of claiming it."},400)
             if row["status"] != "open":
                 c.close(); return self.send_json({"error":"Someone already claimed this one."},409)
             n = c.execute("SELECT COUNT(*) FROM drafts WHERE instructor_id=? AND deleted_at IS NULL",(u["id"],)).fetchone()[0]

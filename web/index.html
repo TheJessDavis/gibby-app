@@ -619,7 +619,7 @@ function buildBnav(role, active){
     const nSign=((ME&&ME.contracts_to_sign)||0)+((ME&&ME.paperwork_open)||0);
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
       + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
-      + item('wanted','\u{1F4CC}','Wanted',"renderInstr('wanted')")
+      + item('wanted','\u{1F4CC}','Opportunities',"renderInstr('wanted')")
       + item('audit','\u{1F393}','Learn',"renderInstr('audit')")
       + (nSign?`<span style="position:relative">${''}</span>`:'')
       + item('profile','\u{1F464}','Profile',"renderProfile()");
@@ -840,7 +840,7 @@ const TOUR_INSTRUCTOR = [
   ['✅','My classes starts with your to-do list','Anything that needs your hand sits at the top: a contract to sign, a class sent back to fix, paperwork The Gibby asked for, a note to write. Tap a line and it takes you straight there.', '#bnav [data-tab="mine"]', 'The My classes tab'],
   ['\u{1F5D3}️','Book: grab an open time','The Book tab shows every open slot at The Gibby. Pick a room, tap a green day, choose your time window. For a course, tick the weeks; untick any date you need to skip. The time either side of your class is yours for setup and cleanup.', '#bnav [data-tab="open"]', 'The Book tab, bottom left'],
   ['\u{1F4DD}','One form, priced from what you hope to make','Describe the class once: photo, ages, a 40 to 75 word description. Tell us what you hope to make per student and the ticket price generates itself. Paste a link, price and quantity for each supply, with as much detail as you can, or tick that you are buying your own. Save a draft any time.', '#bnav [data-tab="open"]', 'After you pick a time'],
-  ['\u{1F4CC}','Wanted: classes The Gibby is looking for','The Wanted tab lists classes The Gibby would love someone to teach. Filter by skill, tap Claim, and the title, description and details are filled in for you. You just pick the time.', '#bnav [data-tab="wanted"]', 'The Wanted tab'],
+  ['\u{1F4CC}','Opportunities: teach, help, or sell','Classes The Gibby wants taught (tap Claim and the proposal is pre-filled), classes that need a helping hand (tap I can help), and chances to sell or show your work. Filter by skill.', '#bnav [data-tab="wanted"]', 'The Opportunities tab'],
   ['\u{1F680}','Approval publishes it everywhere','Once approved, your class goes to Eventbrite, the website and the arts calendar automatically. Then My classes shows a Read-and-sign button for your contract. Sign with your finger and a PDF lands in your email.', '#bnav [data-tab="mine"]', 'My classes, in the to-do list'],
   ['\u{1F4E9}','After class: a note, photos, and a personal code for every student','The morning after your class you are asked for a short note. Add up to five photos from class. Both go to your students in the thank-you email, in your name, with a one-time discount code for each of them. Skip the note if you like; The Gibby’s thank-you still goes.', '#bnav [data-tab="mine"]', 'My classes, Follow-up notes'],
   ['\u{1F4E7}','Email your students any time','Email my students, at the top of My classes, sends a branded email in your name with your links and sign-off. Your next three classes are offered automatically, and replies come straight to you.', '#bnav [data-tab="mine"]', 'Email my students, top of My classes'],
@@ -853,7 +853,7 @@ const TOUR_ADMIN = [
   ['✅','Approvals is the engine room','New submissions wait there with the instructor’s per-student target, ticket, and supply list. Approve one and the app posts it to Eventbrite, the website, the calendar and DelawareScene, and sends the contract. Send back with a note and the instructor fixes and resubmits.', '#bnav [data-tab="approvals"]', 'The Approvals tab'],
   ['\u{1F3E0}','Home flags what needs you','Low enrollment, publish failures, sent-back classes, order requests waiting. Post a class request from here too. Nothing posts to Facebook or goes to students without a person pressing the button.', '#bnav [data-tab="dashboard"]', 'The Home tab, bottom left'],
   ['\u{1F465}','People: paperwork in one place','Each instructor shows W-9, background check and phone status. Request paperwork picks who to ask (new members by default); they upload in the app, a reminder follows in three days, and files land in the Gibby Paperwork folder on Drive.', '#bnav [data-tab="people"]', 'The People tab'],
-  ['\u{1F4CC}','Requests: what you want taught','On the Requests tab, post a class with a description and skill tags; the Orders side holds instructors\u2019 supply requests. Post it quietly or email everyone. Instructors claim it from their Wanted tab and the proposal arrives pre-filled.', '#bnav [data-tab="requests"]', 'The Requests tab'],
+  ['\u{1F4CC}','Requests: teach, help, sell','On the Requests tab, post a class to teach, a volunteer spot, or a chance to sell or show, with skill tags. Instructors claim or raise a hand from their Opportunities tab; you confirm helpers. The Orders side holds supply requests.', '#bnav [data-tab="requests"]', 'The Requests tab'],
   ['\u{1F9FA}','Supplies and the Materials spreadsheet','Every class’s supply links compile into the Gibby Materials spreadsheet, one tab per season. Instructors’ order requests land under More > Supplies and are emailed to the ordering address; mark them Ordered and Ready.', '#bnav [data-tab="requests"]', 'Requests, then Orders'],
   ['\u{1F4E9}','After-class emails run themselves','Two mornings after a class, students get a thank-you with the instructor’s note and photos, review links, and a personal one-time discount code. You can edit the note before it goes and see every copy. Open studios and empty classes are skipped.', '#bnav [data-tab="approvals"]', 'Approvals, After-class emails'],
   ['\u{1F4B0}','Money knows the real numbers','The Money tab shows actual Eventbrite payouts (fees deducted), an instructor payouts ledger with mark-as-paid, and reimbursement requests.', '#bnav [data-tab="more"]', 'Under More, then Money'],
@@ -1579,6 +1579,11 @@ async function paperSend(){
   alert((r.queued||0)?('Sending to '+r.queued+' '+(r.queued===1?'person':'people')+' now: '+(r.names||[]).join(', ')+(r.already_had_it?`. ${r.already_had_it} skipped (already asked or done).`:'')):'Nothing to send: everyone you ticked was already asked or has it on file.');
   adminPeople();
 }
+async function interestAct(rid, iid, action){
+  if(!confirm(action==='confirm'?'Confirm this person? They are emailed the details.':'Decline this person? They get a kind note.')) return;
+  try{ await api('/api/requests/'+rid+'/interest/'+iid+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
+  adminRequests();
+}
 async function paperAdmin(id, action){
   try{ await api('/api/paperwork/'+id+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
   adminPeople();
@@ -1612,9 +1617,14 @@ async function supplyAct(id, status){
 async function sendDigestNow(){
   const r=await api('/api/admin/send-digest','POST',{}); alert(r.ok?'Sent to every admin.':'Could not send: '+(r.error||''));
 }
-let RQ_SKILLS=[], RQ_EDIT=null, HUB_MODE='wanted';
+let RQ_SKILLS=[], RQ_EDIT=null, HUB_MODE='wanted', RQ_KIND='teach';
+function rqSetKind(k){ RQ_KIND=k; const seg=$('#rq_kind'); if(seg) seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===k));
+  const t=$('#rq_title'); if(t) t.placeholder = k==='teach'?'e.g. Kids pottery':k==='help'?'e.g. Assistant for Saturday kids camp':'e.g. Holiday market table, Dec 6';
+  const dl=$('#rq_desclab'); if(dl) dl.textContent = k==='teach'?'Class description (what students will read, 40 to 75 words)':k==='help'?'What it involves':'What is on offer (space, dates, fees, who it suits)';
+  const ra=$('#rq_roomages'); if(ra) ra.style.display = k==='sell'?'none':'';
+}
 function hubBar(){
-  return `<div class="seg" style="margin-bottom:12px"><button class="${HUB_MODE==='wanted'?'on':''}" onclick="HUB_MODE='wanted';adminRequestsHub()">\u{1F4CC} Classes wanted</button><button class="${HUB_MODE==='orders'?'on':''}" onclick="HUB_MODE='orders';adminRequestsHub()">\u{1F9FA} Orders</button></div>`;
+  return `<div class="seg" style="margin-bottom:12px"><button class="${HUB_MODE==='wanted'?'on':''}" onclick="HUB_MODE='wanted';adminRequestsHub()">\u{1F4CC} Opportunities</button><button class="${HUB_MODE==='orders'?'on':''}" onclick="HUB_MODE='orders';adminRequestsHub()">\u{1F9FA} Orders</button></div>`;
 }
 async function adminRequestsHub(){
   if(ADMIN_TAB==='supplies') HUB_MODE='orders';
@@ -1630,7 +1640,7 @@ function rqDrawSkills(){
 }
 function rqEdit(id){
   const r=(window.__reqs||[]).find(x=>x.id===id); if(!r) return;
-  RQ_EDIT=id; RQ_SKILLS=(r.skills||[]).slice();
+  RQ_EDIT=id; RQ_SKILLS=(r.skills||[]).slice(); rqSetKind(r.kind||'teach');
   $('#rq_title').value=r.title||''; $('#rq_when').value=r.when_text||''; $('#rq_room').value=r.room||''; $('#rq_ages').value=r.ages||'';
   $('#rq_desc').value=r.description||''; $('#rq_notes').value=r.notes||'';
   rqDrawSkills(); $('#rq_formtitle').textContent='Editing: '+(r.title||''); $('#rq_btns').innerHTML=`<button class="btn ghost" onclick="rqCancelEdit()">Cancel</button><button class="btn dark" onclick="postRequest(false)">Save changes</button>`;
@@ -1640,8 +1650,12 @@ function rqCancelEdit(){ RQ_EDIT=null; RQ_SKILLS=[]; adminRequests(); }
 async function adminRequests(){
   const d=await api('/api/requests'); const rs=d.requests||[]; window.__reqs=rs;
   const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
-  const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)}</h3>
+  const KM={teach:'\u{1F4CC} Teach',help:'\u{1F64B} Help',sell:'\u{1F3A8} Sell or show'};
+  const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)} <span class="pill" style="background:var(--cream);color:var(--ink);font-weight:700">${KM[r.kind]||KM.teach}</span></h3>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
+      ${(r.interest||[]).length?`<div style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">${r.interest.map(i=>`<div class="meta" style="margin:3px 0"><b>${esc(i.name)}</b>${i.phone?' · <a href="tel:'+esc(i.phone)+'">'+esc(i.phone)+'</a>':''} · ${esc(i.email)}${i.note?`<div>\u201C${esc(i.note)}\u201D</div>`:''}
+          ${i.status==='confirmed'?'<span class="pill appr">confirmed</span>':i.status==='declined'?'<span class="pill inc">declined</span>':`<a href="#" onclick="interestAct(${r.id},${i.id},'confirm');return false">Confirm</a> · <a href="#" onclick="interestAct(${r.id},${i.id},'decline');return false">Decline</a>`}</div>`).join('')}</div>`
+        :(r.kind!=='teach'&&r.status==='open'?'<div class="meta" style="margin-top:6px">Nobody has raised a hand yet.</div>':'')}
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini">${esc(k)}</span>`).join('')}</div>`:''}
       ${r.description?`<div class="meta" style="margin-top:4px">${esc(r.description)}</div>`:''}
       ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}
@@ -1650,25 +1664,28 @@ async function adminRequests(){
     <button class="btn ghost" style="margin-top:8px" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
   $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
-    <p class="sub">Tell the teaching artists what the calendar needs. Every instructor is emailed, and the first to claim gets a proposal pre-filled with these details.</p>
-    <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">Post a class you want taught</h3><label>What would you like taught?</label><input id="rq_title" placeholder="e.g. Kids pottery">
+    <p class="sub">Post what The Gibby needs: a class to teach, a helping hand, or a chance to sell or show. Instructors see it on their Opportunities tab. Email everyone only when you choose to.</p>
+    <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">Post an opportunity</h3>
+      <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell or show</button></div>
+      <div class="hint">Teach: a class you want someone to claim. Help: a volunteer spot, an assistant, a mentor. Sell or show: a market, a wall, a pop-up. People raise a hand and you confirm.</div>
+      <label>Title</label><input id="rq_title" placeholder="e.g. Kids pottery">
       <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
-      <div class="two"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
+      <div class="two" id="rq_roomages"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
-      <label>Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
+      <label id="rq_desclab">Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
       <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
       <label>Skills (instructors can filter Wanted by these)</label>
       <div class="skillcloud" id="rq_skills"></div>
       <div class="two" style="margin-top:6px"><input id="rq_custom" placeholder="Another skill? Type it"><button class="btn ghost" onclick="rqCustomSkill()">Add</button></div>
       <div class="two" id="rq_btns" style="margin-top:10px"><button class="btn ghost" onclick="postRequest(false)">Post it</button><button class="btn dark" onclick="postRequest(true)">Post it and email everyone</button></div>
-      <div class="hint">Post it: the request appears on the instructors' Wanted tab only. Post and email: every instructor also gets a message about it.</div></div>
+      <div class="hint">Post it: it appears on the instructors' Opportunities tab only. Post and email: every instructor also gets a message about it.</div></div>
     <label style="margin-top:16px">Open (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing open.</div>'}
     <label style="margin-top:16px">Claimed (${claimed.length})</label>${claimed.map(card).join('')||'<div class="muted">None claimed yet.</div>'}
     ${closed.length?`<label style="margin-top:16px">Closed recently (${closed.length})</label>${closed.map(card).join('')}`:''}`;
-  rqDrawSkills();
+  rqDrawSkills(); rqSetKind(RQ_EDIT?RQ_KIND:'teach');
 }
 async function postRequest(notify){
-  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), notify:!!notify};
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), kind:RQ_KIND, notify:!!notify};
   if(RQ_EDIT){
     try{ await api('/api/requests/'+RQ_EDIT+'/edit','POST',b); }catch(e){ alert(e.message); return; }
     RQ_EDIT=null; RQ_SKILLS=[]; alert('Saved.'); adminRequests(); return;
@@ -1676,7 +1693,7 @@ async function postRequest(notify){
   const r=await api('/api/requests','POST',b);
   if(r.error){ alert(r.error); return; }
   RQ_SKILLS=[];
-  alert(notify ? 'Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.' : 'Posted. It is on the Wanted tab; nobody was emailed.'); adminRequests();
+  alert(notify ? 'Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.' : 'Posted. It is on the Opportunities tab; nobody was emailed.'); adminRequests();
 }
 async function reqAction(id, action){
   const r=await api('/api/requests/'+id+'/'+action,'POST',{}); if(r.error){ alert(r.error); return; }
@@ -3466,6 +3483,8 @@ async function instrMine(){
   paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':'Complete your background check', go:`jumpTo('#pw${x.id}')`, k:'\u{1F4CB}'}));
   todo.filter(c=>c.followup_status!=='ready').forEach(c=>todos.push({t:`Write your note to the students of ${c.title}`, go:`jumpTo('#fu${c.id}')`, k:'\u2709\uFE0F'}));
   drafts.filter(d=>d.payload_request_id||d.request_id).forEach(d=>todos.push({t:`Finish your proposal for ${d.title||'a claimed class'}`, go:`resumeDraft(${d.id})`, k:'\u{1F4CC}'}));
+  let allReqs=[]; try{ allReqs=(await api('/api/requests')).requests||[]; }catch(_){}
+  allReqs.filter(r=>r.my_interest==='confirmed' && r.status!=='closed').forEach(r=>todos.push({t:`${r.kind==='sell'?'Sell or show':'Assist'}: ${r.title}${r.when_text?' · '+r.when_text:''}`, go:"renderInstr('wanted')", k:r.kind==='sell'?'\u{1F3A8}':'\u{1F64B}'}));
   if(ME && !ME.phone && !paperOpen.some(x=>x.kind==='phone')) todos.push({t:'Add your phone number to your profile', go:'renderProfile()', k:'\u{1F4DE}'});
   if(ME && !ME.photo) todos.push({t:'Add a photo to your profile', go:'renderProfile()', k:'\u{1F4F7}'});
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
@@ -3490,8 +3509,8 @@ async function instrMine(){
           <label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'${x.kind}',true,true)"> I've already ${x.kind==='w9'?'submitted a W-9':'completed a background check'} to The Gibby in ${new Date().getFullYear()}</label>
           <div class="meta" id="pws${x.id}" style="margin-top:6px"></div>`}
       </div>`).join('')}`:''}
-    ${reqs.length?`<div class="card" style="background:#DCE8F5;margin-bottom:10px"><h3 style="font-size:1rem">\u{1F4CC} ${reqs.length} class${reqs.length===1?'':'es'} The Gibby wants taught</h3>
-        <div class="meta">Claim one and the proposal is pre-filled; you just pick the time.</div>
+    ${reqs.length?`<div class="card" style="background:#DCE8F5;margin-bottom:10px"><h3 style="font-size:1rem">\u{1F4CC} ${reqs.length} opportunit${reqs.length===1?'y':'ies'} at The Gibby</h3>
+        <div class="meta">${[reqs.filter(r=>r.kind==='teach').length?reqs.filter(r=>r.kind==='teach').length+' to teach':'', reqs.filter(r=>r.kind==='help').length?reqs.filter(r=>r.kind==='help').length+' to help with':'', reqs.filter(r=>r.kind==='sell').length?reqs.filter(r=>r.kind==='sell').length+' to sell or show':''].filter(Boolean).join(' · ')}</div>
         <button class="btn dark" style="margin-top:10px" onclick="renderInstr('wanted')">See them</button></div>`:''}
     ${todo.length?`<label>Follow-up notes to write (${todo.length})</label>
       <p class="sub" style="margin-top:2px">Your class has finished. Write a short note to your students. It goes out in your name, and replies come straight to you.</p>
@@ -3546,28 +3565,49 @@ async function instrMine(){
       `:''}
     ${classList(classes)}`;
 }
-/* Wanted: classes The Gibby would like taught. Claim one and the class title,
+/* Opportunities: classes to teach (claim), help wanted and sell/show (raise a hand). Claim one and the class title,
    description, ages and room are filled in; the instructor only picks the time. */
-let WANT_SKILL=null;
+let WANT_SKILL=null, WANT_KIND='all';
 function wantFilter(k){ WANT_SKILL = (k===WANT_SKILL) ? null : k; instrWanted(); }
+function wantKind(k){ WANT_KIND=k; instrWanted(); }
+const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}};
 async function instrWanted(){
   let reqs=[]; try{ reqs=(await api('/api/requests')).requests||[]; }catch(_){}
-  const openAll=reqs.filter(r=>r.status==='open'), mine=reqs.filter(r=>r.status==='claimed' && ME && r.claimed_by===ME.id);
+  const openAll=reqs.filter(r=>r.status==='open');
+  const mine=reqs.filter(r=>(r.status==='claimed' && ME && r.claimed_by===ME.id) || (r.my_interest && r.status!=='closed'));
   const tags=[...new Set(openAll.flatMap(r=>r.skills||[]))].sort();
   const my=new Set((ME&&ME.skills)||[]);
-  const open = WANT_SKILL==='__mine' ? openAll.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? openAll.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : openAll;
-  $('#tab').innerHTML = `<h2>Classes <em>wanted</em></h2>
-    <p class="sub">The Gibby would love someone to teach these. Claim one and you go straight to booking: the title, description and details are already filled in.</p>
-    ${tags.length?`<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">\u2728 My skills</button>`:''}${tags.map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
-    ${open.length?open.map(r=>`<div class="card"><h3 style="font-size:1.05rem">${esc(r.title)}</h3>
-        <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
-        ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini ${my.has(k)?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
-        ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
-        ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
-        <button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">Claim this one</button></div>`).join('')
-      :(WANT_SKILL?'<div class="muted">Nothing wanted with that skill right now. Tap Show all.</div>':'<div class="muted">Nothing is wanted right now. Check back after the next planning meeting.</div>')}
-    ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><h3 style="font-size:1rem">${esc(r.title)}</h3>
-        <div class="meta">${r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'}</div></div>`).join('')}`:''}`;
+  let open = WANT_KIND==='all' ? openAll : openAll.filter(r=>r.kind===WANT_KIND);
+  open = WANT_SKILL==='__mine' ? open.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? open.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : open;
+  const kinds=['teach','help','sell'].filter(k=>openAll.some(r=>r.kind===k));
+  const card=r=>{ const m=KIND_META[r.kind]||KIND_META.teach; const raised=r.my_interest;
+    return `<div class="card" style="background:${m.bg}"><div class="row"><h3 style="font-size:1.05rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:#fff;color:var(--ink)">${m.icon} ${m.label}</span></div>
+      <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
+      ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini ${my.has(k)?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
+      ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
+      ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
+      ${r.kind==='teach'
+        ? `<button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">${m.btn}</button>`
+        : raised==='confirmed' ? `<div class="meta" style="margin-top:10px;color:#3F7A32;font-weight:800">✅ You are confirmed for this. ${r.interest_count>1?`(${r.interest_count} raised a hand)`:''}</div>`
+        : raised==='declined' ? `<div class="meta" style="margin-top:10px">The Gibby went another way this time. Thank you for offering.</div>`
+        : raised ? `<div class="meta" style="margin-top:10px;font-weight:800">✋ Hand raised. The Gibby will confirm with you.</div><button class="btn ghost" style="margin-top:6px" onclick="raiseHand(${r.id},true)">Never mind, withdraw</button>`
+        : `<button class="btn dark" style="margin-top:10px" onclick="raiseHand(${r.id},false)">${m.btn}</button>${r.interest_count?`<div class="meta" style="margin-top:4px">${r.interest_count} ${r.interest_count===1?'person has':'people have'} raised a hand so far.</div>`:''}`}
+    </div>`; };
+  $('#tab').innerHTML = `<h2>Opportunities</h2>
+    <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, and chances to sell or show your work.</p>
+    ${kinds.length>1?`<div class="seg" style="margin-bottom:8px"><button class="${WANT_KIND==='all'?'on':''}" onclick="wantKind('all')">All</button>${kinds.map(k=>`<button class="${WANT_KIND===k?'on':''}" onclick="wantKind('${k}')">${KIND_META[k].icon} ${KIND_META[k].label}</button>`).join('')}</div>`:''}
+    ${tags.length?`<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">✨ My skills</button>`:''}${tags.map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
+    ${open.length?open.map(card).join('')
+      :((WANT_SKILL||WANT_KIND!=='all')?'<div class="muted">Nothing like that right now. Tap All or Show all.</div>':'<div class="muted">Nothing is open right now. Check back after the next planning meeting.</div>')}
+    ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><div class="row"><h3 style="font-size:1rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:var(--cream)">${(KIND_META[r.kind]||KIND_META.teach).label}</span></div>
+        <div class="meta">${r.kind==='teach'?(r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'):r.my_interest==='confirmed'?'Confirmed by The Gibby'+(r.when_text?' · '+esc(r.when_text):''):r.my_interest==='declined'?'Not this time':'Hand raised, waiting on The Gibby'}</div></div>`).join('')}`:''}`;
+}
+async function raiseHand(id, withdraw){
+  let note='';
+  if(!withdraw){ note=prompt('Anything The Gibby should know? (optional)'); if(note===null) return; }
+  try{ await api('/api/requests/'+id+'/interest','POST',{note, withdraw:!!withdraw}); }catch(e){ alert(e.message); return; }
+  if(!withdraw) alert('Thank you! The Gibby will confirm with you by email.');
+  instrWanted();
 }
 /* Which day the class is over: the last session for a course, the day itself
    otherwise. Labels carry no year, so the year comes from sort_key (first
@@ -4330,7 +4370,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
