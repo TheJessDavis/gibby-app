@@ -2383,6 +2383,7 @@ function linkify(t){ return esc(t).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1
 function fileToB64(file){ return new Promise((ok,bad)=>{ const r=new FileReader(); r.onload=()=>ok(r.result); r.onerror=()=>bad(new Error('Could not read that file.')); r.readAsDataURL(file); }); }
 async function paperComplete(id, kind, noFile, already){
   const st=$('#pws'+id);
+  const card=$('#pw'+id); if(card){ if(card.dataset.busy) return; card.dataset.busy='1'; card.querySelectorAll('button').forEach(b=>b.disabled=true); }
   const body={};
   if(already){ body.already=true; }
   else if(kind==='phone'){ body.value=$('#pwv'+id).value; }
@@ -2396,7 +2397,7 @@ async function paperComplete(id, kind, noFile, already){
     if(st) st.textContent='Sending…';
   }
   try{ await api('/api/paperwork/'+id+'/complete','POST',body); }
-  catch(e){ if(st) st.textContent=e.message; else alert(e.message); return; }
+  catch(e){ if(st) st.textContent=e.message; else alert(e.message); if(card){ delete card.dataset.busy; card.querySelectorAll('button').forEach(b=>b.disabled=false); } return; }
   if(kind==='phone'){ try{ ME=(await api('/api/me')).user; }catch(_){} }
   alert('Thank you. The Gibby has it.'); boot();
 }

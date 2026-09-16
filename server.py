@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.82.0-opportunities"
+VERSION = "10.82.1-no-duplicate-emails"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4772,12 +4772,14 @@ class H(http.server.BaseHTTPRequestHandler):
                     print("[paperwork] drive copy failed:", e)
             elif r["kind"] == "w9" and action == "complete":
                 c.close(); return self.send_json({"error":"Please attach a photo or PDF of your signed W-9."},400)
-            c.execute("""UPDATE paperwork SET status='done', done_at=?, value=COALESCE(?,value),
+            was_done = (r["status"] == "done")
+            c.execute("""UPDATE paperwork SET status='done', done_at=COALESCE(done_at, ?), value=COALESCE(?,value),
                          file_name=COALESCE(?,file_name), file_mime=COALESCE(?,file_mime), file_b64=COALESCE(?,file_b64),
                          drive_link=COALESCE(?,drive_link) WHERE id=?""",
                       (now(), value or None, fname, fmime, fb64, link, pid))
             c.commit(); c.close()
-            if action == "complete" and u["role"] != "admin":
+            # Admins hear once, when the item first lands; a re-save or a second tap stays quiet.
+            if action == "complete" and u["role"] != "admin" and not was_done:
                 admins = emails_for(db(), "WHERE role='admin'")
                 label = PAPERWORK_KINDS[r["kind"]]["label"]
                 mailer.send(admins, f"{owner['name'] or owner['email']} sent their {label}",

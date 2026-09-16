@@ -151,15 +151,22 @@ def send_via_bridge(recips, subject, body, cfg, attachments, reply_to=None, from
         req = urllib.request.Request(b["url"], data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
         raw = None
-        for attempt in (1, 2):      # Apps Script occasionally answers 404/5xx for one call; try twice
+        for attempt in (1, 2):
+            # Retry ONLY when the request never reached the script (a 404 from
+            # script.google.com's front door). A timeout or a 5xx can mean Gmail
+            # already sent the message; retrying those is how people got the
+            # same email twice.
             try:
-                with urllib.request.urlopen(req, timeout=60) as r:
+                with urllib.request.urlopen(req, timeout=90) as r:
                     raw = r.read().decode("utf-8", "replace")
                 break
             except urllib.error.HTTPError as e:
-                if attempt == 2 or e.code not in (404, 429, 500, 502, 503, 504): raise
-                print(f"[email] bridge answered {e.code}; retrying once"); time.sleep(3)
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                if attempt == 2 or e.code != 404: raise
+                print(f"[email] bridge answered 404 before running; retrying once"); time.sleep(3)
+            except (TimeoutError, OSError) as e:
+                if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
+                    print(f"[email] bridge timed out; assuming it sent (no retry): {subject!r} -> {one}")
+                    raw = json.dumps({"ok": True, "assumed": True}); break
                 if attempt == 2: raise
                 print(f"[email] bridge unreachable ({e}); retrying once"); time.sleep(3)
         _check_bridge_reply(raw)
@@ -196,6 +203,27 @@ def _copy(subject, body, recips, cfg, from_name=None):
     except Exception as e:
         print("[email] copy failed:", e)
 
+_RECENT = {}      # (recipient, subject, body-hash) -> time sent; identical repeats inside the window are dropped
+DEDUPE_SECONDS = 600
+
+def _dedupe(recips, subject, body):
+    """Two calls asking for the exact same email to the same person within ten
+    minutes almost always mean a double tap or a repeated hook, never a real
+    second message. Return the recipients that are genuinely new."""
+    import hashlib
+    now_ = time.time()
+    for k, t in list(_RECENT.items()):
+        if now_ - t > DEDUPE_SECONDS: _RECENT.pop(k, None)
+    h = hashlib.sha1((subject + "\n" + body).encode("utf-8", "replace")).hexdigest()
+    fresh = []
+    for r in recips:
+        k = (r.lower(), h)
+        if k in _RECENT:
+            print(f"[email] duplicate suppressed: {subject!r} -> {r} (sent {int(now_ - _RECENT[k])}s ago)")
+            continue
+        _RECENT[k] = now_; fresh.append(r)
+    return fresh
+
 def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
@@ -203,6 +231,9 @@ def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name
     recips = [r for r in recips if r and "@" in r]
     if not recips:
         print(f"[email] no valid recipient for {subject!r}"); return False
+    recips = _dedupe(recips, subject, body)
+    if not recips:
+        return True          # already sent moments ago; nothing more to do
     # Every email links back to the app, so nobody has to hunt for the address.
     if APP_URL not in body:
         body = body.rstrip() + f"\n\nOpen the Gibby Class Manager: {APP_URL}"
