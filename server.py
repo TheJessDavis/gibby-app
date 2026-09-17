@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.85.1-button-label"
+VERSION = "10.85.2-ticket-sources"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1252,6 +1252,48 @@ def sweep_materials_sheet():
 def materials_sheet_soon():
     """Rebuild the materials sheet in the background after a class changes."""
     threading.Thread(target=sweep_materials_sheet, daemon=True).start()
+
+# Eventbrite's aff= codes are opaque; this is what they mean in practice.
+CHANNEL_MEANINGS = [
+    # (prefix or exact code, label, group)
+    ("fb",        "The Gibby's Facebook posts",            "The Gibby's own links"),
+    ("site",      "theeverett.org",                        "The Gibby's own links"),
+    ("Website",   "theeverett.org",                        "The Gibby's own links"),
+    ("descene",   "DelawareScene listing",                 "The Gibby's own links"),
+    ("flyer",     "Flyer QR codes",                        "The Gibby's own links"),
+    ("email",     "The Gibby's announcement emails",       "The Gibby's own links"),
+    ("oddtdtcreator", "Link copied from the Eventbrite dashboard", "The Gibby's own links"),
+    ("oddtdtdirect",  "Direct link shared by The Gibby",   "The Gibby's own links"),
+    ("oddttrorg",     "Organizer tracking link",           "The Gibby's own links"),
+    ("odeimcmailchimp", "Mailchimp email",                 "Emails"),
+    ("odeccpebemailcampaigns", "Eventbrite email campaign", "Emails"),
+    ("erelliv",   "Eventbrite reminder or follow-up email", "Emails"),
+    ("ebdsoporgprofile", "The Gibby's Eventbrite organizer page", "Eventbrite organizer page"),
+    ("ebeseaorganizationprofile", "The Gibby's Eventbrite organizer page", "Eventbrite organizer page"),
+    ("ebesesorganizerprofile", "The Gibby's Eventbrite organizer page", "Eventbrite organizer page"),
+    ("ebdssbdestsearch", "Eventbrite search",              "Found on Eventbrite"),
+    ("ebesessearch",     "Eventbrite search",              "Found on Eventbrite"),
+    ("ebeseseventlisting", "Browsing Eventbrite listings", "Found on Eventbrite"),
+    ("ebesesfeed",       "Eventbrite home feed",           "Found on Eventbrite"),
+    ("ebesesliked",      "Saved or liked on Eventbrite",   "Found on Eventbrite"),
+    ("ebdssbcitybrowse", "Browsing events near Middletown", "Found on Eventbrite"),
+    ("odcleoeventsincollection", "An Eventbrite collection page", "Found on Eventbrite"),
+    ("ebdsshsms",        "Shared by text message",         "Shared by people"),
+    ("ebdsshwebmobile",  "Shared from a phone",            "Shared by people"),
+    ("ebdsshcopyurl",    "Shared by copied link",          "Shared by people"),
+    ("ebdsshfacebook",   "Shared to Facebook by a person", "Shared by people"),
+    ("ebeseadeeplink",   "Opened from a shared link",      "Shared by people"),
+    ("ebesesdeeplink",   "Opened from a shared link",      "Shared by people"),
+    ("ebdssh",           "Shared by a person",             "Shared by people"),
+    ("direct",           "Typed the address or unknown",   "Direct or unknown"),
+]
+
+def channel_meaning(code):
+    c = (code or "direct").strip()
+    for key, label, group in CHANNEL_MEANINGS:
+        if c == key or c.lower().startswith(key.lower()):
+            return {"label": label, "group": group}
+    return {"label": f"Eventbrite code {c}", "group": "Other"}
 
 def sweep_master_sheet():
     """Keep 'Gibby Classes Master Sheet' on Google Drive current: one row per
@@ -3541,13 +3583,19 @@ class H(http.server.BaseHTTPRequestHandler):
             totals["eb_refunded"] = round(sum(x["eb_refunded"] or 0 for x in out), 2)
             totals["margin"] = (totals["net"] / totals["revenue"]) if totals["revenue"] else 0
             totals["fill"] = (totals["seats"] / totals["planned"]) if totals["planned"] else 0
-            # Which channel sold the tickets (the aff= code Eventbrite hands back).
+            # Which channel sold the tickets (the aff= code Eventbrite hands back),
+            # translated into plain English and grouped.
             c2 = db()
             chan_rows = c2.execute("""SELECT COALESCE(NULLIF(source,''),'direct') AS ch, COUNT(*) AS n
                                       FROM registrations WHERE refunded=0 GROUP BY ch ORDER BY n DESC""").fetchall()
-            channels = [{"channel": r["ch"], "tickets": r["n"]} for r in chan_rows]
+            channels = [{"channel": r["ch"], "tickets": r["n"], **channel_meaning(r["ch"])} for r in chan_rows]
             c2.close()
-            return self.send_json({"classes": out, "totals": totals, "channels": channels,
+            groups = {}
+            for ch in channels:
+                g = groups.setdefault(ch["group"], {"group": ch["group"], "tickets": 0, "codes": []})
+                g["tickets"] += ch["tickets"]; g["codes"].append(ch)
+            channel_groups = sorted(groups.values(), key=lambda g: -g["tickets"])
+            return self.send_json({"classes": out, "totals": totals, "channels": channels, "channel_groups": channel_groups,
                                    "by_class": rollup("title"), "by_instructor": rollup("instructor")})
         if p == "/api/feedback":
             # What instructors actually said, grouped by class title so a repeat of

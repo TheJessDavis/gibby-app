@@ -2155,11 +2155,15 @@ async function adminMoney(){
         <div class="sub2">${r.runs} ${r.runs===1?unit:unit+'s'} &middot; ${pct(r.fill)} full &middot; ${pct(r.margin)} margin</div></div>
       <div class="amt"><b class="${r.net_per_run>=0?'pos':'neg'}">${money0(r.net_per_run)}</b><span>avg per class</span></div>
     </div>`).join('') : '<div class="muted">Nothing has run yet.</div>';
-  const CHN={fb:'Facebook posts',site:'Website',descene:'DelawareScene',flyer:'Flyer QR codes',email:'Announcement emails',direct:'Direct / other'};
-  const chanRow = (d.channels&&d.channels.length&&d.channels.some(x=>x.channel!=='direct'))
+  const cg=d.channel_groups||[]; const ctot=cg.reduce((s,g)=>s+g.tickets,0);
+  const chanRow = ctot
     ? `<div class="card"><h3 style="font-size:1rem">Where tickets come from</h3>
-       <div class="meta" style="margin-top:6px">${d.channels.map(x=>`${esc(CHN[x.channel]||x.channel)}: <b>${x.tickets}</b>`).join(' · ')}</div>
-       <div class="meta" style="margin-top:4px">Counted from the tracking tag on each Register link, reported back by Eventbrite.</div></div>`
+       <div class="meta" style="margin-top:2px">${ctot} tickets, by how the buyer reached the listing.</div>
+       ${cg.map(g=>`<div style="margin-top:10px"><div class="row" style="align-items:baseline"><b style="font-size:14px">${esc(g.group)}</b><span class="meta"><b>${g.tickets}</b> · ${Math.round(100*g.tickets/ctot)}%</span></div>
+         <div style="height:8px;border-radius:999px;background:#EFE9DC;overflow:hidden"><div style="height:100%;width:${Math.max(2,Math.round(100*g.tickets/ctot))}%;background:var(--ink)"></div></div>
+         <div class="meta" style="margin-top:3px">${g.codes.map(x=>`${esc(x.label)}: ${x.tickets}`).join(' · ')}</div></div>`).join('')}
+       <details style="margin-top:10px"><summary class="meta" style="cursor:pointer">The raw Eventbrite codes</summary><div class="meta" style="margin-top:4px">${(d.channels||[]).map(x=>`${esc(x.channel)}: ${x.tickets}`).join(' · ')}</div></details>
+       <div class="meta" style="margin-top:6px">Eventbrite tags every ticket with how the buyer got there. "The Gibby's own links" are the ones the app and you share; "Found on Eventbrite" means they were browsing or searching there.</div></div>`
     : '';
   $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
     ${(function(){ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='requested'), appr=rs.filter(r=>r.status==='approved');
