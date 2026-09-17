@@ -1099,6 +1099,7 @@ async function adminDashboard(){
   window.__rrc = rr;
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
+    ${d.channel_summary?`<div class="card" style="background:#DCE8F5"><div class="meta"><b>\u{1F4C8} Where tickets came from.</b> ${esc(d.channel_summary)} <a href="#" onclick="renderAdmin('money');return false">Details</a></div></div>`:''}
     <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
     ${d.email_error?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
       <div class="row"><div><h3>\u26a0 Email is not going out</h3>
@@ -2156,9 +2157,12 @@ async function adminMoney(){
       <div class="amt"><b class="${r.net_per_run>=0?'pos':'neg'}">${money0(r.net_per_run)}</b><span>avg per class</span></div>
     </div>`).join('') : '<div class="muted">Nothing has run yet.</div>';
   const cg=d.channel_groups||[]; const ctot=cg.reduce((s,g)=>s+g.tickets,0);
+  const mv=d.movement||[];
   const chanRow = ctot
     ? `<div class="card"><h3 style="font-size:1rem">Where tickets come from</h3>
-       <div class="meta" style="margin-top:2px">${ctot} tickets, by how the buyer reached the listing.</div>
+       ${d.channel_summary?`<div class="meta" style="margin-top:2px"><b>${esc(d.channel_summary)}</b></div>`:''}
+       ${mv.length?`<div class="meta" style="margin-top:10px"><b>Last 30 days vs the 30 before</b></div>${mv.map(m=>`<div class="meta">${esc(m.group)}: <b>${m.now}</b> ${m.now>m.prev?'<span class="pos">\u25B2 up from '+m.prev+'</span>':m.now<m.prev?'<span class="neg">\u25BC down from '+m.prev+'</span>':'(same as before)'}</div>`).join('')}</div>`:''}
+       <div class="meta" style="margin-top:10px"><b>All time:</b> ${ctot} tickets, by how the buyer reached the listing.</div>
        ${cg.map(g=>`<div style="margin-top:10px"><div class="row" style="align-items:baseline"><b style="font-size:14px">${esc(g.group)}</b><span class="meta"><b>${g.tickets}</b> · ${Math.round(100*g.tickets/ctot)}%</span></div>
          <div style="height:8px;border-radius:999px;background:#EFE9DC;overflow:hidden"><div style="height:100%;width:${Math.max(2,Math.round(100*g.tickets/ctot))}%;background:var(--ink)"></div></div>
          <div class="meta" style="margin-top:3px">${g.codes.map(x=>`${esc(x.label)}: ${x.tickets}`).join(' · ')}</div></div>`).join('')}
@@ -2228,7 +2232,7 @@ async function adminMoney(){
     ${d.classes.map(c=>`<tr>
       <td><b>${esc(c.title)}</b><div class="meta">${esc(c.slot_date||'')} &middot; ${esc(c.instructor||'')}${
         c.status==='cancelled'?' &middot; cancelled':(c.actual?'':' &middot; upcoming')}</div></td>
-      <td class="num">${c.enrolled}/${c.planned}</td>
+      <td class="num">${c.enrolled}/${c.planned}${(c.channels||[]).length?`<div class="meta" style="font-weight:600;white-space:normal;text-align:right">${c.channels.map(x=>x.tickets+' '+esc(x.label)).join(', ')}</div>`:''}</td>
       <td class="num">${c.eb_payout!=null
         ? money0(c.eb_payout)+'<div class="meta">actual payout'+(c.eb_fees?'; '+money0(c.eb_fees)+' fees':'')+'</div>'
         : money0(c.revenue)+'<div class="meta">estimate</div>'}${(c.eb_refunded||c.refund_tickets)
@@ -2495,6 +2499,30 @@ async function paperComplete(id, kind, noFile, already){
   catch(e){ if(st) st.textContent=e.message; else alert(e.message); if(card){ delete card.dataset.busy; card.querySelectorAll('button').forEach(b=>b.disabled=false); } return; }
   if(kind==='phone'){ try{ ME=(await api('/api/me')).user; }catch(_){} }
   alert('Thank you. The Gibby has it.'); boot();
+}
+/* A tagged Eventbrite link so tickets count against the place it was shared.
+   Admins choose the channel; instructors' shares are tagged as theirs. */
+const SHARE_CH=[['fb','Facebook post'],['ig','Instagram'],['news','Newsletter'],['flyer','Flyer or poster'],['text','Text to a friend'],['web','Website']];
+function shareClass(id){
+  const c=(window.__classes||[]).find(x=>x.id===id)||{};
+  if(actingRole()!=='admin') return shareGo(id,'instr',c.title);
+  const m=document.createElement('div'); m.id='sharemodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:16px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:400px;width:100%;padding:20px 22px">
+    <h2 style="margin:0 0 2px">Share <em>${esc(c.title||'')}</em></h2>
+    <p class="sub" style="margin:0 0 12px">Where are you posting it? The link is tagged, so tickets from it show up under that channel in Money.</p>
+    ${SHARE_CH.map(([k,l])=>`<button class="btn ghost" style="margin-top:6px;text-align:left" onclick="shareGo(${id},'${k}','${esc(c.title||'')}')">${esc(l)}</button>`).join('')}
+    <button class="btn ghost" style="margin-top:12px" onclick="document.getElementById('sharemodal').remove()">Cancel</button></div>`;
+  m.addEventListener('click', e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+async function shareGo(id, ch, title){
+  let r; try{ r=await api('/api/classes/'+id+'/share-link','POST',{channel:ch}); }catch(e){ alert(e.message); return; }
+  const m=$('#sharemodal'); if(m) m.remove();
+  const text=`${title}: ${r.url}`;
+  if(navigator.share){ try{ await navigator.share({title, url:r.url}); return; }catch(_){} }
+  try{ await navigator.clipboard.writeText(r.url); alert('Link copied. Paste it wherever you are posting.\n\n'+r.url); }
+  catch(_){ prompt('Copy this link:', r.url); }
 }
 async function skipFeedback(id){
   try{ await api('/api/classes/'+id+'/feedback/skip','POST',{}); }
@@ -2783,6 +2811,7 @@ function cardCls(c){
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       ${c.rating_n?`<div class="meta" style="margin-top:6px"><b style="color:#B4761A">\u2605 ${c.rating_avg}</b> from ${c.rating_n} student${c.rating_n===1?'':'s'}${(c.rating_comments||[]).length?`<div style="margin-top:4px">${c.rating_comments.slice(0,3).map(x=>`<div style="border-left:3px solid var(--line);padding-left:8px;margin-top:4px">\u201c${esc(x.text)}\u201d</div>`).join('')}${c.rating_comments.length>3?`<div class="hint">and ${c.rating_comments.length-3} more</div>`:''}</div>`:''}</div>`:''}
+      ${c.status==='approved' && (c.external_ids||{}).eventbrite_id ? `<button class="btn dark" style="margin-top:10px" onclick="shareClass(${c.id})">\u{1F517} Share a tracked link</button>` : ''}
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
       <button class="btn ghost" style="margin-top:8px" onclick="orderForm(${c.id})">\u{1F9FA} Ask the Gibby to order supplies</button>
@@ -4533,7 +4562,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

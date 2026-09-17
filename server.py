@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.85.2-ticket-sources"
+VERSION = "10.86.0-share-channels"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1256,6 +1256,15 @@ def materials_sheet_soon():
 # Eventbrite's aff= codes are opaque; this is what they mean in practice.
 CHANNEL_MEANINGS = [
     # (prefix or exact code, label, group)
+    ("gibby-fb",  "Facebook post",                          "The Gibby's own links"),
+    ("gibby-ig",  "Instagram",                              "The Gibby's own links"),
+    ("gibby-news","Newsletter",                             "The Gibby's own links"),
+    ("gibby-flyer","Flyer or poster",                       "The Gibby's own links"),
+    ("gibby-text","Texted to a friend",                     "Shared by people"),
+    ("gibby-web", "theeverett.org",                         "The Gibby's own links"),
+    ("gibby-instr","Instructor's own share",                "Shared by people"),
+    ("gibby-",    "Tagged link",                            "The Gibby's own links"),
+    ("instructor","Instructor's own share",                 "Shared by people"),
     ("fb",        "The Gibby's Facebook posts",            "The Gibby's own links"),
     ("site",      "theeverett.org",                        "The Gibby's own links"),
     ("Website",   "theeverett.org",                        "The Gibby's own links"),
@@ -1287,6 +1296,24 @@ CHANNEL_MEANINGS = [
     ("ebdssh",           "Shared by a person",             "Shared by people"),
     ("direct",           "Typed the address or unknown",   "Direct or unknown"),
 ]
+
+def channel_summary_line(days=30):
+    """One plain sentence about where the last month's tickets came from."""
+    c = db()
+    since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    by = {}
+    for r in c.execute("""SELECT COALESCE(NULLIF(source,''),'direct') AS ch, COUNT(*) AS n FROM registrations
+                          WHERE refunded=0 AND created>=? GROUP BY ch""", (since,)):
+        g = channel_meaning(r["ch"])["group"]; by[g] = by.get(g, 0) + r["n"]
+    best = c.execute("""SELECT cl.title, r.source AS ch, COUNT(*) AS n FROM registrations r JOIN classes cl ON cl.id=r.class_id
+                        WHERE r.refunded=0 AND r.created>=? AND r.source LIKE 'gibby-%' GROUP BY r.class_id, r.source ORDER BY n DESC LIMIT 1""", (since,)).fetchone()
+    c.close()
+    tot = sum(by.values())
+    if not tot: return ""
+    parts = [f"{round(100*n/tot)}% {g[0].lower()+g[1:]}" for g, n in sorted(by.items(), key=lambda kv: -kv[1])[:3]]
+    line = f"Last {days} days: {tot} tickets, " + ", ".join(parts) + "."
+    if best: line += f" Best post: {best['title']} via {channel_meaning(best['ch'])['label']}, {best['n']} tickets."
+    return line
 
 def channel_meaning(code):
     c = (code or "direct").strip()
@@ -1859,6 +1886,8 @@ def admin_digest_text(c):
                                        JOIN users u ON u.id=s.user_id WHERE s.status='requested' ORDER BY s.needed_by""")]
     pw = [dict(r) for r in c.execute("""SELECT u.name, p.kind FROM paperwork p JOIN users u ON u.id=p.user_id
                                        WHERE p.status='requested' AND u.deleted_at IS NULL ORDER BY u.name""")]
+    cs = channel_summary_line()
+    if cs: L.append(""); L.append("WHERE TICKETS CAME FROM"); L.append(f"  {cs}")
     L.append(""); L.append(f"PAPERWORK STILL WAITING: {len(pw)}")
     for x in pw: L.append(f"  {x['name']}: {PAPERWORK_KINDS.get(x['kind'],{}).get('label', x['kind'])}")
     L.append(""); L.append(f"SUPPLY REQUESTS WAITING: {len(sp)}")
@@ -3595,7 +3624,40 @@ class H(http.server.BaseHTTPRequestHandler):
                 g = groups.setdefault(ch["group"], {"group": ch["group"], "tickets": 0, "codes": []})
                 g["tickets"] += ch["tickets"]; g["codes"].append(ch)
             channel_groups = sorted(groups.values(), key=lambda g: -g["tickets"])
+            # Per class: which channels sold it (only the top few, in words).
+            c3 = db()
+            per_class = {}
+            for r in c3.execute("""SELECT class_id, COALESCE(NULLIF(source,''),'direct') AS ch, COUNT(*) AS n
+                                   FROM registrations WHERE refunded=0 GROUP BY class_id, ch"""):
+                per_class.setdefault(r["class_id"], []).append({"label": channel_meaning(r["ch"])["label"], "tickets": r["n"]})
+            for x in out:
+                x["channels"] = sorted(per_class.get(x["id"], []), key=lambda y: -y["tickets"])[:4]
+            # Movement: last 30 days against the 30 before, by group.
+            today = datetime.date.today()
+            d30 = (today - datetime.timedelta(days=30)).isoformat(); d60 = (today - datetime.timedelta(days=60)).isoformat()
+            recent = {"now": {}, "prev": {}}
+            for r in c3.execute("""SELECT COALESCE(NULLIF(source,''),'direct') AS ch, substr(created,1,10) AS d, COUNT(*) AS n
+                                   FROM registrations WHERE refunded=0 AND created>=? GROUP BY ch, d""", (d60,)):
+                g = channel_meaning(r["ch"])["group"]
+                bucket = "now" if r["d"] >= d30 else "prev"
+                recent[bucket][g] = recent[bucket].get(g, 0) + r["n"]
+            movement = [{"group": g, "now": recent["now"].get(g, 0), "prev": recent["prev"].get(g, 0)}
+                        for g in sorted(set(recent["now"]) | set(recent["prev"]), key=lambda g: -recent["now"].get(g, 0))]
+            # Best post: the tagged share that sold the most in the last 30 days.
+            c3.execute("""CREATE TABLE IF NOT EXISTS share_log(id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, channel TEXT, created TEXT)""")
+            best = None
+            for r in c3.execute("""SELECT r.class_id, r.source AS ch, COUNT(*) AS n, cl.title FROM registrations r JOIN classes cl ON cl.id=r.class_id
+                                   WHERE r.refunded=0 AND r.created>=? AND r.source LIKE 'gibby-%' GROUP BY r.class_id, r.source ORDER BY n DESC LIMIT 1""", (d30,)):
+                best = {"title": r["title"], "label": channel_meaning(r["ch"])["label"], "tickets": r["n"]}
+            c3.close()
+            now_tot = sum(recent["now"].values())
+            summary = ""
+            if now_tot:
+                parts = [f"{round(100*m['now']/now_tot)}% {m['group'][0].lower()+m['group'][1:]}" for m in movement[:3] if m["now"]]
+                summary = f"Last 30 days: {now_tot} tickets, " + ", ".join(parts) + "."
+                if best: summary += f" Best post: {best['title']} via {best['label']}, {best['tickets']} tickets."
             return self.send_json({"classes": out, "totals": totals, "channels": channels, "channel_groups": channel_groups,
+                                   "movement": movement, "best_post": best, "channel_summary": summary,
                                    "by_class": rollup("title"), "by_instructor": rollup("instructor")})
         if p == "/api/feedback":
             # What instructors actually said, grouped by class title so a repeat of
@@ -4036,6 +4098,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             approved = self._classes("WHERE c.status='approved' ")
             return self.send_json({
+                "channel_summary": channel_summary_line(),
                 "publish_failures": self._publish_failures(),
                 "email_error": mailer.LAST_ERROR,
                 "supplies_waiting": db().execute("SELECT COUNT(*) FROM supply_requests WHERE status='requested'").fetchone()[0],
@@ -5127,6 +5190,26 @@ class H(http.server.BaseHTTPRequestHandler):
                        (b.get("description") or "").strip()[:1500], json.dumps(skills), kind, (b.get("button_label") or "").strip()[:60] or None, rid))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        msh = re.match(r"^/api/classes/(\d+)/share-link$", p)
+        if msh:
+            # A tagged Eventbrite link for one class. The tag rides through checkout
+            # as Eventbrite's aff= code, so tickets count against this channel.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(msh.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"forbidden"},403)
+            try: ext = json.loads(row["external_ids"] or "{}")
+            except Exception: ext = {}
+            if not ext.get("eventbrite_id"): c.close(); return self.send_json({"error":"This class is not on Eventbrite yet."},400)
+            ch = re.sub(r"[^a-z0-9]", "", str(b.get("channel") or "").lower())[:12] or "fb"
+            if u["role"] != "admin": ch = "instr"
+            tag = f"gibby-{ch}"
+            c.execute("""CREATE TABLE IF NOT EXISTS share_log(id INTEGER PRIMARY KEY, class_id INTEGER, user_id INTEGER, channel TEXT, created TEXT)""")
+            c.execute("INSERT INTO share_log(class_id,user_id,channel,created) VALUES(?,?,?,?)", (cid, u["id"], tag, now()))
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff={tag}", "tag": tag})
         mrfu = re.match(r"^/api/requests/(\d+)/files$", p)
         if mrfu:
             # Admin attaches images and documents to an opportunity (flyer, form, photos).
