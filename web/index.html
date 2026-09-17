@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gibby Class Manager</title>
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#1E160A">
@@ -50,6 +50,29 @@
   .top button.out{border:none;background:rgba(0,0,0,.06);border-radius:10px;padding:7px 12px;font-weight:800;font-size:12px;cursor:pointer;color:var(--ink);white-space:nowrap}
   .top .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38vw}
   @media(max-width:560px){.edithint{display:none}}
+  /* Desktop: the phone column becomes a centred page with a left rail for the
+     navigation. Same markup everywhere; only widths and the bars move. */
+  @media(min-width:900px){
+    .app{max-width:1120px;box-shadow:none;background:transparent}
+    .top{position:sticky;top:0;max-width:1120px;margin:0 auto;padding:14px 32px 14px 264px;border-bottom:0;background:transparent;width:100%;box-sizing:border-box}
+    body .view{margin-left:232px;padding:0 32px 60px;max-width:820px}
+    .bnav{top:76px;bottom:auto;left:calc(50% - 560px + 20px);right:auto;width:196px;max-width:none;margin:0;flex-direction:column;gap:4px;padding:10px;border-radius:20px;box-shadow:0 10px 26px rgba(0,0,0,.14)}
+    .bnav button{flex:none;flex-direction:row;justify-content:flex-start;gap:10px;padding:11px 12px;border-radius:12px}
+    .bnav button .bi{font-size:18px} .bnav button .bl{font-size:12.5px;letter-spacing:.02em;text-transform:none}
+    .bnav .navbadge{top:8px;right:10px}
+    .bsheet{top:76px;bottom:auto;left:calc(50% - 560px + 224px);right:auto;width:300px;max-width:none;margin:0;grid-template-columns:repeat(3,1fr)}
+    body .fab{left:calc(50% - 560px + 264px);right:auto;width:756px;max-width:none;border-radius:18px 18px 0 0}
+    body #todobar,body .selbar{left:calc(50% - 560px + 264px);right:auto;width:756px;max-width:none;margin:0}
+    body .cal{max-width:none}
+    .card,.clscard{padding:18px 20px}
+    body .login-wrap{min-height:80vh;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-left:-232px}
+    body.formopen .bnav{display:flex!important}
+    .menu{right:calc(50% - 560px + 32px)}
+  }
+  @media(min-width:900px) and (max-width:1160px){
+    .bnav{left:20px} .bsheet{left:224px} body .fab,body #todobar,body .selbar{left:264px;width:calc(100% - 296px);max-width:756px}
+    .top{padding:14px 20px} .menu{right:20px}
+  }
   .view{flex:1;padding:20px;padding-bottom:120px}
   @font-face{font-family:'Summer Fresh';src:url('/SummerFresh.ttf') format('truetype');font-display:swap}
   h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
