@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.84.1-email-label"
+VERSION = "10.85.0-proposals"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -221,6 +221,8 @@ def init_db():
         status TEXT DEFAULT 'requested', note TEXT, requested_by INTEGER, requested_at TEXT,
         reminded_at TEXT, done_at TEXT, value TEXT, file_name TEXT, file_mime TEXT, file_b64 TEXT,
         drive_link TEXT, UNIQUE(user_id, kind))""")
+    try: c.execute("ALTER TABLE request_interest ADD COLUMN proposal TEXT")   # JSON: a full proposal for Design opportunities
+    except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
@@ -241,6 +243,8 @@ def init_db():
         nm = str(name).strip()[:40]
         if nm and nm.lower() not in seen:
             c.execute("INSERT OR IGNORE INTO skills(name,created) VALUES(?,?)", (nm, now())); seen.add(nm.lower())
+    c.execute("""CREATE TABLE IF NOT EXISTS interest_files(
+        id INTEGER PRIMARY KEY, interest_id INTEGER NOT NULL, name TEXT, mime TEXT, b64 TEXT, thumb TEXT, created TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS request_interest(
         id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL, user_id INTEGER NOT NULL, note TEXT,
         status TEXT DEFAULT 'raised', created TEXT, decided_at TEXT, UNIQUE(request_id, user_id))""")
@@ -3681,6 +3685,13 @@ class H(http.server.BaseHTTPRequestHandler):
                  ((datetime.datetime.now()-datetime.timedelta(days=30)).isoformat(timespec="seconds"),)).fetchall()]
             inter = [dict(x) for x in c.execute("""SELECT i.*, us.name, us.email, us.phone, us.skills AS user_skills FROM request_interest i
                                                     JOIN users us ON us.id=i.user_id ORDER BY i.id""").fetchall()]
+            ifiles = {}
+            for f in c.execute("SELECT id, interest_id, name, mime, thumb FROM interest_files ORDER BY id"):
+                ifiles.setdefault(f["interest_id"], []).append({"id": f["id"], "name": f["name"], "mime": f["mime"], "thumb": f["thumb"] or ""})
+            for x in inter:
+                try: x["proposal_obj"] = json.loads(x.get("proposal") or "null")
+                except Exception: x["proposal_obj"] = None
+                x["files_list"] = ifiles.get(x["id"], [])
             c.close()
             by_req = {}
             for x in inter: by_req.setdefault(x["request_id"], []).append(x)
@@ -3699,9 +3710,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 r["files"] = files.get(r["id"], [])
                 mine = [x for x in by_req.get(r["id"], []) if x["user_id"] == u["id"]]
                 r["my_interest"] = mine[0]["status"] if mine else None
+                r["my_proposal"] = mine[0]["proposal_obj"] if mine else None
                 if u["role"] == "admin":
                     r["interest"] = [{"id": x["id"], "user_id": x["user_id"], "name": x["name"], "email": x["email"], "phone": x["phone"] or "",
-                                      "skills": json.loads(x["user_skills"] or "[]"), "note": x["note"] or "", "status": x["status"], "created": x["created"]}
+                                      "skills": json.loads(x["user_skills"] or "[]"), "note": x["note"] or "", "status": x["status"], "created": x["created"],
+                                      "proposal": x["proposal_obj"], "files": x["files_list"]}
                                      for x in by_req.get(r["id"], [])]
                 else:
                     r["interest_count"] = len(by_req.get(r["id"], []))
@@ -3887,6 +3900,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 for x in _loads_list(r["skills"]): used[x.lower()] = used.get(x.lower(), 0) + 1
             c.close()
             return self.send_json({"skills": rows, "people": used})
+        mif = re.match(r"^/api/interest-files/(\d+)$", p)
+        if mif:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); r = c.execute("SELECT f.*, i.user_id FROM interest_files f JOIN request_interest i ON i.id=f.interest_id WHERE f.id=?", (int(mif.group(1)),)).fetchone(); c.close()
+            if not r: return self.send_error(404)
+            if u["role"] != "admin" and r["user_id"] != u["id"]: return self.send_error(403)
+            self._send_b64(r["b64"], r["mime"], r["name"]); return
         mrf = re.match(r"^/api/requests/(\d+)/files/(\d+)$", p)
         if mrf:
             u = self.current_user()
@@ -5124,16 +5145,48 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("DELETE FROM request_interest WHERE request_id=? AND user_id=? AND status='raised'", (rid, u["id"]))
                 c.commit(); c.close(); return self.send_json({"ok":True, "status":None})
             note = (b.get("note") or "").strip()[:500]
-            c.execute("""INSERT INTO request_interest(request_id,user_id,note,status,created) VALUES(?,?,?,'raised',?)
-                         ON CONFLICT(request_id,user_id) DO UPDATE SET note=excluded.note""", (rid, u["id"], note, now()))
+            prop = None
+            if isinstance(b.get("proposal"), dict):
+                pr = b["proposal"]
+                sup = []
+                for x in (pr.get("supplies") or [])[:30]:
+                    if not isinstance(x, dict): continue
+                    try: price = round(max(0.0, float(x.get("price") or 0)), 2)
+                    except (TypeError, ValueError): price = 0.0
+                    try: qty = max(0, int(float(x.get("qty") or 0)))
+                    except (TypeError, ValueError): qty = 0
+                    nm = str(x.get("name") or "").strip()[:120]; link = str(x.get("link") or "").strip()[:500]
+                    if nm or link: sup.append({"name": nm, "link": link, "price": price, "qty": qty})
+                prop = {"title": str(pr.get("title") or "").strip()[:120], "description": str(pr.get("description") or "").strip()[:1500],
+                        "tier": str(pr.get("tier") or "").strip()[:60], "supplies": sup, "backup": str(pr.get("backup") or "").strip()[:800],
+                        "cost_per_kit": round(sum(x["price"] * x["qty"] for x in sup), 2)}
+                if not prop["title"] or len(prop["description"]) < 20:
+                    c.close(); return self.send_json({"error":"Give your proposal a name and a couple of sentences."},400)
+            c.execute("""INSERT INTO request_interest(request_id,user_id,note,status,created,proposal) VALUES(?,?,?,'raised',?,?)
+                         ON CONFLICT(request_id,user_id) DO UPDATE SET note=excluded.note, proposal=COALESCE(excluded.proposal, request_interest.proposal)""",
+                      (rid, u["id"], note, now(), json.dumps(prop) if prop else None))
+            iid = c.execute("SELECT id FROM request_interest WHERE request_id=? AND user_id=?", (rid, u["id"])).fetchone()[0]
+            if b.get("files"):
+                c.execute("DELETE FROM interest_files WHERE interest_id=?", (iid,))
+                for f in (b.get("files") or [])[:4]:
+                    b64 = f.get("b64") or ""
+                    if "," in b64[:40]: b64 = b64.split(",",1)[1]
+                    if not b64 or len(b64) > 4_000_000: continue
+                    c.execute("INSERT INTO interest_files(interest_id,name,mime,b64,thumb,created) VALUES(?,?,?,?,?,?)",
+                              (iid, re.sub(r"[^A-Za-z0-9._ -]+", "-", (f.get("name") or "file"))[:80], (f.get("mime") or "image/jpeg")[:80], b64, (f.get("thumb") or "")[:60000], now()))
             admins = emails_for(c, "WHERE role='admin'")
             owner = c.execute("SELECT name,email FROM users u JOIN classes cl ON cl.instructor_id=u.id WHERE cl.id=?", (row["class_id"],)).fetchone() if row["class_id"] else None
             c.commit(); c.close()
-            verb = {"help": "can help with", "sell": "wants to sell or show at", "design": "would like to propose for"}.get(row["kind"], "raised a hand for")
+            verb = {"help": "can help with", "sell": "wants to sell or show at", "design": "sent a proposal for"}.get(row["kind"], "raised a hand for")
+            prop_txt = ""
+            if prop:
+                prop_txt = (f"\n\nProposal: {prop['title']}" + (f" ({prop['tier']})" if prop["tier"] else "") + f"\n{prop['description']}"
+                            + (f"\n\nSupplies (about ${prop['cost_per_kit']:.2f} per kit):\n" + "\n".join(f"  \u2022 {x['qty']} x {x['name']}" + (f" ${x['price']:.2f}" if x['price'] else "") + (f" ({x['link']})" if x['link'] else "") for x in prop["supplies"]) if prop["supplies"] else "")
+                            + (f"\n\nBackup: {prop['backup']}" if prop["backup"] else ""))
             mailer.send(admins, f"{u['name']} {verb}: {row['title']}",
                 f"{u['name']} raised a hand on the Opportunities tab for \"{row['title']}\"."
-                + (f"\n\nTheir note: {note}" if note else "") + f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else "")
-                + f"\n\nConfirm or decline them under Requests: {mailer.APP_URL}")
+                + (f"\n\nTheir note: {note}" if note else "") + prop_txt + f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else "")
+                + f"\n\nSee it, with any photos, and confirm or decline under Requests: {mailer.APP_URL}")
             if owner and owner["email"] and owner["email"].lower() != (u.get("email") or "").lower():
                 mailer.send(owner["email"], f"{u['name']} offered to assist with {row['title']}",
                     f"Hi {(owner['name'] or '').split(' ')[0] or 'there'},\n\n{u['name']} offered to assist with \"{row['title']}\". "

@@ -1728,6 +1728,11 @@ async function adminRequests(){
   const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)} <span class="pill" style="background:var(--cream);color:var(--ink);font-weight:700">${KM[r.kind]||KM.teach}</span></h3>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
       ${(r.interest||[]).length?`<div style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">${r.interest.map(i=>`<div class="meta" style="margin:3px 0"><b>${esc(i.name)}</b>${i.phone?' · <a href="tel:'+esc(i.phone)+'">'+esc(i.phone)+'</a>':''} · ${esc(i.email)}${i.note?`<div>\u201C${esc(i.note)}\u201D</div>`:''}
+          ${i.proposal?`<details style="margin:4px 0"><summary style="cursor:pointer;font-weight:800">\u{1F4E8} Proposal: ${esc(i.proposal.title)}${i.proposal.tier?' · '+esc(i.proposal.tier):''}${i.proposal.cost_per_kit?' · about '+money(i.proposal.cost_per_kit)+' supplies':''}</summary>
+            <div style="margin:6px 0">${esc(i.proposal.description)}</div>
+            ${(i.files||[]).length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${i.files.map(f=>(f.mime||'').startsWith('image/')?`<a href="/api/interest-files/${f.id}" target="_blank" rel="noopener"><img src="${f.thumb||('/api/interest-files/'+f.id)}" alt="" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></a>`:`<a href="/api/interest-files/${f.id}" target="_blank" rel="noopener">\u{1F4CE} ${esc(f.name)}</a>`).join('')}</div>`:''}
+            ${(i.proposal.supplies||[]).length?`<div><b>Supplies:</b>${i.proposal.supplies.map(x=>`<div>\u2022 ${x.qty||''} ${esc(x.name)}${x.price?' · '+money(x.price)+' each':''}${x.link?' · <a href="'+esc(x.link)+'" target="_blank" rel="noopener noreferrer">link</a>':''}</div>`).join('')}</div>`:''}
+            ${i.proposal.backup?`<div><b>Backup:</b> ${esc(i.proposal.backup)}</div>`:''}</details>`:''}
           ${i.status==='confirmed'?'<span class="pill appr">confirmed</span>':i.status==='declined'?'<span class="pill inc">declined</span>':`<a href="#" onclick="interestAct(${r.id},${i.id},'confirm');return false">Confirm</a> · <a href="#" onclick="interestAct(${r.id},${i.id},'decline');return false">Decline</a>`}</div>`).join('')}</div>`
         :(r.kind!=='teach'&&r.status==='open'?'<div class="meta" style="margin-top:6px">Nobody has raised a hand yet.</div>':'')}
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini">${esc(k)}</span>`).join('')}</div>`:''}
@@ -3662,13 +3667,15 @@ function filesHTML(r){
 }
 async function instrWanted(){
   let reqs=[]; try{ reqs=(await api('/api/requests')).requests||[]; }catch(_){}
+  window.__opps=reqs;
   const openAll=reqs.filter(r=>r.status==='open');
   const mine=reqs.filter(r=>(r.status==='claimed' && ME && r.claimed_by===ME.id) || (r.my_interest && r.status!=='closed'));
   const tags=[...new Set(openAll.flatMap(r=>r.skills||[]))].sort();
   const my=new Set((ME&&ME.skills)||[]);
-  let open = WANT_KIND==='all' ? openAll : openAll.filter(r=>r.kind===WANT_KIND);
+  const KORDER={teach:0,help:1,sell:2,design:3};
+  let open = (WANT_KIND==='all' ? openAll : openAll.filter(r=>r.kind===WANT_KIND)).slice().sort((a,b)=>(KORDER[a.kind]??9)-(KORDER[b.kind]??9) || b.id-a.id);
   open = WANT_SKILL==='__mine' ? open.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? open.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : open;
-  const kinds=['teach','help','sell','design'].filter(k=>openAll.some(r=>r.kind===k));
+  const kinds=['teach','help','sell','design'];
   const card=r=>{ const m=KIND_META[r.kind]||KIND_META.teach; const raised=r.my_interest;
     return `<div class="card" style="background:${m.bg}"><div class="row"><h3 style="font-size:1.05rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:#fff;color:var(--ink)">${m.icon} ${m.label}</span></div>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
@@ -3676,24 +3683,82 @@ async function instrWanted(){
       ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
       ${filesHTML(r)}
       ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
+      ${r.kind==='design'&&!raised?'<div class="meta" style="margin-top:8px">Proposals go in right here: name, description, a photo or sketch, and a supply list.</div>':''}
       ${r.kind==='teach'
         ? `<button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">${m.btn}</button>`
         : raised==='confirmed' ? `<div class="meta" style="margin-top:10px;color:#3F7A32;font-weight:800">✅ You are confirmed for this. ${r.interest_count>1?`(${r.interest_count} raised a hand)`:''}</div>`
         : raised==='declined' ? `<div class="meta" style="margin-top:10px">The Gibby went another way this time. Thank you for offering.</div>`
-        : raised ? `<div class="meta" style="margin-top:10px;font-weight:800">✋ Hand raised. The Gibby will confirm with you.</div><button class="btn ghost" style="margin-top:6px" onclick="raiseHand(${r.id},true)">Never mind, withdraw</button>`
+        : raised ? `<div class="meta" style="margin-top:10px;font-weight:800">${r.kind==='design'&&r.my_proposal?`\u{1F4E8} Proposal sent: ${esc(r.my_proposal.title)}. The Gibby will be in touch.`:'✋ Hand raised. The Gibby will confirm with you.'}</div>${r.kind==='design'&&r.my_proposal?`<button class="btn ghost" style="margin-top:6px" onclick="proposalForm(${r.id}, window.__opps.find(x=>x.id===${r.id}).my_proposal)">Edit my proposal</button>`:''}<button class="btn ghost" style="margin-top:6px" onclick="raiseHand(${r.id},true)">Never mind, withdraw</button>`
         : `<button class="btn dark" style="margin-top:10px" onclick="raiseHand(${r.id},false)">${m.btn}</button>${r.interest_count?`<div class="meta" style="margin-top:4px">${r.interest_count} ${r.interest_count===1?'person has':'people have'} raised a hand so far.</div>`:''}`}
     </div>`; };
   $('#tab').innerHTML = `<h2>Opportunities</h2>
     <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, chances to sell or show your work, and paid design work.</p>
-    ${kinds.length>1?`<div class="seg" style="margin-bottom:8px"><button class="${WANT_KIND==='all'?'on':''}" onclick="wantKind('all')">All</button>${kinds.map(k=>`<button class="${WANT_KIND===k?'on':''}" onclick="wantKind('${k}')">${KIND_META[k].icon} ${KIND_META[k].label}</button>`).join('')}</div>`:''}
+    <div class="seg" style="margin-bottom:8px;flex-wrap:wrap"><button class="${WANT_KIND==='all'?'on':''}" onclick="wantKind('all')">All</button>${kinds.map(k=>{ const n=openAll.filter(r=>r.kind===k).length; return `<button class="${WANT_KIND===k?'on':''}" onclick="wantKind('${k}')">${KIND_META[k].icon} ${k==='sell'?'Sell':k==='design'?'Design':KIND_META[k].label}${n?' <small>'+n+'</small>':''}</button>`; }).join('')}</div>
     ${tags.length?`${tags.length>8?`<input id="want_q" placeholder="Search skills" value="${esc(SKILL_Q)}" oninput="skillSearch(this.value, ()=>{ instrWanted().then(()=>{ const el=document.getElementById('want_q'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); })" style="margin-bottom:6px">`:''}<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">✨ My skills</button>`:''}${tags.filter(k=>WANT_SKILL===k||skillMatch(k)).map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
     ${open.length?open.map(card).join('')
       :((WANT_SKILL||WANT_KIND!=='all')?'<div class="muted">Nothing like that right now. Tap All or Show all.</div>':'<div class="muted">Nothing is open right now. Check back after the next planning meeting.</div>')}
     ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><div class="row"><h3 style="font-size:1rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:var(--cream)">${(KIND_META[r.kind]||KIND_META.teach).label}</span></div>
         <div class="meta">${r.kind==='teach'?(r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'):r.my_interest==='confirmed'?'Confirmed by The Gibby'+(r.when_text?' · '+esc(r.when_text):''):r.my_interest==='declined'?'Not this time':'Hand raised, waiting on The Gibby'}</div></div>`).join('')}`:''}`;
 }
+let PROP_FILES=[];
+function proposalForm(id, existing){
+  const r=(window.__opps||[]).find(x=>x.id===id)||{};
+  const e=existing||{}; PROP_FILES=[];
+  const m=document.createElement('div'); m.id='propmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow:auto';
+  const sup=(e.supplies&&e.supplies.length)?e.supplies:[{}];
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:460px;width:100%;padding:20px 22px;margin:auto 0">
+    <h2 style="margin:0 0 2px">Your <em>proposal</em></h2>
+    <p class="sub" style="margin:0 0 10px">For: ${esc(r.title||'')}. Everything here goes to The Gibby in the app; nothing is published.</p>
+    <label style="margin-top:0">Name of your idea</label><input id="pp_title" value="${esc(e.title||'')}" placeholder="e.g. Felt snowflake garland kit">
+    <label>Describe it (two or three sentences)</label><textarea id="pp_desc" rows="3" placeholder="What it is, who it is for, and how it fits the brief.">${esc(e.description||'')}</textarea>
+    <label>Tier or option <span style="color:var(--ink-soft);font-weight:600">(if the brief lists them)</span></label><input id="pp_tier" value="${esc(e.tier||'')}" placeholder="e.g. Standard">
+    <label>Photo or sketch <span style="color:var(--ink-soft);font-weight:600">(up to 3)</span></label>
+    <input type="file" id="pp_files" accept="image/*,application/pdf" multiple onchange="ppPickFiles(event)"><div id="pp_filelist" class="meta" style="margin-top:4px"></div>
+    <label>Supply list: item, where to buy, cost, how many per kit</label>
+    <div id="pp_sup">${sup.map(x=>ppRowHTML(x)).join('')}</div>
+    <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="document.getElementById('pp_sup').insertAdjacentHTML('beforeend', ppRowHTML({}))">+ Another item</button>
+    <div class="meta" style="margin-top:6px" id="pp_total"></div>
+    <label>Backup plan <span style="color:var(--ink-soft);font-weight:600">(if an item is hard to get)</span></label><textarea id="pp_backup" rows="2">${esc(e.backup||'')}</textarea>
+    <div class="err" id="pp_err"></div>
+    <div class="two" style="margin-top:14px">
+      <button class="btn ghost" onclick="document.getElementById('propmodal').remove()">Cancel</button>
+      <button class="btn dark" onclick="sendProposal(${id})">${existing?'Update my proposal':'Send my proposal'}</button></div></div>`;
+  m.addEventListener('click', ev=>{ if(ev.target===m) m.remove(); });
+  document.body.appendChild(m); ppTotal();
+}
+function ppRowHTML(x){
+  return `<div class="pprow" style="display:grid;grid-template-columns:1fr 76px 60px 28px;gap:6px;align-items:center;margin-top:6px">
+    <input class="pp_name" placeholder="Item" value="${esc(x.name||'')}"><input class="pp_price" type="number" min="0" step="0.01" placeholder="$ each" value="${x.price!=null&&x.price!==''?esc(x.price):''}" oninput="ppTotal()" style="padding-left:8px;padding-right:4px">
+    <input class="pp_qty" type="number" min="0" step="1" placeholder="qty" value="${x.qty!=null&&x.qty!==''?esc(x.qty):''}" oninput="ppTotal()" style="padding-left:8px;padding-right:4px;text-align:center">
+    <button type="button" class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove();ppTotal()">\u00d7</button>
+    <input class="pp_link" placeholder="Where to buy (link)" value="${esc(x.link||'')}" style="grid-column:1 / span 4;margin-top:0"></div>`;
+}
+function ppRows(){ return [...document.querySelectorAll('#propmodal .pprow')].map(r=>({name:r.querySelector('.pp_name').value.trim(), link:r.querySelector('.pp_link').value.trim(), price:+r.querySelector('.pp_price').value||0, qty:+r.querySelector('.pp_qty').value||0})).filter(x=>x.name||x.link); }
+function ppTotal(){ const t=$('#pp_total'); if(!t) return; const tot=ppRows().reduce((s,x)=>s+x.price*x.qty,0); t.textContent = tot?('About '+money(tot)+' in supplies per kit.'):''; }
+function ppDrawFiles(){ const l=$('#pp_filelist'); if(l) l.innerHTML=PROP_FILES.map((f,i)=>`\u{1F4CE} ${esc(f.name)} <a href="#" onclick="PROP_FILES.splice(${i},1);ppDrawFiles();return false">remove</a>`).join(' · '); }
+async function ppPickFiles(ev){
+  for(const f of [...ev.target.files].slice(0,3)){
+    try{
+      if(f.type==='application/pdf'){ if(f.size>3*1024*1024){ alert(f.name+' is over 3 MB.'); continue; } PROP_FILES.push({name:f.name, mime:'application/pdf', b64:await fileToB64(f)}); }
+      else PROP_FILES.push({name:(f.name||'photo').replace(/\.[^.]+$/,'')+'.jpg', mime:'image/jpeg', b64:await shrinkImage(f,1400,0.85), thumb:await shrinkImage(f,320,0.7)});
+    }catch(e){ alert(e.message); }
+  }
+  ev.target.value=''; ppDrawFiles();
+}
+async function sendProposal(id){
+  const proposal={title:$('#pp_title').value.trim(), description:$('#pp_desc').value.trim(), tier:$('#pp_tier').value.trim(), supplies:ppRows(), backup:$('#pp_backup').value.trim()};
+  const err=$('#pp_err');
+  if(!proposal.title || proposal.description.length<20){ err.textContent='Give it a name and a couple of sentences.'; err.classList.add('show'); return; }
+  try{ await api('/api/requests/'+id+'/interest','POST',{proposal, files:PROP_FILES}); }
+  catch(e){ err.textContent=e.message; err.classList.add('show'); return; }
+  const m=$('#propmodal'); if(m) m.remove();
+  alert('Sent. The Gibby has your proposal and will be in touch.'); instrWanted();
+}
 async function raiseHand(id, withdraw){
   let note='';
+  const r=(window.__opps||[]).find(x=>x.id===id);
+  if(!withdraw && r && r.kind==='design'){ return proposalForm(id, r.my_proposal||null); }
   if(!withdraw){ note=prompt('Anything The Gibby should know? (optional)'); if(note===null) return; }
   try{ await api('/api/requests/'+id+'/interest','POST',{note, withdraw:!!withdraw}); }catch(e){ alert(e.message); return; }
   if(!withdraw) alert('Thank you! The Gibby will confirm with you by email.');
@@ -4460,7 +4525,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
