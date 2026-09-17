@@ -1695,6 +1695,8 @@ function rqSetKind(k){ RQ_KIND=k; const seg=$('#rq_kind'); if(seg) seg.querySele
   const t=$('#rq_title'); if(t) t.placeholder = k==='teach'?'e.g. Kids pottery':k==='help'?'e.g. Assistant for Saturday kids camp':k==='design'?'e.g. Design a holiday craft kit (proposals due Oct 8)':'e.g. Holiday market table, Dec 6';
   const dl=$('#rq_desclab'); if(dl) dl.textContent = k==='teach'?'Class description (what students will read, 40 to 75 words)':k==='help'?'What it involves':k==='design'?'The brief (what to make, the pay, the deadline; attach the full document below)':'What is on offer (space, dates, fees, who it suits)';
   const ra=$('#rq_roomages'); if(ra) ra.style.display = (k==='sell'||k==='design')?'none':'';
+  const bw=$('#rq_btnwrap'); if(bw) bw.style.display = k==='teach'?'none':'';
+  const bi=$('#rq_btn'); if(bi) bi.placeholder = k==='help'?'e.g. I can help':k==='sell'?'e.g. I want a table':'e.g. Submit a Craft Kit Proposal';
 }
 function hubBar(){
   return `<div class="seg" style="margin-bottom:12px"><button class="${HUB_MODE==='wanted'?'on':''}" onclick="HUB_MODE='wanted';adminRequestsHub()">\u{1F4CC} Opportunities</button><button class="${HUB_MODE==='orders'?'on':''}" onclick="HUB_MODE='orders';adminRequestsHub()">\u{1F9FA} Orders</button></div>`;
@@ -1715,7 +1717,7 @@ function rqEdit(id){
   const r=(window.__reqs||[]).find(x=>x.id===id); if(!r) return;
   RQ_EDIT=id; RQ_SKILLS=(r.skills||[]).slice(); rqSetKind(r.kind||'teach');
   $('#rq_title').value=r.title||''; $('#rq_when').value=r.when_text||''; $('#rq_room').value=r.room||''; $('#rq_ages').value=r.ages||'';
-  $('#rq_desc').value=r.description||''; $('#rq_notes').value=r.notes||'';
+  $('#rq_desc').value=r.description||''; $('#rq_notes').value=r.notes||''; if($('#rq_btn')) $('#rq_btn').value=r.button_label||'';
   rqDrawSkills(); $('#rq_formtitle').textContent='Editing: '+(r.title||''); $('#rq_btns').innerHTML=`<button class="btn ghost" onclick="rqCancelEdit()">Cancel</button><button class="btn dark" onclick="postRequest(false)">Save changes</button>`;
   $('#rq_title').scrollIntoView({behavior:'smooth',block:'center'});
 }
@@ -1754,6 +1756,8 @@ async function adminRequests(){
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
       <label id="rq_desclab">Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
       <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
+      <div id="rq_btnwrap"><label>Button text (what instructors tap) <span style="color:var(--ink-soft);font-weight:600">(optional)</span></label>
+      <input id="rq_btn" placeholder="e.g. Submit a Craft Kit Proposal"></div>
       <label>Attachments (a flyer, the call for proposals, photos)</label>
       <input type="file" id="rq_files" accept="image/*,application/pdf" multiple onchange="rqPickFiles(event)">
       <div id="rq_filelist" class="meta" style="margin-top:4px"></div>
@@ -1769,7 +1773,7 @@ async function adminRequests(){
   rqDrawSkills(); rqSetKind(RQ_EDIT?RQ_KIND:'teach');
 }
 async function postRequest(notify){
-  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), kind:RQ_KIND};
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), kind:RQ_KIND, button_label:($('#rq_btn')?$('#rq_btn').value:'')};
   let rid;
   try{
     if(RQ_EDIT){ await api('/api/requests/'+RQ_EDIT+'/edit','POST',b); rid=RQ_EDIT; }
@@ -3658,7 +3662,7 @@ async function instrMine(){
 let WANT_SKILL=null, WANT_KIND='all';
 function wantFilter(k){ WANT_SKILL = (k===WANT_SKILL) ? null : k; instrWanted(); }
 function wantKind(k){ WANT_KIND=k; instrWanted(); }
-const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}, design:{label:'Design, paid',icon:'\u{1F9E9}',bg:'#EFE3F7',btn:'I\u2019d like to propose'}};
+const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}, design:{label:'Design, paid',icon:'\u{1F9E9}',bg:'#EFE3F7',btn:'Submit a proposal'}};
 function filesHTML(r){
   const fs=r.files||[]; if(!fs.length) return '';
   const imgs=fs.filter(f=>(f.mime||'').startsWith('image/')), docs=fs.filter(f=>!(f.mime||'').startsWith('image/'));
@@ -3689,7 +3693,7 @@ async function instrWanted(){
         : raised==='confirmed' ? `<div class="meta" style="margin-top:10px;color:#3F7A32;font-weight:800">✅ You are confirmed for this. ${r.interest_count>1?`(${r.interest_count} raised a hand)`:''}</div>`
         : raised==='declined' ? `<div class="meta" style="margin-top:10px">The Gibby went another way this time. Thank you for offering.</div>`
         : raised ? `<div class="meta" style="margin-top:10px;font-weight:800">${r.kind==='design'&&r.my_proposal?`\u{1F4E8} Proposal sent: ${esc(r.my_proposal.title)}. The Gibby will be in touch.`:'✋ Hand raised. The Gibby will confirm with you.'}</div>${r.kind==='design'&&r.my_proposal?`<button class="btn ghost" style="margin-top:6px" onclick="proposalForm(${r.id}, window.__opps.find(x=>x.id===${r.id}).my_proposal)">Edit my proposal</button>`:''}<button class="btn ghost" style="margin-top:6px" onclick="raiseHand(${r.id},true)">Never mind, withdraw</button>`
-        : `<button class="btn dark" style="margin-top:10px" onclick="raiseHand(${r.id},false)">${m.btn}</button>${r.interest_count?`<div class="meta" style="margin-top:4px">${r.interest_count} ${r.interest_count===1?'person has':'people have'} raised a hand so far.</div>`:''}`}
+        : `<button class="btn dark" style="margin-top:10px" onclick="raiseHand(${r.id},false)">${esc(r.button_label||m.btn)}</button>${r.interest_count?`<div class="meta" style="margin-top:4px">${r.interest_count} ${r.interest_count===1?'person has':'people have'} raised a hand so far.</div>`:''}`}
     </div>`; };
   $('#tab').innerHTML = `<h2>Opportunities</h2>
     <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, chances to sell or show your work, and paid design work.</p>

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.85.0-proposals"
+VERSION = "10.85.1-button-label"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -222,6 +222,8 @@ def init_db():
         reminded_at TEXT, done_at TEXT, value TEXT, file_name TEXT, file_mime TEXT, file_b64 TEXT,
         drive_link TEXT, UNIQUE(user_id, kind))""")
     try: c.execute("ALTER TABLE request_interest ADD COLUMN proposal TEXT")   # JSON: a full proposal for Design opportunities
+    except Exception: pass
+    try: c.execute("ALTER TABLE class_requests ADD COLUMN button_label TEXT")   # what instructors tap, e.g. "Submit a Craft Kit Proposal"
     except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
@@ -5036,10 +5038,11 @@ class H(http.server.BaseHTTPRequestHandler):
             desc = (b.get("description") or "").strip()[:1500]
             skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
             kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else "teach"
-            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind)
-                         VALUES(?,?,?,?,?,'open',?,?,?,?,?)""",
+            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,button_label)
+                         VALUES(?,?,?,?,?,'open',?,?,?,?,?,?)""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
-                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc, json.dumps(skills), kind))
+                       (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120], u["id"], now(), desc, json.dumps(skills), kind,
+                       (b.get("button_label") or "").strip()[:60] or None))
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             instructors = emails_for(c, "WHERE role='instructor'")
             c.commit(); c.close()
@@ -5070,10 +5073,10 @@ class H(http.server.BaseHTTPRequestHandler):
             if len(title) < 3: c.close(); return self.send_json({"error":"Give the request a short title."},400)
             skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
             kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else None
-            c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=?, kind=COALESCE(?,kind) WHERE id=?""",
+            c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=?, kind=COALESCE(?,kind), button_label=? WHERE id=?""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
                        (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120],
-                       (b.get("description") or "").strip()[:1500], json.dumps(skills), kind, rid))
+                       (b.get("description") or "").strip()[:1500], json.dumps(skills), kind, (b.get("button_label") or "").strip()[:60] or None, rid))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         mrfu = re.match(r"^/api/requests/(\d+)/files$", p)
@@ -5112,10 +5115,11 @@ class H(http.server.BaseHTTPRequestHandler):
             kind = row["kind"] or "teach"
             lead = {"teach": "The Gibby would love someone to teach this.", "help": "The Gibby is looking for a helping hand.",
                     "sell": "A chance to sell or show your work.", "design": "A paid design opportunity from The Gibby."}[kind]
+            lbl = row["button_label"] if ("button_label" in row.keys() and row["button_label"]) else None
             act = {"teach": "Tap Claim this one and the proposal is pre-filled; you only pick the time.",
-                   "help": "Tap I can help and The Gibby will confirm with you.",
-                   "sell": "Tap I want to sell or show and The Gibby will be in touch.",
-                   "design": "Tap I'd like to propose, add a line about your idea, and The Gibby will be in touch."}[kind]
+                   "help": f"Tap {lbl or 'I can help'} and The Gibby will confirm with you.",
+                   "sell": f"Tap {lbl or 'I want to sell or show'} and The Gibby will be in touch.",
+                   "design": f"Tap {lbl or 'Submit a proposal'}, fill in your idea, and The Gibby will be in touch."}[kind]
             details = "\n".join(f"  \u2022 {lab}: {val}" for lab, val in (("When", row["when_text"]), ("Where", row["room"]), ("Ages", row["ages"])) if val)
             skills = _loads_list(row["skills"])
             body = (f"Hello,\n\n{lead}\n\n{row['title']}\n" + (details + "\n" if details else "")
