@@ -82,15 +82,15 @@ def text_to_html(body):
     flush_para(); flush_list()
     return "".join(out)
 
-def photo_grid(images):
-    """Up to five class photos, two per row, under the email text."""
+def photo_grid(images, label="From class"):
+    """Up to five photos, two per row, under the email text."""
     if not images: return ""
     cells = "".join(f'<td style="padding:4px;width:50%"><img src="{u}" alt="" width="270" style="display:block;width:100%;max-width:270px;height:auto;border-radius:12px;border:1px solid #E7DECB"></td>' for u in images[:5])
     rows, imgs = [], list(images[:5])
     while imgs:
         pair = imgs[:2]; imgs = imgs[2:]
         rows.append("<tr>" + "".join(f'<td style="padding:4px;width:50%;vertical-align:top"><img src="{u}" alt="" width="270" style="display:block;width:100%;max-width:270px;height:auto;border-radius:12px;border:1px solid #E7DECB"></td>' for u in pair) + ("<td></td>" if len(pair) == 1 else "") + "</tr>")
-    return ('<p style="margin:18px 0 6px;font-size:13px;color:#6b665c;font-weight:700">From class</p>'
+    return ('<p style="margin:18px 0 6px;font-size:13px;color:#6b665c;font-weight:700">' + label + '</p>'
             '<table role="presentation" width="100%" cellspacing="0" cellpadding="0">' + "".join(rows) + "</table>")
 
 def html_email(subject, body, from_name=None, images=None, banner=None):
@@ -110,7 +110,7 @@ def html_email(subject, body, from_name=None, images=None, banner=None):
 </tr></table></td></tr>
 <tr><td style="background:#FBF7EF;border:1px solid #E7DECB;border-radius:18px;padding:26px 28px;font-size:16px">
 {pill}<h1 style="font-family:Georgia,serif;font-size:22px;line-height:1.3;margin:0 0 16px">{_h.escape(subject)}</h1>
-{text_to_html(body)}{photo_grid(images)}
+{text_to_html(body)}{photo_grid(images, "Pictures" if banner else "From class")}
 </td></tr>
 <tr><td style="padding:16px 10px 0;font-size:12px;color:#6b665c;line-height:1.5">Sent by {who} through the Gibby Class Manager · Gibby Center for the Arts, 51 W Main St, Middletown, DE<br>
 <a href="{APP_URL}" style="color:#6b665c">{APP_URL}</a></td></tr>
