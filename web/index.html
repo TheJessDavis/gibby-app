@@ -410,7 +410,9 @@ async function _api(path, method='GET', body, _retried){
   if(r.status===401 && !_retried && !NO_REFRESH.includes(path)){
     if(await refreshSession()) return _api(path, method, body, true);
   }
-  const j = await r.json().catch(()=>({}));
+  let j;
+  try{ j = await r.json(); }
+  catch(_){ if(r.ok) throw Object.assign(new Error('The server is restarting; trying again'), {status:503}); j={}; }
   // Token went stale (session rotated in another tab): re-sync once and retry.
   if(r.status===403 && j.csrf && !_retried){
     const me = await fetch('/api/me').then(x=>x.json()).catch(()=>null);
@@ -444,23 +446,45 @@ function logClientError(section, err, extra){
   try{ fetch('/api/client-error',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify(payload), keepalive:true}).catch(()=>{}); }catch(_){}
 }
-function boundaryHTML(canRetry){
+function boundaryHTML(canRetry, e){
+  const why=e&&e.status?`The server answered ${e.status}.`:(e&&e.message&&e.message.length<120?esc(e.message):'');
   return `<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
-    <h3 style="font-size:1rem">This section failed to load.</h3>
-    <div class="meta" style="margin-top:4px">Try refreshing, or contact support.</div>
+    <h3 style="font-size:1rem">This section could not load.</h3>
+    <div class="meta" style="margin-top:4px">${why?why+' ':''}Tap Try again; if it keeps happening, tell Jess what you were doing.</div>
     ${canRetry?`<button class="btn ghost" style="margin-top:10px" onclick="retrySection()">Try again</button>`:''}
   </div>`;
 }
 /* Run a section render inside its own boundary. target = the element this section
    owns; only that element is replaced if the render fails. */
+/* A section that fails because the server was mid-restart, the phone had just
+   woken up, or the network blinked is retried on its own (three tries over ten
+   seconds) with a "Reconnecting" note. Only a real bug shows the red card. */
+let BOUNDARY_SEQ=0;
+function transientError(e){
+  const st=e&&e.status; const msg=String(e&&e.message||e||'');
+  return !st && /fetch|load failed|network|timed out|JSON|Unexpected token/i.test(msg) || (st>=500) || st===429 || /HTTP 5\d\d/.test(msg);
+}
 async function boundary(section, target, fn, retry){
+  const seq=++BOUNDARY_SEQ;
   if(retry!==false) LAST_SECTION={section, target, fn};
-  try{
-    await fn();
-  }catch(e){
-    logClientError(section, e);
-    const host=$(target);
-    if(host) host.innerHTML = boundaryHTML(retry!==false);
+  for(let attempt=0; attempt<4; attempt++){
+    try{
+      await fn();
+      return;
+    }catch(e){
+      if(seq!==BOUNDARY_SEQ || !$(target)) return;     // the user has moved on; drop this render quietly
+      if(e && e.status===401){ ME=null; return boot(); }  // signed out: show the sign-in screen, not an error
+      if(attempt<3 && transientError(e)){
+        const host=$(target);
+        if(host) host.innerHTML=`<div class="card" style="text-align:center"><div class="meta">Reconnecting to The Gibby\u2026</div></div>`;
+        await new Promise(r=>setTimeout(r, [1500,3000,5500][attempt]));
+        continue;
+      }
+      logClientError(section, e);
+      const host=$(target);
+      if(host) host.innerHTML = boundaryHTML(retry!==false, e);
+      return;
+    }
   }
 }
 function retrySection(){ if(LAST_SECTION) boundary(LAST_SECTION.section, LAST_SECTION.target, LAST_SECTION.fn); }
@@ -1060,7 +1084,9 @@ async function loadNavBadges(){
   }catch(_){/* badges are decoration; the queues are the truth */}
 }
 async function adminDashboard(){
-  const [d, all] = await Promise.all([api('/api/dashboard'), api('/api/classes/all')]);
+  const [d0, all] = await Promise.all([api('/api/dashboard'), api('/api/classes/all')]);
+  const d = Object.assign({pending:[], graphic:[], returned:[], low:[], publish_failures:[]}, d0||{});
+  if(!d0 || !Array.isArray(d0.pending)) throw Object.assign(new Error('The server gave an incomplete answer'), {status:502});
   const rr = rerunCandidates(all.classes||[]);
   window.__rrc = rr;
   $('#tab').innerHTML = `
