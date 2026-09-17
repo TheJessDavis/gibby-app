@@ -537,6 +537,7 @@ async function bootInner(){
   // The tour runs ONCE per person per tour version: new people see it on their
   // first login, everyone else sees it once more when the tour changes.
   if(user && !user.must_change_pw && (user.tour_seen||0) < TOUR_VERSION) setTimeout(startTour, 600);
+  if(user && location.hash==='#opportunities'){ history.replaceState(null,'',location.pathname); setTimeout(()=>{ if(actingRole()==='instructor') renderInstr('wanted'); else { HUB_MODE='wanted'; renderAdmin('requests'); } }, 300); }
   const mrev=/^#review-(\d+)$/.exec(location.hash||'');
   if(mrev){ REVIEW_FOCUS=+mrev[1]; history.replaceState(null,'',location.pathname+location.search); }
   if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('mine');
@@ -597,11 +598,17 @@ const SKILL_IDEAS=[
   'Digital illustration','Procreate & iPad art','Graphic design','Digital photography & photo editing',
   'Animation','3D design & printing','3D art','Adobe Photoshop','Adobe Illustrator'];
 let PF_PHOTO=null, PF_SKILLS=null;
-function renderProfile(){
+let ALL_SKILLS=null, SKILL_Q='';
+async function loadSkills(){ try{ ALL_SKILLS=((await api('/api/skills')).skills||[]); }catch(_){ ALL_SKILLS=ALL_SKILLS||SKILL_IDEAS.slice(); } return ALL_SKILLS; }
+function skillPool(){ return ALL_SKILLS||SKILL_IDEAS; }
+function skillMatch(k){ const q=SKILL_Q.trim().toLowerCase(); return !q || k.toLowerCase().includes(q); }
+function skillSearch(v, redraw){ SKILL_Q=v||''; redraw(); }
+async function renderProfile(){
+  if(!ALL_SKILLS) await loadSkills();
   if(ME) buildBnav(actingRole(), actingRole()==='admin'?'':'profile');
   if(PF_PHOTO===null) PF_PHOTO = (ME&&ME.photo)||'';
   if(PF_SKILLS===null) PF_SKILLS = ((ME&&ME.skills)||[]).slice();
-  const left = SKILL_IDEAS.filter(x=>!PF_SKILLS.includes(x));
+  const left = skillPool().filter(x=>!PF_SKILLS.includes(x) && skillMatch(x));
   $('#view').innerHTML=`<div style="max-width:420px;margin:0 auto">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
       <button class="btn ghost" style="padding:8px 16px" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">\u2190 Back to home</button>
@@ -635,7 +642,8 @@ function renderProfile(){
       ? PF_SKILLS.map(k=>`<button class="skill mine" onclick="pfRemoveSkill('${esc(k)}')">${esc(k)} <b>\u00d7</b></button>`).join('')
       : '<div class="hint">None yet. Tap a + below to add one.</div>'}</div>
     <label style="margin-top:14px">Add skills</label>
-    <div class="skillcloud">${left.map(k=>`<button class="skill" onclick="pfAddSkill('${esc(k)}')"><b>+</b> ${esc(k)}</button>`).join('')}</div>
+    <input id="pf_skillq" placeholder="Search skills (everyone's tags are here)" value="${esc(SKILL_Q)}" oninput="skillSearch(this.value, ()=>{ renderProfile().then(()=>{ const el=document.getElementById('pf_skillq'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); })" style="margin-bottom:6px">
+    <div class="skillcloud">${left.length?left.map(k=>`<button class="skill" onclick="pfAddSkill('${esc(k)}')"><b>+</b> ${esc(k)}</button>`).join(''):'<div class="hint">No match. Type it in the box below and press Add; it becomes a tag everyone can use.</div>'}</div>
     <div class="two" style="margin-top:8px"><input id="pf_custom" placeholder="Something else? Type it here">
       <button class="btn ghost" onclick="pfCustomSkill()">+ Add</button></div>
     <div style="height:14px"></div>
@@ -1629,6 +1637,10 @@ async function paperSend(){
   alert((r.queued||0)?('Sending to '+r.queued+' '+(r.queued===1?'person':'people')+' now: '+(r.names||[]).join(', ')+(r.already_had_it?`. ${r.already_had_it} skipped (already asked or done).`:'')):'Nothing to send: everyone you ticked was already asked or has it on file.');
   adminPeople();
 }
+async function rqNotify(rid){
+  if(!confirm('Email every instructor about this opportunity now?')) return;
+  try{ const n=await api('/api/requests/'+rid+'/notify','POST',{}); alert('Emailed '+(n.emailed||0)+' instructors.'); }catch(e){ alert(e.message); }
+}
 async function interestAct(rid, iid, action){
   if(!confirm(action==='confirm'?'Confirm this person? They are emailed the details.':'Decline this person? They get a kind note.')) return;
   try{ await api('/api/requests/'+rid+'/interest/'+iid+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
@@ -1667,11 +1679,22 @@ async function supplyAct(id, status){
 async function sendDigestNow(){
   const r=await api('/api/admin/send-digest','POST',{}); alert(r.ok?'Sent to every admin.':'Could not send: '+(r.error||''));
 }
-let RQ_SKILLS=[], RQ_EDIT=null, HUB_MODE='wanted', RQ_KIND='teach';
+let RQ_SKILLS=[], RQ_EDIT=null, HUB_MODE='wanted', RQ_KIND='teach', RQ_FILES=[];
+async function rqPickFiles(ev){
+  for(const f of [...ev.target.files].slice(0,8)){
+    try{
+      if(f.type==='application/pdf'){ if(f.size>4*1024*1024){ alert(f.name+' is over 4 MB.'); continue; } RQ_FILES.push({name:f.name, mime:'application/pdf', b64:await fileToB64(f)}); }
+      else RQ_FILES.push({name:(f.name||'photo').replace(/\.[^.]+$/,'')+'.jpg', mime:'image/jpeg', b64:await shrinkImage(f,1600,0.85), thumb:await shrinkImage(f,320,0.7)});
+    }catch(e){ alert(e.message); }
+  }
+  ev.target.value=''; rqDrawFiles();
+}
+function rqDrawFiles(){ const l=$('#rq_filelist'); if(l) l.innerHTML = RQ_FILES.length ? RQ_FILES.map((f,i)=>`\u{1F4CE} ${esc(f.name)} <a href="#" onclick="RQ_FILES.splice(${i},1);rqDrawFiles();return false">remove</a>`).join(' · ') : ''; }
+async function rqRemoveFile(rid, fid){ if(!confirm('Remove this attachment?')) return; try{ await api('/api/requests/'+rid+'/files','POST',{remove:fid}); }catch(e){ alert(e.message); } adminRequests(); }
 function rqSetKind(k){ RQ_KIND=k; const seg=$('#rq_kind'); if(seg) seg.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===k));
-  const t=$('#rq_title'); if(t) t.placeholder = k==='teach'?'e.g. Kids pottery':k==='help'?'e.g. Assistant for Saturday kids camp':'e.g. Holiday market table, Dec 6';
-  const dl=$('#rq_desclab'); if(dl) dl.textContent = k==='teach'?'Class description (what students will read, 40 to 75 words)':k==='help'?'What it involves':'What is on offer (space, dates, fees, who it suits)';
-  const ra=$('#rq_roomages'); if(ra) ra.style.display = k==='sell'?'none':'';
+  const t=$('#rq_title'); if(t) t.placeholder = k==='teach'?'e.g. Kids pottery':k==='help'?'e.g. Assistant for Saturday kids camp':k==='design'?'e.g. Design a holiday craft kit (proposals due Oct 8)':'e.g. Holiday market table, Dec 6';
+  const dl=$('#rq_desclab'); if(dl) dl.textContent = k==='teach'?'Class description (what students will read, 40 to 75 words)':k==='help'?'What it involves':k==='design'?'The brief (what to make, the pay, the deadline; attach the full document below)':'What is on offer (space, dates, fees, who it suits)';
+  const ra=$('#rq_roomages'); if(ra) ra.style.display = (k==='sell'||k==='design')?'none':'';
 }
 function hubBar(){
   return `<div class="seg" style="margin-bottom:12px"><button class="${HUB_MODE==='wanted'?'on':''}" onclick="HUB_MODE='wanted';adminRequestsHub()">\u{1F4CC} Opportunities</button><button class="${HUB_MODE==='orders'?'on':''}" onclick="HUB_MODE='orders';adminRequestsHub()">\u{1F9FA} Orders</button></div>`;
@@ -1685,8 +1708,8 @@ function rqToggleSkill(k){ const i=RQ_SKILLS.indexOf(k); if(i<0) RQ_SKILLS.push(
 function rqCustomSkill(){ const v=($('#rq_custom').value||'').trim().slice(0,40); if(v && !RQ_SKILLS.includes(v)) RQ_SKILLS.push(v); $('#rq_custom').value=''; rqDrawSkills(); }
 function rqDrawSkills(){
   const box=$('#rq_skills'); if(!box) return;
-  const all=[...new Set([...RQ_SKILLS, ...SKILL_IDEAS])];
-  box.innerHTML=all.map(k=>`<button type="button" class="skill ${RQ_SKILLS.includes(k)?'mine':''}" onclick="rqToggleSkill('${esc(k)}')">${RQ_SKILLS.includes(k)?esc(k)+' <b>\u00d7</b>':'<b>+</b> '+esc(k)}</button>`).join('');
+  const all=[...new Set([...RQ_SKILLS, ...skillPool()])].filter(k=>RQ_SKILLS.includes(k)||skillMatch(k));
+  box.innerHTML=all.map(k=>`<button type="button" class="skill ${RQ_SKILLS.includes(k)?'mine':''}" onclick="rqToggleSkill('${esc(k)}')">${RQ_SKILLS.includes(k)?esc(k)+' <b>\u00d7</b>':'<b>+</b> '+esc(k)}</button>`).join('') || '<div class="hint">No match. Type it below and press Add.</div>';
 }
 function rqEdit(id){
   const r=(window.__reqs||[]).find(x=>x.id===id); if(!r) return;
@@ -1698,9 +1721,10 @@ function rqEdit(id){
 }
 function rqCancelEdit(){ RQ_EDIT=null; RQ_SKILLS=[]; adminRequests(); }
 async function adminRequests(){
+  if(!ALL_SKILLS) await loadSkills();
   const d=await api('/api/requests'); const rs=d.requests||[]; window.__reqs=rs;
   const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
-  const KM={teach:'\u{1F4CC} Teach',help:'\u{1F64B} Help',sell:'\u{1F3A8} Sell or show'};
+  const KM={teach:'\u{1F4CC} Teach',help:'\u{1F64B} Help',sell:'\u{1F3A8} Sell or show',design:'\u{1F9E9} Design, paid'};
   const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)} <span class="pill" style="background:var(--cream);color:var(--ink);font-weight:700">${KM[r.kind]||KM.teach}</span></h3>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
       ${(r.interest||[]).length?`<div style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">${r.interest.map(i=>`<div class="meta" style="margin:3px 0"><b>${esc(i.name)}</b>${i.phone?' · <a href="tel:'+esc(i.phone)+'">'+esc(i.phone)+'</a>':''} · ${esc(i.email)}${i.note?`<div>\u201C${esc(i.note)}\u201D</div>`:''}
@@ -1708,23 +1732,28 @@ async function adminRequests(){
         :(r.kind!=='teach'&&r.status==='open'?'<div class="meta" style="margin-top:6px">Nobody has raised a hand yet.</div>':'')}
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini">${esc(k)}</span>`).join('')}</div>`:''}
       ${r.description?`<div class="meta" style="margin-top:4px">${esc(r.description)}</div>`:''}
+      ${(r.files||[]).length?`<div class="meta" style="margin-top:6px">${r.files.map(f=>`\u{1F4CE} <a href="/api/requests/${r.id}/files/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a> <a href="#" onclick="rqRemoveFile(${r.id},${f.id});return false" style="color:#B4442C">\u00d7</a>`).join(' · ')}</div>`:''}
       ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}
       ${r.status==='claimed'?`<div class="meta" style="margin-top:4px;color:#3F7A32;font-weight:800">Claimed by ${esc(r.claimed_by_name||'?')} ${esc((r.claimed_at||'').slice(0,10))}${r.class_title?' · submitted as '+esc(r.class_title)+' ('+esc(r.class_status)+')':' · proposal in progress'}</div>`:''}</div>
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
-    <button class="btn ghost" style="margin-top:8px" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>
+    <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>${r.status==='open'?`<button class="btn ghost" onclick="rqNotify(${r.id})">\u2709\uFE0F Email everyone</button>`:'<span></span>'}</div>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
   $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
     <p class="sub">Post what The Gibby needs: a class to teach, a helping hand, or a chance to sell or show. Instructors see it on their Opportunities tab. Email everyone only when you choose to.</p>
     <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">Post an opportunity</h3>
-      <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell or show</button></div>
-      <div class="hint">Teach: a class you want someone to claim. Help: a volunteer spot, an assistant, a mentor. Sell or show: a market, a wall, a pop-up. People raise a hand and you confirm.</div>
+      <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell</button><button data-v="design" onclick="rqSetKind('design')">\u{1F9E9} Design</button></div>
+      <div class="hint">Teach: a class someone claims. Help: a volunteer spot, an assistant, a mentor. Sell: a market, a wall, a pop-up. Design: paid work like a craft kit or a commission, with a deadline. People raise a hand and you confirm.</div>
       <label>Title</label><input id="rq_title" placeholder="e.g. Kids pottery">
       <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
       <div class="two" id="rq_roomages"><div><label>Room</label><select id="rq_room"><option value="">Either</option><option>Studio</option><option>Large Room</option></select></div>
         <div><label>Ages</label><input id="rq_ages" placeholder="e.g. 6 and up"></div></div>
       <label id="rq_desclab">Class description (what students will read, 40 to 75 words)</label><textarea id="rq_desc" placeholder="Written the way it would appear on Eventbrite. The instructor can edit it."></textarea>
       <label>Notes for the instructor</label><textarea id="rq_notes" placeholder="Anything that helps: what sold last year, materials on hand, price you have in mind."></textarea>
-      <label>Skills (instructors can filter Wanted by these)</label>
+      <label>Attachments (a flyer, the call for proposals, photos)</label>
+      <input type="file" id="rq_files" accept="image/*,application/pdf" multiple onchange="rqPickFiles(event)">
+      <div id="rq_filelist" class="meta" style="margin-top:4px"></div>
+      <label>Skills (instructors can filter Opportunities by these)</label>
+      <input id="rq_skillq" placeholder="Search skills" oninput="skillSearch(this.value, rqDrawSkills)">
       <div class="skillcloud" id="rq_skills"></div>
       <div class="two" style="margin-top:6px"><input id="rq_custom" placeholder="Another skill? Type it"><button class="btn ghost" onclick="rqCustomSkill()">Add</button></div>
       <div class="two" id="rq_btns" style="margin-top:10px"><button class="btn ghost" onclick="postRequest(false)">Post it</button><button class="btn dark" onclick="postRequest(true)">Post it and email everyone</button></div>
@@ -1735,15 +1764,18 @@ async function adminRequests(){
   rqDrawSkills(); rqSetKind(RQ_EDIT?RQ_KIND:'teach');
 }
 async function postRequest(notify){
-  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), kind:RQ_KIND, notify:!!notify};
-  if(RQ_EDIT){
-    try{ await api('/api/requests/'+RQ_EDIT+'/edit','POST',b); }catch(e){ alert(e.message); return; }
-    RQ_EDIT=null; RQ_SKILLS=[]; alert('Saved.'); adminRequests(); return;
-  }
-  const r=await api('/api/requests','POST',b);
-  if(r.error){ alert(r.error); return; }
-  RQ_SKILLS=[];
-  alert(notify ? 'Posted. '+r.emailed+' instructor'+(r.emailed===1?'':'s')+' emailed.' : 'Posted. It is on the Opportunities tab; nobody was emailed.'); adminRequests();
+  const b={title:$('#rq_title').value, when_text:$('#rq_when').value, room:$('#rq_room').value, ages:$('#rq_ages').value, notes:$('#rq_notes').value, description:$('#rq_desc').value, skills:RQ_SKILLS.slice(), kind:RQ_KIND};
+  let rid;
+  try{
+    if(RQ_EDIT){ await api('/api/requests/'+RQ_EDIT+'/edit','POST',b); rid=RQ_EDIT; }
+    else { const r=await api('/api/requests','POST',b); rid=r.id; }
+    if(RQ_FILES.length) await api('/api/requests/'+rid+'/files','POST',{files:RQ_FILES});
+    let emailed=0;
+    if(notify){ const n=await api('/api/requests/'+rid+'/notify','POST',{}); emailed=n.emailed||0; }
+    const wasEdit=!!RQ_EDIT; RQ_EDIT=null; RQ_SKILLS=[]; RQ_FILES=[]; SKILL_Q='';
+    alert(notify ? (wasEdit?'Saved. ':'Posted. ')+emailed+' instructor'+(emailed===1?'':'s')+' emailed.' : (wasEdit?'Saved.':'Posted. It is on the Opportunities tab; nobody was emailed.'));
+  }catch(e){ alert(e.message); return; }
+  adminRequests();
 }
 async function reqAction(id, action){
   const r=await api('/api/requests/'+id+'/'+action,'POST',{}); if(r.error){ alert(r.error); return; }
@@ -3535,7 +3567,7 @@ async function instrMine(){
   todo.filter(c=>c.followup_status!=='ready').forEach(c=>todos.push({t:`Write your note to the students of ${c.title}`, go:`jumpTo('#fu${c.id}')`, k:'\u2709\uFE0F'}));
   drafts.filter(d=>d.payload_request_id||d.request_id).forEach(d=>todos.push({t:`Finish your proposal for ${d.title||'a claimed class'}`, go:`resumeDraft(${d.id})`, k:'\u{1F4CC}'}));
   let allReqs=[]; try{ allReqs=(await api('/api/requests')).requests||[]; }catch(_){}
-  allReqs.filter(r=>r.my_interest==='confirmed' && r.status!=='closed').forEach(r=>todos.push({t:`${r.kind==='sell'?'Sell or show':'Assist'}: ${r.title}${r.when_text?' · '+r.when_text:''}`, go:"renderInstr('wanted')", k:r.kind==='sell'?'\u{1F3A8}':'\u{1F64B}'}));
+  allReqs.filter(r=>r.my_interest==='confirmed' && r.status!=='closed').forEach(r=>todos.push({t:`${r.kind==='sell'?'Sell or show':r.kind==='design'?'Design':'Assist'}: ${r.title}${r.when_text?' · '+r.when_text:''}`, go:"renderInstr('wanted')", k:(KIND_META[r.kind]||KIND_META.help).icon}));
   if(ME && !ME.phone && !paperOpen.some(x=>x.kind==='phone')) todos.push({t:'Add your phone number to your profile', go:'renderProfile()', k:'\u{1F4DE}'});
   if(ME && !ME.photo) todos.push({t:'Add a photo to your profile', go:'renderProfile()', k:'\u{1F4F7}'});
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
@@ -3621,7 +3653,13 @@ async function instrMine(){
 let WANT_SKILL=null, WANT_KIND='all';
 function wantFilter(k){ WANT_SKILL = (k===WANT_SKILL) ? null : k; instrWanted(); }
 function wantKind(k){ WANT_KIND=k; instrWanted(); }
-const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}};
+const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}, design:{label:'Design, paid',icon:'\u{1F9E9}',bg:'#EFE3F7',btn:'I\u2019d like to propose'}};
+function filesHTML(r){
+  const fs=r.files||[]; if(!fs.length) return '';
+  const imgs=fs.filter(f=>(f.mime||'').startsWith('image/')), docs=fs.filter(f=>!(f.mime||'').startsWith('image/'));
+  return `${imgs.length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">${imgs.map(f=>`<a href="/api/requests/${r.id}/files/${f.id}" target="_blank" rel="noopener"><img src="${f.thumb||('/api/requests/'+r.id+'/files/'+f.id)}" alt="${esc(f.name)}" style="width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--line)"></a>`).join('')}</div>`:''}
+    ${docs.length?`<div class="meta" style="margin-top:6px">${docs.map(f=>`\u{1F4CE} <a href="/api/requests/${r.id}/files/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a>`).join(' · ')}</div>`:''}`;
+}
 async function instrWanted(){
   let reqs=[]; try{ reqs=(await api('/api/requests')).requests||[]; }catch(_){}
   const openAll=reqs.filter(r=>r.status==='open');
@@ -3630,12 +3668,13 @@ async function instrWanted(){
   const my=new Set((ME&&ME.skills)||[]);
   let open = WANT_KIND==='all' ? openAll : openAll.filter(r=>r.kind===WANT_KIND);
   open = WANT_SKILL==='__mine' ? open.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? open.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : open;
-  const kinds=['teach','help','sell'].filter(k=>openAll.some(r=>r.kind===k));
+  const kinds=['teach','help','sell','design'].filter(k=>openAll.some(r=>r.kind===k));
   const card=r=>{ const m=KIND_META[r.kind]||KIND_META.teach; const raised=r.my_interest;
     return `<div class="card" style="background:${m.bg}"><div class="row"><h3 style="font-size:1.05rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:#fff;color:var(--ink)">${m.icon} ${m.label}</span></div>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini ${my.has(k)?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
+      ${filesHTML(r)}
       ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
       ${r.kind==='teach'
         ? `<button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">${m.btn}</button>`
@@ -3645,9 +3684,9 @@ async function instrWanted(){
         : `<button class="btn dark" style="margin-top:10px" onclick="raiseHand(${r.id},false)">${m.btn}</button>${r.interest_count?`<div class="meta" style="margin-top:4px">${r.interest_count} ${r.interest_count===1?'person has':'people have'} raised a hand so far.</div>`:''}`}
     </div>`; };
   $('#tab').innerHTML = `<h2>Opportunities</h2>
-    <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, and chances to sell or show your work.</p>
+    <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, chances to sell or show your work, and paid design work.</p>
     ${kinds.length>1?`<div class="seg" style="margin-bottom:8px"><button class="${WANT_KIND==='all'?'on':''}" onclick="wantKind('all')">All</button>${kinds.map(k=>`<button class="${WANT_KIND===k?'on':''}" onclick="wantKind('${k}')">${KIND_META[k].icon} ${KIND_META[k].label}</button>`).join('')}</div>`:''}
-    ${tags.length?`<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">✨ My skills</button>`:''}${tags.map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
+    ${tags.length?`${tags.length>8?`<input id="want_q" placeholder="Search skills" value="${esc(SKILL_Q)}" oninput="skillSearch(this.value, ()=>{ instrWanted().then(()=>{ const el=document.getElementById('want_q'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); })" style="margin-bottom:6px">`:''}<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">✨ My skills</button>`:''}${tags.filter(k=>WANT_SKILL===k||skillMatch(k)).map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
     ${open.length?open.map(card).join('')
       :((WANT_SKILL||WANT_KIND!=='all')?'<div class="muted">Nothing like that right now. Tap All or Show all.</div>':'<div class="muted">Nothing is open right now. Check back after the next planning meeting.</div>')}
     ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><div class="row"><h3 style="font-size:1rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:var(--cream)">${(KIND_META[r.kind]||KIND_META.teach).label}</span></div>
@@ -4421,7 +4460,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'

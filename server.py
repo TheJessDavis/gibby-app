@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.83.1-reconnect"
+VERSION = "10.84.0-skills-attachments"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -52,6 +52,25 @@ def db():
     c.execute("PRAGMA foreign_keys=ON")
     c.execute("PRAGMA busy_timeout=8000")
     return c
+
+SKILL_SEED = ["Pottery & clay", "Hand building pottery", "Wheel throwing", "Polymer clay", "Air dry clay", "Sculpture", "Watercolor", "Acrylic painting", "Oil painting", "Gouache", "Pastels", "Charcoal drawing", "Ink drawing", "Drawing & sketching", "Figure drawing", "Paint pouring", "Alcohol ink", "Encaustic & wax art", "Mural painting", "Chalk art", "Stained glass", "Glass fusing", "Suncatchers", "Mosaics", "Jewelry making", "Beading", "Wire wrapping", "Metalsmithing", "Enameling", "Friendship bracelets", "Engraving", "Fiber arts & weaving", "Rug tufting", "Knitting & crochet", "Sewing", "Quilting", "Embroidery", "Cross-stitch", "Punch needle", "Felting", "Needle felting", "Wet felting", "Macrame", "Tie-dye & fabric dyeing", "Batik & shibori", "Basket weaving", "Printmaking", "Relief printmaking", "Linocut", "Screen printing", "Stamp carving", "Gel plate printing", "Cyanotype", "Bookbinding", "Paper marbling", "Paper crafts & origami", "Card making", "Scrapbooking", "Junk journaling", "Collage & mixed media", "Calligraphy & hand lettering", "Hand lettering", "Risograph", "Paper mache", "Woodworking", "Wood carving", "Wood turning", "Pyrography (wood burning)", "Leather crafts", "Candle making", "Soap making", "Floral arranging", "Wreath making", "Terrariums", "Resin art", "String art", "Miniatures", "Model & diorama building", "Doll & puppet making", "Upcycling & thrift flips", "Home decor crafts", "Cricut crafts", "Cake decorating", "Cookie decorating", "Gingerbread houses", "Kids crafts", "Face painting", "Henna", "Shrinky Dinks", "Digital illustration", "Procreate & iPad art", "Graphic design", "Digital photography & photo editing", "Animation", "3D design & printing", "3D art", "Adobe Photoshop", "Adobe Illustrator"]
+
+def _loads_list(v):
+    try:
+        x = json.loads(v or "[]"); return x if isinstance(x, list) else []
+    except Exception:
+        return []
+
+def register_skills(c, names):
+    """Any new tag becomes part of the shared list everyone picks from."""
+    have = {r["name"].lower(): r["name"] for r in c.execute("SELECT name FROM skills")}
+    out = []
+    for n in names or []:
+        nm = str(n).strip()[:40]
+        if not nm: continue
+        if nm.lower() in have: out.append(have[nm.lower()]); continue
+        c.execute("INSERT OR IGNORE INTO skills(name,created) VALUES(?,?)", (nm, now())); have[nm.lower()] = nm; out.append(nm)
+    return list(dict.fromkeys(out))
 
 def init_db():
     c = db()
@@ -211,6 +230,17 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN kind TEXT DEFAULT 'teach'")   # teach | help | sell
     except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS skills(name TEXT PRIMARY KEY, created TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS request_files(
+        id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL, name TEXT, mime TEXT, b64 TEXT, thumb TEXT, created TEXT)""")
+    # Seed the shared skill list once: the built-in ideas plus every tag anyone
+    # has already put on a profile or a request.
+    seen = {r["name"].lower() for r in c.execute("SELECT name FROM skills")}
+    for name in SKILL_SEED + [x for r in c.execute("SELECT skills FROM users WHERE skills IS NOT NULL") for x in _loads_list(r["skills"])] \
+                           + [x for r in c.execute("SELECT skills FROM class_requests WHERE skills IS NOT NULL") for x in _loads_list(r["skills"])]:
+        nm = str(name).strip()[:40]
+        if nm and nm.lower() not in seen:
+            c.execute("INSERT OR IGNORE INTO skills(name,created) VALUES(?,?)", (nm, now())); seen.add(nm.lower())
     c.execute("""CREATE TABLE IF NOT EXISTS request_interest(
         id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL, user_id INTEGER NOT NULL, note TEXT,
         status TEXT DEFAULT 'raised', created TEXT, decided_at TEXT, UNIQUE(request_id, user_id))""")
@@ -1541,6 +1571,15 @@ _FEEDBACK_SECRET = None
 def photo_sig(pid):
     return hmac.new(feedback_secret().encode(), f"photo:{pid}".encode(), hashlib.sha256).hexdigest()[:16]
 
+def request_file_urls(c, rid):
+    """Public signed URLs for an opportunity's attachments: (images, docs)."""
+    imgs, docs = [], []
+    for r in c.execute("SELECT id, name, mime FROM request_files WHERE request_id=? ORDER BY id", (rid,)):
+        sig = photo_sig("rf%d" % r["id"])
+        url = f"{mailer.APP_URL}/rfile/{r['id']}-{sig}"
+        (imgs if (r["mime"] or "").startswith("image/") else docs).append({"name": r["name"], "url": url})
+    return imgs, docs
+
 def thanks_photo_urls(c, class_id, limit=5):
     """Public (signed, unguessable) URLs of the photos the instructor picked for
     the thank-you, oldest first, at most five."""
@@ -2860,6 +2899,15 @@ class H(http.server.BaseHTTPRequestHandler):
                                      "X-RateLimit-Remaining": 0})
         return True
 
+    def _send_b64(self, b64, mime, name):
+        b64 = (b64 or "").split(",",1)[1] if "," in (b64 or "")[:40] else (b64 or "")
+        data = base64.b64decode(b64)
+        self.send_response(200)
+        self.send_header("Content-Type", mime or "application/octet-stream")
+        self.send_header("Content-Disposition", f'inline; filename="{(name or "file").replace(chr(34), "")}"')
+        self.send_header("Cache-Control", "public, max-age=2592000")
+        self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
     def read_json(self):
         self._body_read = True
         n = int(self.headers.get("Content-Length","0") or 0)
@@ -2891,6 +2939,15 @@ class H(http.server.BaseHTTPRequestHandler):
         if p.startswith("/class-poster/"): return self.class_poster(p)
         if p.startswith("/contract-pdf/"): return self.contract_pdf_dl(p)
         if p.startswith("/media/"): return self.serve_media(p)
+        mrp = re.match(r"^/rfile/(\d+)-([0-9a-f]{16})$", p)
+        if mrp:
+            # An opportunity's attachment for the email: signed, so it cannot be guessed.
+            fid = int(mrp.group(1))
+            if not hmac.compare_digest(mrp.group(2), photo_sig(f"rf{fid}")): return self.send_error(404)
+            c = db(); r = c.execute("SELECT * FROM request_files WHERE id=?", (fid,)).fetchone(); c.close()
+            if not r: return self.send_error(404)
+            self._send_b64(r["b64"], r["mime"], r["name"])
+            return
         mpp = re.match(r"^/photo/(\d+)-([0-9a-f]{16})\.jpg$", p)
         if mpp:
             # A class photo for the thank-you email: only with its signature.
@@ -3630,10 +3687,16 @@ class H(http.server.BaseHTTPRequestHandler):
             if u["role"] != "admin":
                 rows = [r for r in rows if r["status"] == "open" or r["claimed_by"] == u["id"]
                         or any(x["user_id"] == u["id"] for x in by_req.get(r["id"], []))]
+            fq = db()
+            files = {}
+            for f in fq.execute("SELECT id, request_id, name, mime, thumb FROM request_files ORDER BY id"):
+                files.setdefault(f["request_id"], []).append({"id": f["id"], "name": f["name"], "mime": f["mime"], "thumb": f["thumb"] or ""})
+            fq.close()
             for r in rows:
                 try: r["skills"] = json.loads(r.get("skills") or "[]")
                 except Exception: r["skills"] = []
                 r["kind"] = r.get("kind") or "teach"
+                r["files"] = files.get(r["id"], [])
                 mine = [x for x in by_req.get(r["id"], []) if x["user_id"] == u["id"]]
                 r["my_interest"] = mine[0]["status"] if mine else None
                 if u["role"] == "admin":
@@ -3814,6 +3877,24 @@ class H(http.server.BaseHTTPRequestHandler):
                 "SELECT * FROM client_errors ORDER BY id DESC LIMIT 100").fetchall()]
             c.close()
             return self.send_json({"errors": rows})
+        if p == "/api/skills":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            rows = [r["name"] for r in c.execute("SELECT name FROM skills ORDER BY LOWER(name)")]
+            used = {}
+            for r in c.execute("SELECT skills FROM users WHERE deleted_at IS NULL AND skills IS NOT NULL"):
+                for x in _loads_list(r["skills"]): used[x.lower()] = used.get(x.lower(), 0) + 1
+            c.close()
+            return self.send_json({"skills": rows, "people": used})
+        mrf = re.match(r"^/api/requests/(\d+)/files/(\d+)$", p)
+        if mrf:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); r = c.execute("SELECT * FROM request_files WHERE id=? AND request_id=?", (int(mrf.group(2)), int(mrf.group(1)))).fetchone(); c.close()
+            if not r: return self.send_error(404)
+            self._send_b64(r["b64"], r["mime"], r["name"])
+            return
         if p == "/api/paperwork":
             # What The Gibby has asked this person for, and what they have sent.
             u = self.current_user()
@@ -4285,6 +4366,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if photo is not None:
                 c.execute("UPDATE users SET photo=? WHERE id=?",(photo or None,u["id"]))
             if skills is not None:
+                skills = register_skills(c, skills)
                 c.execute("UPDATE users SET skills=? WHERE id=?",(json.dumps(skills),u["id"]))
             if address is not None:
                 c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
@@ -4931,8 +5013,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if len(title) < 3: return self.send_json({"error":"Give the request a short title, like 'Kids pottery'."},400)
             c = db()
             desc = (b.get("description") or "").strip()[:1500]
-            skills = [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12]
-            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell") else "teach"
+            skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
+            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else "teach"
             c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind)
                          VALUES(?,?,?,?,?,'open',?,?,?,?,?)""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
@@ -4942,10 +5024,11 @@ class H(http.server.BaseHTTPRequestHandler):
             c.commit(); c.close()
             if b.get("notify") and instructors:      # only when the admin chose "Post it and email everyone"
                 lead = {"teach": "The Gibby would love someone to teach this:", "help": "The Gibby is looking for a helping hand:",
-                        "sell": "An opportunity to sell or show your work:"}[kind]
+                        "sell": "An opportunity to sell or show your work:", "design": "A paid design opportunity:"}[kind]
                 act = {"teach": "press Claim on it. It pre-fills a class proposal so you only pick the time and add your details",
                        "help": "press I can help on it and The Gibby will confirm with you",
-                       "sell": "press I want to sell or show on it and The Gibby will be in touch"}[kind]
+                       "sell": "press I want to sell or show on it and The Gibby will be in touch",
+                       "design": "press I'd like to propose on it and The Gibby will be in touch"}[kind]
                 mailer.send(instructors, f"The Gibby is looking for: {title}",
                     f"Hello,\n\n{lead}\n\n  {title}\n"
                     + (f"  When: {b.get('when_text')}\n" if b.get("when_text") else "")
@@ -4964,14 +5047,70 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"not found"},404)
             title = (b.get("title") or "").strip()[:120]
             if len(title) < 3: c.close(); return self.send_json({"error":"Give the request a short title."},400)
-            skills = [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12]
-            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell") else None
+            skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
+            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else None
             c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=?, kind=COALESCE(?,kind) WHERE id=?""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
                        (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120],
                        (b.get("description") or "").strip()[:1500], json.dumps(skills), kind, rid))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        mrfu = re.match(r"^/api/requests/(\d+)/files$", p)
+        if mrfu:
+            # Admin attaches images and documents to an opportunity (flyer, form, photos).
+            u = self.require("admin")
+            if not u: return
+            rid = int(mrfu.group(1)); b = self.read_json(); c = db()
+            if not c.execute("SELECT 1 FROM class_requests WHERE id=?", (rid,)).fetchone(): c.close(); return self.send_json({"error":"not found"},404)
+            if b.get("remove"):
+                c.execute("DELETE FROM request_files WHERE id=? AND request_id=?", (int(b["remove"]), rid)); c.commit(); c.close()
+                return self.send_json({"ok":True})
+            saved = []
+            for f in (b.get("files") or [])[:8]:
+                b64 = f.get("b64") or ""
+                if "," in b64[:40]: b64 = b64.split(",",1)[1]
+                if not b64 or len(b64) > 6_000_000: continue
+                name = re.sub(r"[^A-Za-z0-9._ -]+", "-", (f.get("name") or "file"))[:80]
+                c.execute("INSERT INTO request_files(request_id,name,mime,b64,thumb,created) VALUES(?,?,?,?,?,?)",
+                          (rid, name, (f.get("mime") or "application/octet-stream")[:80], b64, (f.get("thumb") or "")[:60000], now()))
+                saved.append(name)
+            c.commit(); c.close()
+            return self.send_json({"ok":True, "saved":saved})
+        mrn = re.match(r"^/api/requests/(\d+)/notify$", p)
+        if mrn:
+            # Email every instructor about one opportunity: a card-style email with
+            # its pictures, its documents as buttons, and one big "See it in the app".
+            u = self.require("admin")
+            if not u: return
+            rid = int(mrn.group(1)); c = db()
+            row = c.execute("SELECT * FROM class_requests WHERE id=?", (rid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            instructors = emails_for(c, "WHERE role='instructor'")
+            imgs, docs = request_file_urls(c, rid)
+            c.close()
+            kind = row["kind"] or "teach"
+            lead = {"teach": "The Gibby would love someone to teach this.", "help": "The Gibby is looking for a helping hand.",
+                    "sell": "A chance to sell or show your work.", "design": "A paid design opportunity from The Gibby."}[kind]
+            act = {"teach": "Tap Claim this one and the proposal is pre-filled; you only pick the time.",
+                   "help": "Tap I can help and The Gibby will confirm with you.",
+                   "sell": "Tap I want to sell or show and The Gibby will be in touch.",
+                   "design": "Tap I'd like to propose, add a line about your idea, and The Gibby will be in touch."}[kind]
+            details = "\n".join(f"  \u2022 {lab}: {val}" for lab, val in (("When", row["when_text"]), ("Where", row["room"]), ("Ages", row["ages"])) if val)
+            skills = _loads_list(row["skills"])
+            body = (f"Hello,\n\n{lead}\n\n{row['title']}\n" + (details + "\n" if details else "")
+                    + (f"\n{row['description']}\n" if row["description"] else "")
+                    + (f"\nFrom The Gibby: {row['notes']}\n" if row["notes"] else "")
+                    + (f"\nSkills: {', '.join(skills)}\n" if skills else "")
+                    + "".join(f"\n{d['name']}: {d['url']}" for d in docs)
+                    + f"\n\n{act}\n\nSee it in the app: {mailer.APP_URL}/#opportunities\n\nThank you,\nThe Gibby")
+            banner = {"teach": ("\U0001F4CC Teach", "#DCE8F5"), "help": ("\U0001F64B Help wanted", "#EAF4E2"), "sell": ("\U0001F3A8 Sell or show", "#FBE3D6"),
+                      "design": ("\U0001F9E9 Design, paid", "#EFE3F7")}[kind]
+            subj = {"teach": f"Wanted: someone to teach {row['title']}", "help": f"Helping hand wanted: {row['title']}",
+                    "sell": f"Sell or show: {row['title']}", "design": f"Paid design opportunity: {row['title']}"}[kind]
+            n = 0
+            if instructors:
+                mailer.send(instructors, subj, body, images=[i["url"] for i in imgs], banner=banner); n = len(instructors)
+            return self.send_json({"ok":True, "emailed":n})
         mri = re.match(r"^/api/requests/(\d+)/interest$", p)
         if mri:
             # "I can help" / "I want to sell or show": several people may raise a hand.
@@ -4990,7 +5129,7 @@ class H(http.server.BaseHTTPRequestHandler):
             admins = emails_for(c, "WHERE role='admin'")
             owner = c.execute("SELECT name,email FROM users u JOIN classes cl ON cl.instructor_id=u.id WHERE cl.id=?", (row["class_id"],)).fetchone() if row["class_id"] else None
             c.commit(); c.close()
-            verb = "can help with" if row["kind"] == "help" else "wants to sell or show at"
+            verb = {"help": "can help with", "sell": "wants to sell or show at", "design": "would like to propose for"}.get(row["kind"], "raised a hand for")
             mailer.send(admins, f"{u['name']} {verb}: {row['title']}",
                 f"{u['name']} raised a hand on the Opportunities tab for \"{row['title']}\"."
                 + (f"\n\nTheir note: {note}" if note else "") + f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else "")
