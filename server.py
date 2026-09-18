@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.88.0-lockbox"
+VERSION = "10.88.1-lockbox-notify"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1433,7 +1433,7 @@ PAPERWORK_KINDS = {
     "phone":      {"label": "Phone number",
                    "what": "Add a phone number where The Gibby can reach you on class day."},
     "lockbox":    {"label": "Lockbox key code contract",
-                   "what": "Read and sign the Lockbox Key Code Holder Contract in the app (a typed signature, one minute). The lockbox code unlocks for you once it is signed."},
+                   "what": "Read and sign the Lockbox Key Code Holder Contract in the app (a typed signature, one minute). Michelle Truban then emails you the lockbox code."},
 }
 
 def lockbox_paperwork_done(c, user_id):
@@ -1461,6 +1461,11 @@ ASSET RELEASE PROTOCOL
 Any items being released (borrowed) by parties for use outside of The Everett, Inc. will need to submit a written Asset Release Form which can be obtained from the Director of Operations Michelle Truban. After receipt, and review, that those items (props, set, costumes, etc.) are not being used in an Everett sanctioned event, an Everett Representative will arrange a time to meet with the borrower. At that time each item will be checked out by both parties. No items can be removed from The Everett without a signed Asset Release form and a representative present at the time of removal.
 
 My typed signature states that I will be a responsible key code holder and will abide by all policies set forth in the Lockbox Key Code Holder Contract and Asset Release Protocol."""
+
+LOCKBOX_TO_DEFAULT = "mtruban@theeverett.org, mtruban@theeverett.com"   # Michelle Truban (both her addresses) sends the code herself once someone has signed
+
+def lockbox_to():
+    return [e.strip() for e in (_meta_get("lockbox_to") or LOCKBOX_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
 
 def lockbox_contract():
     return (_meta_get("lockbox_contract") or LOCKBOX_CONTRACT_DEFAULT).strip()
@@ -4087,12 +4092,8 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
             c = db(); r = lockbox_row(c, u["id"]); c.close()
-            out = {"contract": lockbox_contract(), "signed": bool(r),
-                   "signed_at": r["signed_at"] if r else None, "name": r["name"] if r else None}
-            if r or u["role"] == "admin":
-                out["code"] = _meta_get("lockbox_code"); out["code_set_at"] = _meta_get("lockbox_code_set_at")
-                out["code_note"] = _meta_get("lockbox_code_note")
-            return self.send_json(out)
+            return self.send_json({"contract": lockbox_contract(), "signed": bool(r),
+                   "signed_at": r["signed_at"] if r else None, "name": r["name"] if r else None})
         if p == "/api/admin/lockbox":
             u = self.require("admin")
             if not u: return
@@ -4100,8 +4101,7 @@ class H(http.server.BaseHTTPRequestHandler):
             people = [dict(r) for r in c.execute("""SELECT u.id, u.name, u.email, u.role, l.signed_at, l.via, l.name AS signed_name
                 FROM users u LEFT JOIN lockbox l ON l.user_id=u.id WHERE u.deleted_at IS NULL ORDER BY u.name""").fetchall()]
             c.close()
-            return self.send_json({"code": _meta_get("lockbox_code"), "code_set_at": _meta_get("lockbox_code_set_at"),
-                                   "code_note": _meta_get("lockbox_code_note"), "contract": lockbox_contract(),
+            return self.send_json({"to": ", ".join(lockbox_to()), "contract": lockbox_contract(),
                                    "contract_custom": bool(_meta_get("lockbox_contract")),
                                    "signed": [x for x in people if x["signed_at"]], "unsigned": [x for x in people if not x["signed_at"]]})
         if p == "/api/paperwork/background-form":
@@ -4954,41 +4954,30 @@ class H(http.server.BaseHTTPRequestHandler):
             lockbox_paperwork_done(c, u["id"])
             c.commit(); c.close()
             when = datetime.date.today().strftime("%B %d, %Y")
+            # Michelle (or whoever is set under People > Lockbox) sends the code
+            # herself; the app never holds or shows it.
+            mailer.send(lockbox_to(), f"Lockbox code request: {u['name'] or u['email']} signed the contract",
+                f"{u['name'] or u['email']} has signed the Lockbox Key Code Holder Contract in the Gibby app on {when}, "
+                f"as \"{name}\".\n\nPlease email them the lockbox code:\n\n  {u['name'] or ''} <{u['email']}>\n\n"
+                f"Reply to this email or write to them directly. The signed contract is on file in the app under People > Lockbox: {mailer.APP_URL}",
+                reply_to=u["email"])
             mailer.send(u["email"], "Your signed Lockbox Key Code Holder Contract",
                 f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nThank you. You signed the Lockbox Key Code Holder Contract on {when} "
-                f"as \"{name}\". The current lockbox code is in the app under My classes (Lockbox code). Please do not share it; "
-                f"anyone who asks should be referred to Michelle Truban or Seth Cosans.\n\nOpen the app: {mailer.APP_URL}\n\n"
+                f"as \"{name}\". Michelle Truban has been told and will email you the lockbox code. Please do not share it; "
+                f"anyone who asks should be referred to Michelle Truban or Seth Cosans.\n\n"
                 f"For your records, here is what you signed:\n\n{lockbox_contract()}\n\nSigned: {name}\nDate: {when}")
-            mailer.send(emails_for(db(), "WHERE role='admin'"), f"{u['name'] or u['email']} signed the lockbox contract",
-                f"{u['name'] or u['email']} ({u['email']}) signed the Lockbox Key Code Holder Contract on {when} as \"{name}\" "
-                f"and can now see the lockbox code in the app.\n\nEveryone's status is under People > Lockbox: {mailer.APP_URL}")
-            return self.send_json({"ok":True, "code": _meta_get("lockbox_code"), "code_set_at": _meta_get("lockbox_code_set_at"), "code_note": _meta_get("lockbox_code_note")})
+            return self.send_json({"ok":True})
         if p == "/api/admin/lockbox":
             # Set or change the code (optionally telling signed holders it changed,
             # without putting the code in email), edit the contract text.
             u = self.require("admin")
             if not u: return
             b = self.read_json(); out = {"ok":True}
-            if b.get("code") is not None:
-                code = str(b.get("code") or "").strip()[:40]
-                changed = code != (_meta_get("lockbox_code") or "")
-                _meta_set("lockbox_code", code)
-                _meta_set("lockbox_code_note", str(b.get("note") or "").strip()[:200])
-                if changed:
-                    _meta_set("lockbox_code_set_at", now())
-                    if code and b.get("notify"):
-                        c = db()
-                        holders = [r["email"] for r in c.execute("""SELECT u.email FROM lockbox l JOIN users u ON u.id=l.user_id
-                                                                    WHERE u.deleted_at IS NULL""").fetchall()]
-                        c.close()
-                        n = 0
-                        for em in holders:
-                            if mailer.send(em, "The Gibby lockbox code has changed",
-                                "Hi,\n\nThe lockbox code has changed. For safety the new code is not in this email: sign in to the app, "
-                                f"open My classes and tap \"Lockbox code\" to see it.\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby", copy=False): n += 1
-                        if n: mailer.send(mailer.COPY_TO, f"[Copy to {n} code holders] The Gibby lockbox code has changed",
-                                          f"(Sent to {n} signed code holder(s); this is one copy. The code itself was not emailed.)", copy=False)
-                        out["notified"] = n
+            if b.get("to") is not None:
+                to = [e.strip().lower() for e in str(b.get("to") or "").replace(";", ",").split(",") if e.strip()]
+                if any(not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e) for e in to):
+                    return self.send_json({"error":"That does not look like an email address."},400)
+                _meta_set("lockbox_to", ", ".join(to))
             if b.get("contract") is not None:
                 txt = str(b.get("contract") or "").strip()[:12000]
                 _meta_set("lockbox_contract", "" if txt == LOCKBOX_CONTRACT_DEFAULT.strip() else txt)
@@ -5021,8 +5010,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 first = (r["name"] or "").split(" ")[0] or "there"
                 if mailer.send(r["email"], "Please sign the Lockbox Key Code Holder Contract",
                     f"Hi {first},\n\nEvery instructor needs to sign the Lockbox Key Code Holder Contract before using the building key. "
-                    f"It takes a minute in the app: sign in, open My classes, and tap \"Sign the lockbox contract\" at the top. "
-                    f"Once you have signed, the lockbox code appears in the same place.\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby", copy=False): n += 1
+                    f"It takes a minute in the app: sign in, open My classes, and tap \"Sign the lockbox key code contract\" at the top. "
+                    f"Once you have signed, Michelle Truban emails you the lockbox code.\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby", copy=False): n += 1
             if n: mailer.send(mailer.COPY_TO, f"[Copy to {n} instructors] Please sign the Lockbox Key Code Holder Contract",
                               f"(Sent to {n} instructor(s) who have not signed yet; this is one copy.)", copy=False)
             return self.send_json({"ok":True, "sent": n, "names": [r["name"] or r["email"] for r in rows]})

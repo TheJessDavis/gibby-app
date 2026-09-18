@@ -677,7 +677,7 @@ async function renderProfile(){
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
     <div style="height:8px"></div>
-    ${actingRole()==='admin'?'':`<button class="btn ghost" onclick="${ME&&ME.lockbox_signed?'showLockbox()':'openLockbox()'}">\u{1F510} Lockbox code</button>
+    ${actingRole()==='admin'||(ME&&ME.lockbox_signed)?'':`<button class="btn ghost" onclick="openLockbox()">\u{1F510} Sign the lockbox contract</button>
     <div style="height:8px"></div>`}
     <button class="btn ghost" onclick="startTour()">🧭 Take the tour again</button>
     <div style="height:8px"></div>
@@ -825,7 +825,8 @@ async function openLockbox(){
   let d; try{ d=await api('/api/lockbox'); }catch(e){ return alert(e.message); }
   if(d.signed) return showLockbox(d);
   lbShell(`<h2 style="margin:0 0 4px">Lockbox <em>contract</em></h2>
-    <p class="sub" style="margin:0 0 10px">Every key code holder at The Everett signs this once. When you have, the lockbox code unlocks right here.</p>
+    <div class="card" style="background:#DCE8F5;margin:0 0 10px;padding:12px 14px"><b>How this works</b>
+      <div class="meta" style="margin-top:4px">1. Read the contract below and sign it with your typed name.<br>2. Michelle Truban is emailed your name and email address.<br>3. She emails you the lockbox code. It is never shown in the app.</div></div>
     <div style="flex:1;position:relative;min-height:160px;display:flex">
       <pre id="lb_pre" style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;padding-bottom:34px;margin:0;max-height:44vh">${esc(d.contract)}<span id="lb_end" style="display:block;height:1px"></span></pre>
       <div id="lb_fade" style="position:absolute;left:0;right:0;bottom:0;height:56px;border-radius:0 0 12px 12px;background:linear-gradient(rgba(251,247,239,0),#FBF7EF 78%);pointer-events:none;display:flex;align-items:flex-end;justify-content:center">
@@ -850,9 +851,9 @@ async function openLockbox(){
 async function signLockbox(){
   const x=$('#lberr'); x.classList.remove('show');
   try{
-    const r=await api('/api/lockbox/sign','POST',{name:$('#lb_name').value, agree:$('#lb_agree').checked});
+    await api('/api/lockbox/sign','POST',{name:$('#lb_name').value, agree:$('#lb_agree').checked});
     ME = (await api('/api/me')).user;
-    showLockbox({signed:true, code:r.code, code_set_at:r.code_set_at, code_note:r.code_note, signed_at:new Date().toISOString(), name:$('#lb_name').value, fresh:true});
+    showLockbox({signed:true, signed_at:new Date().toISOString(), name:$('#lb_name').value, fresh:true});
     if(typeof buildBnav==='function') buildBnav(actingRole(), 'mine');
     if(document.getElementById('tab')) renderInstr('mine');
   }catch(e){ x.textContent=e.message; x.classList.add('show'); }
@@ -861,16 +862,10 @@ async function showLockbox(d){
   if(!d){ try{ d=await api('/api/lockbox'); }catch(e){ return alert(e.message); } }
   if(!d.signed) return openLockbox();
   const when=s=>s?new Date(s).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}):'';
-  lbShell(`<h2 style="margin:0 0 4px">Lockbox <em>code</em></h2>
-    ${d.fresh?`<p class="sub" style="margin:0 0 10px">Signed. Thank you! A copy of the contract is on its way to your inbox.</p>`:''}
-    ${d.code?`<div style="background:var(--ink);color:#fff;border-radius:16px;padding:22px 16px;text-align:center;margin:6px 0 10px">
-        <div style="font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.65">Current code</div>
-        <div style="font-size:2.4rem;font-weight:900;letter-spacing:.12em;margin-top:4px">${esc(d.code)}</div>
-        ${d.code_note?`<div style="font-size:12.5px;margin-top:6px;opacity:.85">${esc(d.code_note)}</div>`:''}
-        ${d.code_set_at?`<div style="font-size:11px;margin-top:8px;opacity:.6">Set ${esc(when(d.code_set_at))}</div>`:''}</div>`
-      :`<div class="card" style="background:#F3EEE2;text-align:center"><b>No code has been posted yet.</b><div class="meta">The Gibby will add it here; check back soon.</div></div>`}
-    <div class="hint">The code changes from time to time; this page always shows the current one. Please do not share it. Anyone who asks should be referred to Michelle Truban or Seth Cosans.</div>
-    <div class="meta" style="margin-top:8px;font-size:12.5px;color:var(--ink-soft)">You signed the Lockbox Key Code Holder Contract${d.signed_at?' on '+esc(when(d.signed_at)):''}${d.name?' as '+esc(d.name):''}.</div>
+  lbShell(`<h2 style="margin:0 0 4px">Contract <em>signed</em></h2>
+    <p class="sub" style="margin:0 0 10px">${d.fresh?'Thank you! ':''}You signed the Lockbox Key Code Holder Contract${d.signed_at?' on '+esc(when(d.signed_at)):''}${d.name?' as '+esc(d.name):''}.</p>
+    <div class="card" style="background:#DCE8F5"><b>\u{1F510} Michelle Truban will email you the lockbox code.</b>
+      <div class="meta" style="margin-top:4px">She has been notified with your email address. ${d.fresh?'A copy of the contract is on its way to your inbox too.':''} Please do not share the code; anyone who asks should be referred to Michelle Truban or Seth Cosans.</div></div>
     <button class="btn dark" style="margin-top:12px" onclick="closeLockbox()">Done</button>`);
 }
 async function signContractNow(id){
@@ -1608,13 +1603,11 @@ async function adminPeople(){
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
     <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">\u{1F4CB} Request paperwork from everyone missing it</button>
-    ${lb?`<details class="card" id="lockbox" style="margin-bottom:10px" ${LB_OPEN?'open':''} ontoggle="LB_OPEN=this.open"><summary style="cursor:pointer;font-weight:800">\u{1F510} Lockbox: code and contract (${lb.signed.length} signed, ${lb.unsigned.filter(x=>x.role==='instructor').length} instructor${lb.unsigned.filter(x=>x.role==='instructor').length===1?'':'s'} not yet)</summary>
-      <p class="sub" style="margin:8px 0 6px">Instructors see the code only after signing the Key Code Holder Contract in the app. Change the code here whenever it changes at the building.</p>
-      <label>Current lockbox code</label><input id="lb_code" value="${esc(lb.code||'')}" placeholder="e.g. 4821" autocomplete="off">
-      <label>Note shown with it (optional)</label><input id="lb_note" value="${esc(lb.code_note||'')}" placeholder="e.g. Gibby side door box, press the # key after">
-      <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="lb_notify" checked> Email everyone who has signed that the code changed (the code itself is never emailed)</label>
-      <div class="meta">${lb.code_set_at?'Last set '+esc(lb.code_set_at.slice(0,10)):'No code posted yet.'}</div>
-      <button class="btn dark" style="padding:9px 16px;margin-top:8px" onclick="saveLockboxCode()">Save code</button>
+    ${lb?`<details class="card" id="lockbox" style="margin-bottom:10px" ${LB_OPEN?'open':''} ontoggle="LB_OPEN=this.open"><summary style="cursor:pointer;font-weight:800">\u{1F510} Lockbox contract (${lb.signed.length} signed, ${lb.unsigned.filter(x=>x.role==='instructor').length} instructor${lb.unsigned.filter(x=>x.role==='instructor').length===1?'':'s'} not yet)</summary>
+      <p class="sub" style="margin:8px 0 6px">Instructors sign the Key Code Holder Contract in the app. Each signature emails the person below with the instructor's email address, and they send the code.</p>
+      <label>Who sends the code (emailed each time someone signs)</label><input id="lb_to" value="${esc(lb.to||'')}" placeholder="mtruban@theeverett.com">
+      <div class="hint">They get the instructor's name and email and reply with the code. The app never stores or shows the code.</div>
+      <button class="btn dark" style="padding:9px 16px;margin-top:8px" onclick="saveLockboxCode()">Save</button>
       <div class="hint" id="lb_msg"></div>
       <label style="margin-top:14px">Signed (${lb.signed.length})</label>
       ${lb.signed.length?lb.signed.map(x=>`<div class="meta" style="margin:2px 0">\u2713 <b>${esc(x.name||x.email)}</b> · ${esc((x.signed_at||'').slice(0,10))}${x.via==='admin'?' (marked by an admin)':x.signed_name&&x.signed_name!==x.name?' as '+esc(x.signed_name):''} · <a href="#" onclick="lockboxMark(${x.id},false);return false">undo</a></div>`).join(''):'<div class="hint">Nobody yet.</div>'}
@@ -1778,8 +1771,8 @@ let LB_OPEN=false;
 async function saveLockboxCode(){
   const msg=$('#lb_msg'); LB_OPEN=true;
   try{
-    const r=await api('/api/admin/lockbox','POST',{code:$('#lb_code').value, note:$('#lb_note').value, notify:$('#lb_notify').checked});
-    msg.textContent = 'Saved.' + (r.notified?` ${r.notified} code holder${r.notified===1?'':'s'} emailed that it changed.`:'');
+    await api('/api/admin/lockbox','POST',{to:$('#lb_to').value});
+    msg.textContent = 'Saved.';
     setTimeout(adminPeople, 900);
   }catch(e){ msg.textContent=e.message; }
 }
@@ -1790,7 +1783,7 @@ async function saveLockboxText(){
 }
 async function lockboxMark(uid, signed){
   LB_OPEN=true;
-  if(!signed && !confirm('Remove their signature? They will lose access to the code until they sign in the app.')) return;
+  if(!signed && !confirm('Remove their signature? They will be asked to sign again.')) return;
   try{ await api('/api/admin/lockbox/mark','POST',{user_id:uid, signed}); }catch(e){ alert(e.message); return; }
   adminPeople();
 }
@@ -3768,7 +3761,7 @@ async function instrMine(){
     <div class="two" style="margin-bottom:12px">
       ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
       <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
-    <button class="todoline" style="margin-bottom:12px;background:var(--white);border-radius:14px" onclick="${ME&&ME.lockbox_signed?'showLockbox()':'openLockbox()'}"><span>\u{1F510}</span><b>${ME&&ME.lockbox_signed?'Lockbox code':'Lockbox code (sign the contract first)'}</b><span class="rowchev">\u203A</span></button>
+
     ${paperOpen.length?`<label>The Gibby needs from you (${paperOpen.length})</label>
       <p class="sub" style="margin-top:2px">Quick paperwork so we can pay you and keep everyone safe. Nothing here is shared with students.</p>
       ${(()=>{ const n=(paperOpen.find(x=>x.note)||{}).note; return n?`<div class="meta" style="margin:0 0 8px"><b>From The Gibby:</b> ${linkify(n)}</div>`:''; })()}

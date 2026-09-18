@@ -120,8 +120,8 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - **Paperwork**: W-9, background check, phone, lockbox contract. Admins request per person; instructors
   complete in the app; files go to Drive under Gibby Paperwork; reminder after 3 days. The lockbox
   contract (`LOCKBOX_CONTRACT_DEFAULT`, editable in meta) is signed with a typed name into the
-  `lockbox` table; only signers see the code (meta `lockbox_code`, set under People > Lockbox).
-  The code is never emailed, only "it changed, open the app".
+  `lockbox` table. The app never holds the code: each signature emails Michelle Truban (meta
+  `lockbox_to`, set under People > Lockbox) the instructor's name and email, and she sends the code.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 
