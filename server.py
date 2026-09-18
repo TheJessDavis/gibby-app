@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.87.1-desktop-rail"
+VERSION = "10.88.0-lockbox"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -225,6 +225,9 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN button_label TEXT")   # what instructors tap, e.g. "Submit a Craft Kit Proposal"
     except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS lockbox(
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, name TEXT, signed_at TEXT,
+        via TEXT DEFAULT 'app', by_admin INTEGER, ip TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
@@ -1429,7 +1432,41 @@ PAPERWORK_KINDS = {
                    "what": "Complete the background check, then mark it done in the app (attach the confirmation if you have one)."},
     "phone":      {"label": "Phone number",
                    "what": "Add a phone number where The Gibby can reach you on class day."},
+    "lockbox":    {"label": "Lockbox key code contract",
+                   "what": "Read and sign the Lockbox Key Code Holder Contract in the app (a typed signature, one minute). The lockbox code unlocks for you once it is signed."},
 }
+
+def lockbox_paperwork_done(c, user_id):
+    """Signing the lockbox contract completes the matching paperwork item, if one was requested."""
+    c.execute("UPDATE paperwork SET status='done', done_at=COALESCE(done_at, ?), value='Signed in the app' WHERE user_id=? AND kind='lockbox'", (now(), user_id))
+
+LOCKBOX_CONTRACT_DEFAULT = """LOCKBOX KEY CODE HOLDER CONTRACT
+
+All members of The Everett, Inc. organization who hold the code to the Lockbox must also sign the Lockbox Key Code Holder Contract. If this contract is not completed you will NOT be allowed to use the building key to access the buildings.
+
+The Everett Board of Directors has provided you with access to the code for the buildings' key to access the buildings belonging to The Everett Inc. (Theatre, Gibby, and Annex). It is a privilege to have unfettered access to the building and with that privilege comes responsibility. As a holder of this code, you promise to:
+
+1. Use the key to enter the building(s) only for YOUR official Everett Inc. programming purposes (rehearsal, set build, classes, shows, costuming, etc.).
+
+2. While using the key to access the building(s), you assume responsibility for the people and their actions that occur inside the building during that time.
+
+3. While using the key to access the building(s), you assume responsibility for all of The Everett's assets and do hereby attest that no assets will leave the building without following the proper Asset Release Protocol (see below).
+
+4. While using the key to access the building(s) you must turn off all lights, lock all ancillary doors, and generally leave the space in the same condition as when you entered.
+
+5. You pledge to not share the key code with any member of The Everett, volunteers or previous affiliations with The Everett. If someone asks you for the code, you are to refer them to the Director of Operations Michelle Truban or Board Member Seth Cosans.
+
+ASSET RELEASE PROTOCOL
+
+Any items being released (borrowed) by parties for use outside of The Everett, Inc. will need to submit a written Asset Release Form which can be obtained from the Director of Operations Michelle Truban. After receipt, and review, that those items (props, set, costumes, etc.) are not being used in an Everett sanctioned event, an Everett Representative will arrange a time to meet with the borrower. At that time each item will be checked out by both parties. No items can be removed from The Everett without a signed Asset Release form and a representative present at the time of removal.
+
+My typed signature states that I will be a responsible key code holder and will abide by all policies set forth in the Lockbox Key Code Holder Contract and Asset Release Protocol."""
+
+def lockbox_contract():
+    return (_meta_get("lockbox_contract") or LOCKBOX_CONTRACT_DEFAULT).strip()
+
+def lockbox_row(c, user_id):
+    return c.execute("SELECT * FROM lockbox WHERE user_id=?", (user_id,)).fetchone()
 
 def paperwork_kinds():
     """PAPERWORK_KINDS with the background-check instructions Jess set under People."""
@@ -3390,6 +3427,7 @@ class H(http.server.BaseHTTPRequestHandler):
             n_contracts = cq.execute("""SELECT COUNT(*) FROM classes WHERE instructor_id=?
                 AND contract_status='sent' AND deleted_at IS NULL""",(u["id"],)).fetchone()[0]
             n_paper = cq.execute("SELECT COUNT(*) FROM paperwork WHERE user_id=? AND status='requested'",(u["id"],)).fetchone()[0]
+            lb_signed = bool(lockbox_row(cq, u["id"]))
             cq.close()
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
                 "role":u["role"],"must_change_pw":u.get("must_change_pw",0),
@@ -3400,6 +3438,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
                 "signoff":u.get("signoff") or "",
                 "paperwork_open":n_paper,
+                "lockbox_signed":lb_signed,
                 "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
@@ -3416,6 +3455,10 @@ class H(http.server.BaseHTTPRequestHandler):
             for p_ in c.execute("SELECT id,user_id,kind,status,requested_at,reminded_at,done_at,value,file_name,drive_link,note,self_reported FROM paperwork"):
                 if p_["user_id"] in by_id:
                     by_id[p_["user_id"]]["paperwork"][p_["kind"]] = {k: p_[k] for k in p_.keys() if k not in ("user_id","kind")}
+            # A lockbox signature counts as that item done even when nobody asked for it.
+            for l in c.execute("SELECT user_id, signed_at, via FROM lockbox"):
+                if l["user_id"] in by_id and "lockbox" not in by_id[l["user_id"]]["paperwork"]:
+                    by_id[l["user_id"]]["paperwork"]["lockbox"] = {"id": 0, "status": "done", "done_at": l["signed_at"], "value": "Signed in the app" if l["via"] == "app" else "Marked by an admin", "self_reported": 0}
             c.close(); return self.send_json({"users":rows, "paperwork_kinds": {k: v["label"] for k, v in PAPERWORK_KINDS.items()},
                                               "bg_instructions": _meta_get("bg_instructions") or (BG_FORM_DEFAULT if _meta_get("bg_form_name") else BG_INSTRUCTIONS_DEFAULT),
                                               "bg_form_name": _meta_get("bg_form_name")})
@@ -4039,6 +4082,28 @@ class H(http.server.BaseHTTPRequestHandler):
             kinds = paperwork_kinds()
             for r in rows: r["label"] = kinds.get(r["kind"], {}).get("label", r["kind"]); r["what"] = kinds.get(r["kind"], {}).get("what", "")
             return self.send_json({"paperwork": rows, "phone": u.get("phone") or "", "bg_form_name": _meta_get("bg_form_name")})
+        if p == "/api/lockbox":
+            # The contract, whether this person has signed it, and (only then) the code.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); r = lockbox_row(c, u["id"]); c.close()
+            out = {"contract": lockbox_contract(), "signed": bool(r),
+                   "signed_at": r["signed_at"] if r else None, "name": r["name"] if r else None}
+            if r or u["role"] == "admin":
+                out["code"] = _meta_get("lockbox_code"); out["code_set_at"] = _meta_get("lockbox_code_set_at")
+                out["code_note"] = _meta_get("lockbox_code_note")
+            return self.send_json(out)
+        if p == "/api/admin/lockbox":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            people = [dict(r) for r in c.execute("""SELECT u.id, u.name, u.email, u.role, l.signed_at, l.via, l.name AS signed_name
+                FROM users u LEFT JOIN lockbox l ON l.user_id=u.id WHERE u.deleted_at IS NULL ORDER BY u.name""").fetchall()]
+            c.close()
+            return self.send_json({"code": _meta_get("lockbox_code"), "code_set_at": _meta_get("lockbox_code_set_at"),
+                                   "code_note": _meta_get("lockbox_code_note"), "contract": lockbox_contract(),
+                                   "contract_custom": bool(_meta_get("lockbox_contract")),
+                                   "signed": [x for x in people if x["signed_at"]], "unsigned": [x for x in people if not x["signed_at"]]})
         if p == "/api/paperwork/background-form":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -4873,6 +4938,94 @@ class H(http.server.BaseHTTPRequestHandler):
                                        f"Shopping list from the class form ({row['planned'] or row['max_p'] or '?'} students planned).")
             c.execute("UPDATE classes SET supplies_ordered_at=? WHERE id=?", (now(), cid)); c.commit(); c.close()
             return self.send_json({"ok":True, "id":rid})
+        if p == "/api/lockbox/sign":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            b = self.read_json()
+            name = re.sub(r"\s+", " ", str(b.get("name") or "")).strip()[:120]
+            if len(name) < 3 or " " not in name:
+                return self.send_json({"error":"Please type your full name as your signature."},400)
+            if not b.get("agree"):
+                return self.send_json({"error":"Please tick the box to confirm you agree."},400)
+            c = db()
+            if lockbox_row(c, u["id"]): c.close(); return self.send_json({"ok":True, "already":True})
+            ip = self.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (self.client_address[0] if self.client_address else "")
+            c.execute("INSERT INTO lockbox(user_id, name, signed_at, via, ip) VALUES(?,?,?,?,?)", (u["id"], name, now(), "app", ip))
+            lockbox_paperwork_done(c, u["id"])
+            c.commit(); c.close()
+            when = datetime.date.today().strftime("%B %d, %Y")
+            mailer.send(u["email"], "Your signed Lockbox Key Code Holder Contract",
+                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nThank you. You signed the Lockbox Key Code Holder Contract on {when} "
+                f"as \"{name}\". The current lockbox code is in the app under My classes (Lockbox code). Please do not share it; "
+                f"anyone who asks should be referred to Michelle Truban or Seth Cosans.\n\nOpen the app: {mailer.APP_URL}\n\n"
+                f"For your records, here is what you signed:\n\n{lockbox_contract()}\n\nSigned: {name}\nDate: {when}")
+            mailer.send(emails_for(db(), "WHERE role='admin'"), f"{u['name'] or u['email']} signed the lockbox contract",
+                f"{u['name'] or u['email']} ({u['email']}) signed the Lockbox Key Code Holder Contract on {when} as \"{name}\" "
+                f"and can now see the lockbox code in the app.\n\nEveryone's status is under People > Lockbox: {mailer.APP_URL}")
+            return self.send_json({"ok":True, "code": _meta_get("lockbox_code"), "code_set_at": _meta_get("lockbox_code_set_at"), "code_note": _meta_get("lockbox_code_note")})
+        if p == "/api/admin/lockbox":
+            # Set or change the code (optionally telling signed holders it changed,
+            # without putting the code in email), edit the contract text.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json(); out = {"ok":True}
+            if b.get("code") is not None:
+                code = str(b.get("code") or "").strip()[:40]
+                changed = code != (_meta_get("lockbox_code") or "")
+                _meta_set("lockbox_code", code)
+                _meta_set("lockbox_code_note", str(b.get("note") or "").strip()[:200])
+                if changed:
+                    _meta_set("lockbox_code_set_at", now())
+                    if code and b.get("notify"):
+                        c = db()
+                        holders = [r["email"] for r in c.execute("""SELECT u.email FROM lockbox l JOIN users u ON u.id=l.user_id
+                                                                    WHERE u.deleted_at IS NULL""").fetchall()]
+                        c.close()
+                        n = 0
+                        for em in holders:
+                            if mailer.send(em, "The Gibby lockbox code has changed",
+                                "Hi,\n\nThe lockbox code has changed. For safety the new code is not in this email: sign in to the app, "
+                                f"open My classes and tap \"Lockbox code\" to see it.\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby", copy=False): n += 1
+                        if n: mailer.send(mailer.COPY_TO, f"[Copy to {n} code holders] The Gibby lockbox code has changed",
+                                          f"(Sent to {n} signed code holder(s); this is one copy. The code itself was not emailed.)", copy=False)
+                        out["notified"] = n
+            if b.get("contract") is not None:
+                txt = str(b.get("contract") or "").strip()[:12000]
+                _meta_set("lockbox_contract", "" if txt == LOCKBOX_CONTRACT_DEFAULT.strip() else txt)
+            return self.send_json(out)
+        if p == "/api/admin/lockbox/mark":
+            # Signed on paper or on the Google Form: recorded on the admin's word. Or un-mark.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json(); uid = int(b.get("user_id") or 0)
+            c = db(); who = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL", (uid,)).fetchone()
+            if not who: c.close(); return self.send_json({"error":"not found"},404)
+            if b.get("signed"):
+                c.execute("INSERT OR REPLACE INTO lockbox(user_id, name, signed_at, via, by_admin) VALUES(?,?,?,?,?)",
+                          (uid, who["name"], now(), "admin", u["id"]))
+                lockbox_paperwork_done(c, uid)
+            else:
+                c.execute("DELETE FROM lockbox WHERE user_id=?", (uid,))
+                c.execute("UPDATE paperwork SET status='requested', requested_at=?, reminded_at=NULL, done_at=NULL, value=NULL WHERE user_id=? AND kind='lockbox'", (now(), uid))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
+        if p == "/api/admin/lockbox/remind":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT u.* FROM users u LEFT JOIN lockbox l ON l.user_id=u.id
+                WHERE u.deleted_at IS NULL AND u.role='instructor' AND l.id IS NULL AND u.must_change_pw=0""").fetchall()]
+            c.close()
+            n = 0
+            for r in rows:
+                first = (r["name"] or "").split(" ")[0] or "there"
+                if mailer.send(r["email"], "Please sign the Lockbox Key Code Holder Contract",
+                    f"Hi {first},\n\nEvery instructor needs to sign the Lockbox Key Code Holder Contract before using the building key. "
+                    f"It takes a minute in the app: sign in, open My classes, and tap \"Sign the lockbox contract\" at the top. "
+                    f"Once you have signed, the lockbox code appears in the same place.\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby", copy=False): n += 1
+            if n: mailer.send(mailer.COPY_TO, f"[Copy to {n} instructors] Please sign the Lockbox Key Code Holder Contract",
+                              f"(Sent to {n} instructor(s) who have not signed yet; this is one copy.)", copy=False)
+            return self.send_json({"ok":True, "sent": n, "names": [r["name"] or r["email"] for r in rows]})
         if p == "/api/admin/paperwork-settings":
             u = self.require("admin")
             if not u: return
@@ -4911,6 +5064,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 asked = []
                 for k in kinds:
                     cur = c.execute("SELECT * FROM paperwork WHERE user_id=? AND kind=?", (uid, k)).fetchone()
+                    if k == "lockbox" and lockbox_row(c, uid):
+                        c.execute("""INSERT INTO paperwork(user_id,kind,status,requested_by,requested_at,done_at,value)
+                                     VALUES(?,?,'done',?,?,?,?) ON CONFLICT(user_id,kind) DO NOTHING""",
+                                  (uid, k, u["id"], now(), now(), "Signed in the app"))
+                        continue
                     if k == "phone" and (usr["phone"] or "").strip() and not b.get("force"):
                         # already on file: record it as done rather than nagging
                         c.execute("""INSERT INTO paperwork(user_id,kind,status,requested_by,requested_at,done_at,value)
@@ -4954,8 +5112,17 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.close(); return self.send_json({"error":"That is not yours."},403)
             if action == "reopen":
                 c.execute("UPDATE paperwork SET status='requested', requested_at=?, reminded_at=NULL, done_at=NULL WHERE id=?", (now(), pid))
+                if r["kind"] == "lockbox": c.execute("DELETE FROM lockbox WHERE user_id=?", (r["user_id"],))
                 c.commit(); c.close(); return self.send_json({"ok":True})
             owner = c.execute("SELECT * FROM users WHERE id=?", (r["user_id"],)).fetchone()
+            if r["kind"] == "lockbox":
+                # The contract is signed in the app, never self-reported; an admin
+                # marking it done records a paper signature.
+                if action != "done": c.close(); return self.send_json({"error":"Please read and sign the contract in the app; it takes a minute."},400)
+                c.execute("INSERT OR REPLACE INTO lockbox(user_id, name, signed_at, via, by_admin) VALUES(?,?,?,?,?)",
+                          (owner["id"], owner["name"], now(), "admin", u["id"]))
+                lockbox_paperwork_done(c, owner["id"]); c.commit(); c.close()
+                return self.send_json({"ok":True})
             value = (b.get("value") or "").strip()[:200]
             if action == "complete" and b.get("already"):
                 # "I already did this in 2026": recorded as done, flagged as their word.

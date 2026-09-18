@@ -117,8 +117,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   pre-fills a proposal; the others take a raised hand (`request_interest`), design takes a full
   proposal with photos and a supply list; admins confirm or decline. A Help card is created
   automatically when an approved class asked for a volunteer.
-- **Paperwork**: W-9, background check, phone. Admins request per person; instructors complete in
-  the app; files go to Drive under Gibby Paperwork; reminder after 3 days.
+- **Paperwork**: W-9, background check, phone, lockbox contract. Admins request per person; instructors
+  complete in the app; files go to Drive under Gibby Paperwork; reminder after 3 days. The lockbox
+  contract (`LOCKBOX_CONTRACT_DEFAULT`, editable in meta) is signed with a typed name into the
+  `lockbox` table; only signers see the code (meta `lockbox_code`, set under People > Lockbox).
+  The code is never emailed, only "it changed, open the app".
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 

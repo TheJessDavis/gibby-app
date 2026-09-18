@@ -677,6 +677,8 @@ async function renderProfile(){
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
     <div style="height:8px"></div>
+    ${actingRole()==='admin'?'':`<button class="btn ghost" onclick="${ME&&ME.lockbox_signed?'showLockbox()':'openLockbox()'}">\u{1F510} Lockbox code</button>
+    <div style="height:8px"></div>`}
     <button class="btn ghost" onclick="startTour()">🧭 Take the tour again</button>
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="logout()">👋 Sign out</button>
@@ -709,7 +711,7 @@ function buildBnav(role, active){
           + `<button class="navsub" onclick="logout()"><span class="bi">\u{1F44B}</span><span class="bl">Sign out</span></button>`
         : `<button data-tab="more" class="${inMore?'on':''}" onclick="openMore()"><span class="bi">\u22EF</span><span class="bl">More</span></button>`);
   } else {
-    const nSign=((ME&&ME.contracts_to_sign)||0)+((ME&&ME.paperwork_open)||0);
+    const nSign=((ME&&ME.contracts_to_sign)||0)+((ME&&ME.paperwork_open)||0)+((ME&&!ME.lockbox_signed)?1:0);
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
       + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
       + item('wanted','\u{1F4CC}','Opportunities',"renderInstr('wanted')")
@@ -807,6 +809,70 @@ function padClear(){
   cv.getContext('2d').clearRect(0,0,cv.width,cv.height); CT_DRAWN=false;
 }
 function closeContract(){ const m=$('#ctmodal'); if(m) m.remove(); }
+/* Lockbox: every instructor signs the Key Code Holder Contract once (typed
+   signature); the code itself lives behind that signature and admins change it
+   under People > Lockbox. */
+function closeLockbox(){ const m=$('#lbmodal'); if(m) m.remove(); }
+function lbShell(inner){
+  closeLockbox();
+  const m=document.createElement('div'); m.id='lbmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:14px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:480px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:18px 20px;overflow-y:auto">${inner}</div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) closeLockbox(); });
+  document.body.appendChild(m);
+}
+async function openLockbox(){
+  let d; try{ d=await api('/api/lockbox'); }catch(e){ return alert(e.message); }
+  if(d.signed) return showLockbox(d);
+  lbShell(`<h2 style="margin:0 0 4px">Lockbox <em>contract</em></h2>
+    <p class="sub" style="margin:0 0 10px">Every key code holder at The Everett signs this once. When you have, the lockbox code unlocks right here.</p>
+    <div style="flex:1;position:relative;min-height:160px;display:flex">
+      <pre id="lb_pre" style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;padding-bottom:34px;margin:0;max-height:44vh">${esc(d.contract)}<span id="lb_end" style="display:block;height:1px"></span></pre>
+      <div id="lb_fade" style="position:absolute;left:0;right:0;bottom:0;height:56px;border-radius:0 0 12px 12px;background:linear-gradient(rgba(251,247,239,0),#FBF7EF 78%);pointer-events:none;display:flex;align-items:flex-end;justify-content:center">
+        <span style="background:var(--ink);color:#fff;font-size:10.5px;font-weight:800;border-radius:999px;padding:5px 12px;margin-bottom:7px">\u2193 Scroll to read the rest</span></div></div>
+    <div class="err" id="lberr"></div>
+    <label>Type your full name (this is your signature)</label><input id="lb_name" value="${esc(ME&&ME.name||'')}" placeholder="Your full name">
+    <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="lb_agree"> I will be a responsible key code holder and will abide by the Lockbox Key Code Holder Contract and Asset Release Protocol.</label>
+    <div class="hint">Signed ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}. A copy is emailed to you.</div>
+    <div class="two" style="margin-top:10px">
+      <button class="btn ghost" onclick="closeLockbox()">Not yet</button>
+      <button class="btn dark" id="lb_signbtn" onclick="signLockbox()" disabled style="opacity:.45">Read to the end first</button></div>`);
+  const pre=$('#lb_pre'), fade=$('#lb_fade'), btn=$('#lb_signbtn');
+  const unlock=()=>{ btn.disabled=false; btn.style.opacity='1'; btn.textContent='Sign the contract'; fade.style.display='none'; };
+  const check=()=>{ if(pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 48) unlock(); };
+  pre.addEventListener('scroll', check);
+  const endMark=$('#lb_end');
+  if(endMark && window.IntersectionObserver){
+    new IntersectionObserver((es,obs)=>{ if(es.some(e=>e.isIntersecting)){ unlock(); obs.disconnect(); } },{root: pre, threshold: 0}).observe(endMark);
+  }
+  setTimeout(check, 250); setTimeout(check, 1200);
+}
+async function signLockbox(){
+  const x=$('#lberr'); x.classList.remove('show');
+  try{
+    const r=await api('/api/lockbox/sign','POST',{name:$('#lb_name').value, agree:$('#lb_agree').checked});
+    ME = (await api('/api/me')).user;
+    showLockbox({signed:true, code:r.code, code_set_at:r.code_set_at, code_note:r.code_note, signed_at:new Date().toISOString(), name:$('#lb_name').value, fresh:true});
+    if(typeof buildBnav==='function') buildBnav(actingRole(), 'mine');
+    if(document.getElementById('tab')) renderInstr('mine');
+  }catch(e){ x.textContent=e.message; x.classList.add('show'); }
+}
+async function showLockbox(d){
+  if(!d){ try{ d=await api('/api/lockbox'); }catch(e){ return alert(e.message); } }
+  if(!d.signed) return openLockbox();
+  const when=s=>s?new Date(s).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}):'';
+  lbShell(`<h2 style="margin:0 0 4px">Lockbox <em>code</em></h2>
+    ${d.fresh?`<p class="sub" style="margin:0 0 10px">Signed. Thank you! A copy of the contract is on its way to your inbox.</p>`:''}
+    ${d.code?`<div style="background:var(--ink);color:#fff;border-radius:16px;padding:22px 16px;text-align:center;margin:6px 0 10px">
+        <div style="font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;opacity:.65">Current code</div>
+        <div style="font-size:2.4rem;font-weight:900;letter-spacing:.12em;margin-top:4px">${esc(d.code)}</div>
+        ${d.code_note?`<div style="font-size:12.5px;margin-top:6px;opacity:.85">${esc(d.code_note)}</div>`:''}
+        ${d.code_set_at?`<div style="font-size:11px;margin-top:8px;opacity:.6">Set ${esc(when(d.code_set_at))}</div>`:''}</div>`
+      :`<div class="card" style="background:#F3EEE2;text-align:center"><b>No code has been posted yet.</b><div class="meta">The Gibby will add it here; check back soon.</div></div>`}
+    <div class="hint">The code changes from time to time; this page always shows the current one. Please do not share it. Anyone who asks should be referred to Michelle Truban or Seth Cosans.</div>
+    <div class="meta" style="margin-top:8px;font-size:12.5px;color:var(--ink-soft)">You signed the Lockbox Key Code Holder Contract${d.signed_at?' on '+esc(when(d.signed_at)):''}${d.name?' as '+esc(d.name):''}.</div>
+    <button class="btn dark" style="margin-top:12px" onclick="closeLockbox()">Done</button>`);
+}
 async function signContractNow(id){
   const x=$('#cterr');
   if(!CT_DRAWN){ x.textContent='Please sign in the box with your finger or mouse.'; x.classList.add('show'); return; }
@@ -1516,7 +1582,7 @@ function peoplePick(kind, val){
   PEOPLE_Q=val; PEOPLE_PICKED=true; adminPeople();
 }
 async function adminPeople(){
-  const d=await api('/api/users');
+  const [d, lb]=await Promise.all([api('/api/users'), api('/api/admin/lockbox').catch(()=>null)]);
   const allSkills=[...new Set(d.users.flatMap(u=>u.skills||[]))].sort();
   let shown = PEOPLE_SKILL ? d.users.filter(u=>(u.skills||[]).includes(PEOPLE_SKILL)) : d.users;
   const ql=PEOPLE_Q.trim().toLowerCase();
@@ -1528,9 +1594,9 @@ async function adminPeople(){
       <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.phone?' · <a href="tel:'+esc(u.phone)+'">'+esc(u.phone)+'</a>':''}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       </div>
-      ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
+      ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone','lockbox'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
           if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
-          if(q.status==='done') return `<span class="pill ${q.self_reported?'pend':'appr'}">${esc(lab)} \u2713${q.self_reported?' (their word, '+esc((q.done_at||'').slice(0,4))+')':''}${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} <a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`;
+          if(q.status==='done') return `<span class="pill ${q.self_reported?'pend':'appr'}">${esc(lab)} \u2713${q.self_reported?' (their word, '+esc((q.done_at||'').slice(0,4))+')':''}${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} ${q.id?`<a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`:''}`;
           return `<span class="pill pend">${esc(lab)}: waiting since ${esc((q.requested_at||'').slice(0,10))}${q.reminded_at?', reminded':''}</span> <a href="#" onclick="paperAdmin(${q.id},'done');return false" style="font-size:12px">mark done</a>`; }).join(' ')}</div>`:''}
       <div style="text-align:right">${u.role==='admin'?'<span class="pill appr">admin</span>':''}
       ${u.role==='instructor'?`<button class="btn ghost" style="margin-top:6px" onclick="paperRequest(${u.id},'${esc(u.name||u.email)}')">Request paperwork</button>`:''}
@@ -1542,6 +1608,24 @@ async function adminPeople(){
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
     <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">\u{1F4CB} Request paperwork from everyone missing it</button>
+    ${lb?`<details class="card" id="lockbox" style="margin-bottom:10px" ${LB_OPEN?'open':''} ontoggle="LB_OPEN=this.open"><summary style="cursor:pointer;font-weight:800">\u{1F510} Lockbox: code and contract (${lb.signed.length} signed, ${lb.unsigned.filter(x=>x.role==='instructor').length} instructor${lb.unsigned.filter(x=>x.role==='instructor').length===1?'':'s'} not yet)</summary>
+      <p class="sub" style="margin:8px 0 6px">Instructors see the code only after signing the Key Code Holder Contract in the app. Change the code here whenever it changes at the building.</p>
+      <label>Current lockbox code</label><input id="lb_code" value="${esc(lb.code||'')}" placeholder="e.g. 4821" autocomplete="off">
+      <label>Note shown with it (optional)</label><input id="lb_note" value="${esc(lb.code_note||'')}" placeholder="e.g. Gibby side door box, press the # key after">
+      <label class="chk" style="margin:10px 0 0"><input type="checkbox" id="lb_notify" checked> Email everyone who has signed that the code changed (the code itself is never emailed)</label>
+      <div class="meta">${lb.code_set_at?'Last set '+esc(lb.code_set_at.slice(0,10)):'No code posted yet.'}</div>
+      <button class="btn dark" style="padding:9px 16px;margin-top:8px" onclick="saveLockboxCode()">Save code</button>
+      <div class="hint" id="lb_msg"></div>
+      <label style="margin-top:14px">Signed (${lb.signed.length})</label>
+      ${lb.signed.length?lb.signed.map(x=>`<div class="meta" style="margin:2px 0">\u2713 <b>${esc(x.name||x.email)}</b> · ${esc((x.signed_at||'').slice(0,10))}${x.via==='admin'?' (marked by an admin)':x.signed_name&&x.signed_name!==x.name?' as '+esc(x.signed_name):''} · <a href="#" onclick="lockboxMark(${x.id},false);return false">undo</a></div>`).join(''):'<div class="hint">Nobody yet.</div>'}
+      <label style="margin-top:14px">Not signed (${lb.unsigned.length})</label>
+      ${lb.unsigned.map(x=>`<div class="meta" style="margin:2px 0">${esc(x.name||x.email)}${x.role==='admin'?' <span class="pill appr">admin</span>':''} · <a href="#" onclick="lockboxMark(${x.id},true);return false">mark signed on paper</a></div>`).join('')}
+      ${lb.unsigned.some(x=>x.role==='instructor')?`<button class="btn ghost" style="margin-top:10px" onclick="lockboxRemind()">\u2709\uFE0F Email every instructor who has not signed</button>`:''}
+      <details style="margin-top:12px"><summary style="cursor:pointer;font-weight:800;font-size:13px">Contract text${lb.contract_custom?' (edited)':''}</summary>
+        <textarea id="lb_text" rows="12" style="margin-top:8px;font-size:12.5px">${esc(lb.contract||'')}</textarea>
+        <div class="hint">What instructors read and sign. Names in it (Michelle Truban, Seth Cosans) can be changed here.</div>
+        <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveLockboxText()">Save contract text</button></details>
+    </details>`:''}
     <details class="card" style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:800">Background check instructions (what instructors are told)</summary>
       <textarea id="bg_instr" rows="5" style="margin-top:8px">${esc(d.bg_instructions||'')}</textarea>
       <div class="hint">Shown on their card and in the request email. Put the exact steps or a screening-service link here once you decide how The Gibby runs checks.</div>
@@ -1641,7 +1725,7 @@ async function adminSupplies(){
    everyone who has never been asked (new members), or tick people by hand. */
 async function paperRequest(userId, who){
   let users=[]; try{ users=((await api('/api/users')).users||[]).filter(u=>u.role==='instructor'); }catch(_){}
-  const asked=u=>['w9','background','phone'].some(k=>(u.paperwork||{})[k]);
+  const asked=u=>['w9','background','phone','lockbox'].some(k=>(u.paperwork||{})[k]);
   const m=document.createElement('div'); m.id='pwmodal';
   m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow:auto';
   m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:440px;width:100%;padding:20px 22px;margin:auto 0">
@@ -1650,6 +1734,7 @@ async function paperRequest(userId, who){
     <label class="chk"><input type="checkbox" id="pwk_w9" checked> W-9 tax form (they upload a photo or PDF)</label>
     <label class="chk"><input type="checkbox" id="pwk_bg" checked> Background check (they mark it done, attach confirmation if any)</label>
     <label class="chk"><input type="checkbox" id="pwk_ph" checked> Phone number (skipped for anyone who already has one on file)</label>
+    <label class="chk"><input type="checkbox" id="pwk_lb" checked> Lockbox key code contract (they sign it in the app; skipped for anyone who already signed)</label>
     <label style="margin-top:10px">Who</label>
     <div class="meta" style="margin-bottom:4px"><a href="#" onclick="pwPick('new');return false">never asked</a> · <a href="#" onclick="pwPick('all');return false">everyone</a> · <a href="#" onclick="pwPick('none');return false">nobody</a></div>
     <div id="pw_people" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:6px 10px">
@@ -1665,7 +1750,7 @@ async function paperRequest(userId, who){
 }
 function pwPick(which){ document.querySelectorAll('.pw_u').forEach(cb=>{ cb.checked = which==='all' ? true : which==='none' ? false : cb.dataset.asked!=='1'; }); }
 async function paperSend(){
-  const kinds=[['pwk_w9','w9'],['pwk_bg','background'],['pwk_ph','phone']].filter(([i])=>$('#'+i).checked).map(([,k])=>k);
+  const kinds=[['pwk_w9','w9'],['pwk_bg','background'],['pwk_ph','phone'],['pwk_lb','lockbox']].filter(([i])=>$('#'+i).checked).map(([,k])=>k);
   if(!kinds.length){ alert('Tick at least one thing to ask for.'); return; }
   const ids=[...document.querySelectorAll('.pw_u:checked')].map(cb=>+cb.value);
   if(!ids.length){ alert('Tick at least one person.'); return; }
@@ -1688,6 +1773,32 @@ async function interestAct(rid, iid, action){
 async function paperAdmin(id, action){
   try{ await api('/api/paperwork/'+id+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
   adminPeople();
+}
+let LB_OPEN=false;
+async function saveLockboxCode(){
+  const msg=$('#lb_msg'); LB_OPEN=true;
+  try{
+    const r=await api('/api/admin/lockbox','POST',{code:$('#lb_code').value, note:$('#lb_note').value, notify:$('#lb_notify').checked});
+    msg.textContent = 'Saved.' + (r.notified?` ${r.notified} code holder${r.notified===1?'':'s'} emailed that it changed.`:'');
+    setTimeout(adminPeople, 900);
+  }catch(e){ msg.textContent=e.message; }
+}
+async function saveLockboxText(){
+  LB_OPEN=true;
+  try{ await api('/api/admin/lockbox','POST',{contract:$('#lb_text').value}); alert('Contract text saved. People who sign from now on see this version.'); adminPeople(); }
+  catch(e){ alert(e.message); }
+}
+async function lockboxMark(uid, signed){
+  LB_OPEN=true;
+  if(!signed && !confirm('Remove their signature? They will lose access to the code until they sign in the app.')) return;
+  try{ await api('/api/admin/lockbox/mark','POST',{user_id:uid, signed}); }catch(e){ alert(e.message); return; }
+  adminPeople();
+}
+async function lockboxRemind(){
+  LB_OPEN=true;
+  if(!confirm('Email every instructor who has not signed the lockbox contract yet?')) return;
+  try{ const r=await api('/api/admin/lockbox/remind','POST',{}); alert(r.sent?`Emailed ${r.sent}: ${r.names.join(', ')}`:'Nobody to email.'); }
+  catch(e){ alert(e.message); }
 }
 async function showThanksCodes(classId, boxId){
   const box=$('#'+(boxId||'th_codes')); if(!box) return;
@@ -3640,10 +3751,11 @@ async function instrMine(){
   // straight to where it gets done. Contracts and sent-back classes live inside
   // collapsed rows otherwise, which is how they went unnoticed.
   const todos=[];
+  if(ME && !ME.lockbox_signed && !paperOpen.some(x=>x.kind==='lockbox')) todos.push({t:'Sign the lockbox key code contract', go:'openLockbox()', k:'\u{1F510}'});
   classes.filter(c=>c.contract_status==='sent').forEach(c=>todos.push({t:`Sign your contract for ${c.title}`, go:`openContract(${c.id})`, k:'\u{1F4DD}'}));
   classes.filter(c=>c.status==='incomplete').forEach(c=>todos.push({t:`Fix and resubmit ${c.title}`, go:`startResubmit(${c.id})`, k:'\u{1F501}'}));
   classes.filter(c=>c.status==='instructor_review').forEach(c=>todos.push({t:`Review the admin's edits to ${c.title}`, go:`jumpTo('#cls${c.id}')`, k:'\u{1F440}'}));
-  paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':'Complete your background check', go:`jumpTo('#pw${x.id}')`, k:'\u{1F4CB}'}));
+  paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':x.kind==='lockbox'?'Sign the lockbox key code contract':'Complete your background check', go:x.kind==='lockbox'?'openLockbox()':`jumpTo('#pw${x.id}')`, k:x.kind==='lockbox'?'\u{1F510}':'\u{1F4CB}'}));
   todo.filter(c=>c.followup_status!=='ready').forEach(c=>todos.push({t:`Write your note to the students of ${c.title}`, go:`jumpTo('#fu${c.id}')`, k:'\u2709\uFE0F'}));
   drafts.filter(d=>d.payload_request_id||d.request_id).forEach(d=>todos.push({t:`Finish your proposal for ${d.title||'a claimed class'}`, go:`resumeDraft(${d.id})`, k:'\u{1F4CC}'}));
   let allReqs=[]; try{ allReqs=(await api('/api/requests')).requests||[]; }catch(_){}
@@ -3656,12 +3768,14 @@ async function instrMine(){
     <div class="two" style="margin-bottom:12px">
       ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
       <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
+    <button class="todoline" style="margin-bottom:12px;background:var(--white);border-radius:14px" onclick="${ME&&ME.lockbox_signed?'showLockbox()':'openLockbox()'}"><span>\u{1F510}</span><b>${ME&&ME.lockbox_signed?'Lockbox code':'Lockbox code (sign the contract first)'}</b><span class="rowchev">\u203A</span></button>
     ${paperOpen.length?`<label>The Gibby needs from you (${paperOpen.length})</label>
       <p class="sub" style="margin-top:2px">Quick paperwork so we can pay you and keep everyone safe. Nothing here is shared with students.</p>
       ${(()=>{ const n=(paperOpen.find(x=>x.note)||{}).note; return n?`<div class="meta" style="margin:0 0 8px"><b>From The Gibby:</b> ${linkify(n)}</div>`:''; })()}
       ${paperOpen.map(x=>`<div class="card" id="pw${x.id}">
         <div class="row"><div><h3 style="font-size:1rem">${esc(x.label)}</h3><div class="meta">${esc(x.what.replace(/\s*\(https?:[^)]*\)/,''))}</div></div></div>
-        ${x.kind==='phone'?`<input id="pwv${x.id}" type="tel" value="${esc(myPhone)}" placeholder="Your phone number" style="margin-top:8px">
+        ${x.kind==='lockbox'?`<button class="btn dark" style="margin-top:8px" onclick="openLockbox()">\u{1F510} Read and sign the contract</button>`
+        :x.kind==='phone'?`<input id="pwv${x.id}" type="tel" value="${esc(myPhone)}" placeholder="Your phone number" style="margin-top:8px">
           <button class="btn dark" style="margin-top:8px" onclick="paperComplete(${x.id},'phone')">Save my number</button>
           ${myPhone?`<label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'phone',true,true)"> The number on file (${esc(myPhone)}) is still current</label>`:''}`
         :`${x.kind==='w9'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer">\u{1F4C4} Open the blank W-9 form</a>`:''}
@@ -4603,7 +4717,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
