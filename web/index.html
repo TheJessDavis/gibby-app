@@ -629,7 +629,7 @@ async function loadSkills(){ try{ ALL_SKILLS=((await api('/api/skills')).skills|
 function skillPool(){ return ALL_SKILLS||SKILL_IDEAS; }
 function skillMatch(k){ const q=SKILL_Q.trim().toLowerCase(); return !q || k.toLowerCase().includes(q); }
 function skillSearch(v, redraw){ SKILL_Q=v||''; redraw(); }
-async function renderProfile(){
+async function renderProfile(focus){
   if(!ALL_SKILLS) await loadSkills();
   if(ME) buildBnav(actingRole(), actingRole()==='admin'?'':'profile');
   if(PF_PHOTO===null) PF_PHOTO = (ME&&ME.photo)||'';
@@ -643,12 +643,15 @@ async function renderProfile(){
     <h2 style="margin-top:14px">Your <em>profile</em></h2>
     <p class="sub">Your name, photo and skills, shown on your classes.</p>
     <div class="err" id="perr"></div>
-    <div style="display:flex;gap:16px;align-items:center;margin:6px 0 14px">
+    <div id="pf_headshot" style="display:flex;gap:16px;align-items:center;margin:6px 0 14px">
       ${avaHTML({name:(ME&&ME.name)||'', photo:PF_PHOTO}, true)}
       <div>
-        <button class="btn ghost" style="padding:8px 14px" onclick="document.getElementById('pf_file').click()">${PF_PHOTO?'Change headshot':'Add a headshot'}</button>
+        <button class="btn ghost" style="padding:8px 14px" onclick="document.getElementById('pf_file').click()">${PF_PHOTO?'Change headshot':'Upload a headshot'}</button>
         ${PF_PHOTO?`<button class="btn ghost" style="margin-left:6px;padding:8px 14px" onclick="pfClearPhoto()">Remove</button>`:''}
-        <div class="hint" style="margin-top:6px">Your headshot appears next to your name in the app and on The Everett's website with your bio.</div>
+        <div class="hint" style="margin-top:6px">${(PF_HEADSHOT_PX||(ME&&ME.headshot_px))
+          ? `Website-ready: ${PF_HEADSHOT_PX||ME.headshot_px}px square. Shown next to your name in the app and with your bio on The Everett's website.`
+          : `For the website. A clear photo of your face, at least ${HEADSHOT_MIN}px across (most phone photos are). It also shows next to your name in the app.`}</div>
+        <div class="err" id="pf_photoerr"></div>
       </div>
     </div>
     <input type="file" id="pf_file" accept="image/*" style="display:none" onchange="pfPickPhoto(event)">
@@ -656,15 +659,18 @@ async function renderProfile(){
     <label>Your phone</label><input id="pf_phone" type="tel" value="${esc(ME&&ME.phone||'')}" placeholder="So the Gibby can reach you on class day">
     <label>Your address</label><input id="pf_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
     <div class="hint">Only The Gibby's admins see this (for payments and paperwork).</div>
-    <label style="margin-top:14px">Your links (added to the bottom of emails you send students)</label>
-    <input id="pf_ig" value="${esc((ME&&ME.socials&&ME.socials.instagram)||'')}" placeholder="Instagram (handle or link)">
-    <input id="pf_fb" value="${esc((ME&&ME.socials&&ME.socials.facebook)||'')}" placeholder="Facebook page" style="margin-top:6px">
-    <input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="TikTok" style="margin-top:6px">
-    <input id="pf_web" value="${esc((ME&&ME.socials&&ME.socials.website)||'')}" placeholder="Website or shop" style="margin-top:6px">
+    <label id="pf_links" style="margin-top:14px">Your social media and other links</label>
+    <div class="hint" style="margin-top:0">Listed on your website profile and at the bottom of emails you send students. Add whichever you have.</div>
+    <label style="font-weight:700;font-size:12.5px;margin-top:8px">Facebook page</label><input id="pf_fb" value="${esc((ME&&ME.socials&&ME.socials.facebook)||'')}" placeholder="facebook.com/yourpage">
+    <label style="font-weight:700;font-size:12.5px;margin-top:8px">Instagram page</label><input id="pf_ig" value="${esc((ME&&ME.socials&&ME.socials.instagram)||'')}" placeholder="@yourhandle or link">
+    <label style="font-weight:700;font-size:12.5px;margin-top:8px">Website</label><input id="pf_web" value="${esc((ME&&ME.socials&&ME.socials.website)||'')}" placeholder="yoursite.com">
+    <label style="font-weight:700;font-size:12.5px;margin-top:8px">Etsy shop</label><input id="pf_etsy" value="${esc((ME&&ME.socials&&ME.socials.etsy)||'')}" placeholder="etsy.com/shop/yourshop">
+    <label style="font-weight:700;font-size:12.5px;margin-top:8px">TikTok</label><input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="@yourhandle or link">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
     <label style="margin-top:14px">Your bio (for the website)</label>
-    <textarea id="pf_bio" rows="5" maxlength="1500" placeholder="Two or three sentences about you and your art, written the way you would introduce yourself to a new class.">${esc((ME&&ME.bio)||'')}</textarea>
-    <div class="hint">Shown with your headshot on The Everett's teaching artists page. Saving updates the website on its own.</div>
+    <textarea id="pf_bio" rows="5" maxlength="1500" oninput="bioCount()" placeholder="Two or three sentences about you and your art, written the way you would introduce yourself to a new class.">${esc((ME&&ME.bio)||'')}</textarea>
+    <div class="hint" id="pf_biocount"></div>
+    <div class="hint">Between ${BIO_MIN} and ${BIO_MAX} words. Shown with your headshot on The Everett's teaching artists page.</div>
 
     <label style="margin-top:18px">Your skills</label>
     <div class="skillcloud">${PF_SKILLS.length
@@ -686,6 +692,7 @@ async function renderProfile(){
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="logout()">👋 Sign out</button>
   </div>`;
+  if(focus){ const el=$('#pf_'+focus); if(el){ setTimeout(()=>{ el.scrollIntoView({behavior:'smooth',block:'center'}); if(el.tagName==='TEXTAREA'||el.tagName==='INPUT') el.focus(); }, 80); } }
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
 const MORE_ITEMS=[['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
@@ -977,16 +984,31 @@ function pfCustomSkill(){
   if(v && !PF_SKILLS.includes(v)) PF_SKILLS.push(v);
   renderProfile();
 }
-function pfClearPhoto(){ PF_PHOTO=''; renderProfile(); }
+function pfClearPhoto(){ PF_PHOTO=''; PF_HEADSHOT=''; PF_HEADSHOT_PX=0; renderProfile(); }
+const BIO_MIN=25, BIO_MAX=60, HEADSHOT_MIN=600, HEADSHOT_MAX=1400;
+let PF_HEADSHOT=null, PF_HEADSHOT_PX=0;
+function bioCount(){ const t=$('#pf_bio'), o=$('#pf_biocount'); if(!t||!o) return; const n=t.value.trim()?t.value.trim().split(/\s+/).length:0;
+  o.textContent = n===0 ? '' : n<BIO_MIN ? `${n} words so far, ${BIO_MIN-n} more to go` : n>BIO_MAX ? `${n} words, ${n-BIO_MAX} over the limit of ${BIO_MAX}` : `${n} words. Just right.`;
+  o.style.color = (n && (n<BIO_MIN||n>BIO_MAX)) ? '#B4442C' : ''; }
 function pfPickPhoto(ev){
   const f=ev.target.files[0]; if(!f) return;
   const img=new Image(); const r=new FileReader();
   r.onload=e=>{ img.onload=()=>{
-    // square-crop and shrink to 240px so the stored data URL stays small
-    const side=Math.min(img.width,img.height), c=document.createElement('canvas');
-    c.width=c.height=240; const g=c.getContext('2d');
+    const side=Math.min(img.width,img.height);
+    if(side<HEADSHOT_MIN){
+      ev.target.value='';
+      const x=$('#pf_photoerr'); if(x){ x.textContent=`That photo is only ${side}px across. The website needs at least ${HEADSHOT_MIN}px, so it stays sharp; please pick a larger one (a normal phone photo is fine).`; x.classList.add('show'); }
+      return;
+    }
+    // Two versions: a 240px avatar for the app's cards, and a website-quality
+    // square (up to 1400px) that admins can download for print and web.
+    const c=document.createElement('canvas'); c.width=c.height=240; let g=c.getContext('2d');
     g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,240,240);
-    PF_PHOTO=c.toDataURL('image/jpeg',.82); renderProfile();
+    PF_PHOTO=c.toDataURL('image/jpeg',.82);
+    const big=Math.min(side,HEADSHOT_MAX), c2=document.createElement('canvas'); c2.width=c2.height=big; g=c2.getContext('2d');
+    g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,big,big);
+    PF_HEADSHOT=c2.toDataURL('image/jpeg',.88); PF_HEADSHOT_PX=big;
+    renderProfile();
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
 }
@@ -1063,10 +1085,15 @@ async function saveProfile(){
   const name=$('#pf_name').value.trim();
   if(!name) return showErr('perr','Name is required.');
   try{
-    await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio:$('#pf_bio')?$('#pf_bio').value:undefined});
+    const bio=$('#pf_bio')?$('#pf_bio').value.trim():'';
+    const nw=bio?bio.split(/\s+/).length:0;
+    if(bio && (nw<BIO_MIN || nw>BIO_MAX)) return showErr('perr',`Your bio is ${nw} word${nw===1?'':'s'}; it needs to be between ${BIO_MIN} and ${BIO_MAX} words.`);
+    const body={name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value, etsy:$('#pf_etsy')?$('#pf_etsy').value:''}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio};
+    if(PF_HEADSHOT!==null){ body.headshot=PF_HEADSHOT; body.headshot_px=PF_HEADSHOT_PX; }
+    await api('/api/profile','POST',body);
     await api('/api/me').then(r=>ME=r.user);
-    PF_PHOTO=null; PF_SKILLS=null; boot();
+    PF_PHOTO=null; PF_SKILLS=null; PF_HEADSHOT=null; PF_HEADSHOT_PX=0; boot();
   }
   catch(e){ showErr('perr',e.message); }
 }
@@ -1598,6 +1625,7 @@ async function adminPeople(){
       <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.phone?' · <a href="tel:'+esc(u.phone)+'">'+esc(u.phone)+'</a>':''}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       </div>
+      ${u.role==='instructor'?`<div class="meta" style="margin-top:8px">Website: ${u.headshot_px?`<span class="pill appr">headshot ${u.headshot_px}px</span> <a href="/api/admin/headshot/${u.id}" style="font-size:12px">download</a>`:'<span class="pill pend">no headshot</span>'} ${u.bio_words?`<span class="pill appr">bio ${u.bio_words} words</span>`:'<span class="pill pend">no bio</span>'} ${(u.links||[]).length?`<span class="pill appr">links: ${u.links.join(', ')}</span>`:'<span class="pill pend">no links</span>'}</div>`:''}
       ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone','lockbox'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
           if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
           if(q.status==='done') return `<span class="pill ${q.self_reported?'pend':'appr'}">${esc(lab)} \u2713${q.self_reported?' (their word, '+esc((q.done_at||'').slice(0,4))+')':''}${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} ${q.id?`<a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`:''}`;
@@ -1612,6 +1640,8 @@ async function adminPeople(){
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
     <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">\u{1F4CB} Request paperwork from everyone missing it</button>
+    <div class="two" style="margin-bottom:10px"><a class="btn ghost" style="text-align:center" href="/api/admin/headshots.zip">\u{1F4F7} Download all headshots (zip)</a>
+      <a class="btn ghost" style="text-align:center" href="/embed/instructors" target="_blank" rel="noopener noreferrer">\u{1F441}\uFE0F Preview the website list</a></div>
     ${lb?`<details class="card" id="lockbox" style="margin-bottom:10px" ${LB_OPEN?'open':''} ontoggle="LB_OPEN=this.open"><summary style="cursor:pointer;font-weight:800">\u{1F510} Lockbox contract (${lb.signed.length} signed, ${lb.unsigned.filter(x=>x.role==='instructor').length} instructor${lb.unsigned.filter(x=>x.role==='instructor').length===1?'':'s'} not yet)</summary>
       <p class="sub" style="margin:8px 0 6px">Instructors sign the Key Code Holder Contract in the app. Each signature emails the person below with the instructor's email address, and they send the code.</p>
       <label>Who sends the code (emailed each time someone signs)</label><input id="lb_to" value="${esc(lb.to||'')}" placeholder="mtruban@theeverett.com">
@@ -3769,7 +3799,9 @@ async function instrMine(){
   let allReqs=[]; try{ allReqs=(await api('/api/requests')).requests||[]; }catch(_){}
   allReqs.filter(r=>r.my_interest==='confirmed' && r.status!=='closed').forEach(r=>todos.push({t:`${r.kind==='sell'?'Sell or show':r.kind==='design'?'Design':'Assist'}: ${r.title}${r.when_text?' · '+r.when_text:''}`, go:"renderInstr('wanted')", k:(KIND_META[r.kind]||KIND_META.help).icon}));
   if(ME && !ME.phone && !paperOpen.some(x=>x.kind==='phone')) todos.push({t:'Add your phone number to your profile', go:'renderProfile()', k:'\u{1F4DE}'});
-  if(ME && (!ME.photo || !ME.bio)) todos.push({t:(!ME.photo&&!ME.bio)?'Add your headshot and bio for the website':!ME.photo?'Add your headshot for the website':'Write your bio for the website', go:'renderProfile()', k:'\u{1F4F7}'});
+  if(ME && !ME.headshot_px) todos.push({t:'Upload a headshot for the website', go:"renderProfile('headshot')", k:'\u{1F4F7}'});
+  if(ME && !ME.bio) todos.push({t:'Write your bio for the website', go:"renderProfile('bio')", k:'\u270D\uFE0F'});
+  if(ME && !Object.values(ME.socials||{}).some(v=>v)) todos.push({t:'Add social media and other links', go:"renderProfile('links')", k:'\u{1F517}'});
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     ${todos.length?`<label>To do (${todos.length})</label>
       <div class="card" style="padding:6px 8px">${todos.map(x=>`<button class="todoline" onclick="${x.go}"><span>${x.k}</span><b>${esc(x.t)}</b><span class="rowchev">\u203A</span></button>`).join('')}</div>`:''}
@@ -4735,7 +4767,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

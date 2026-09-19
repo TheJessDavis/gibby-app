@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.92.0-artist-bios"
+VERSION = "10.93.0-headshots-links"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -276,9 +276,11 @@ def init_db():
                      ("support","TEXT"),("highlight","TEXT"),("concern","TEXT"),("skipped","INTEGER")):
         try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
         except Exception: pass
-    for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff","bio"):
+    for col in ("social_instagram","social_facebook","social_tiktok","social_website","social_etsy","signoff","bio","headshot"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN headshot_px INTEGER")   # the square side of the website headshot
+    except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
         id INTEGER PRIMARY KEY, user_id INTEGER, class_id INTEGER, template TEXT, audience TEXT,
         subject TEXT, body TEXT, feature_ids TEXT, add_links INTEGER DEFAULT 1, status TEXT DEFAULT 'scheduled',
@@ -1472,6 +1474,9 @@ Any items being released (borrowed) by parties for use outside of The Everett, I
 
 My typed signature states that I will be a responsible key code holder and will abide by all policies set forth in the Lockbox Key Code Holder Contract and Asset Release Protocol."""
 
+BIO_MIN_WORDS, BIO_MAX_WORDS = 25, 60     # the website bio: short, in their own words
+HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
+
 LOCKBOX_TO_DEFAULT = "mtruban@theeverett.org, mtruban@theeverett.com"   # Michelle Truban (both her addresses) sends the code herself once someone has signed
 
 def lockbox_to():
@@ -1757,7 +1762,7 @@ def instructor_footer(instr, add_links=True):
     lines = [instr.get("signoff") or f"See you in the studio,\n{first}"]
     if add_links:
         links = [(lbl, instr.get("social_" + k)) for lbl, k in
-                 (("Instagram","instagram"),("Facebook","facebook"),("TikTok","tiktok"),("Website","website")) if instr.get("social_" + k)]
+                 (("Instagram","instagram"),("Facebook","facebook"),("TikTok","tiktok"),("Website","website"),("Etsy","etsy")) if instr.get("social_" + k)]
         if links:
             lines.append("")
             lines.append(f"Follow {first}: " + "  ·  ".join(f"{lbl} {url}" for lbl, url in links))
@@ -3105,7 +3110,7 @@ class H(http.server.BaseHTTPRequestHandler):
         mhs = re.match(r"^/headshot/(\d+)\.jpg$", p)
         if mhs:
             # Public headshot for the website's teaching artists list.
-            c = db(); r = c.execute("SELECT photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
+            c = db(); r = c.execute("SELECT headshot AS photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
             if not r or not (r["photo"] or "").startswith("data:image/"): return self.send_error(404)
             head, b64 = r["photo"].split(",", 1)
             mime = head[5:].split(";")[0] or "image/jpeg"
@@ -3464,9 +3469,9 @@ class H(http.server.BaseHTTPRequestHandler):
     def _public_instructors(self):
         """Teaching artists with a headshot or bio on their profile: the website's list."""
         c = db()
-        rows = [dict(r) for r in c.execute("""SELECT id, name, photo, bio, skills, social_website, social_instagram, role
+        rows = [dict(r) for r in c.execute("""SELECT id, name, headshot AS photo, bio, skills, social_website, social_instagram, social_etsy, role
                     FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin')
-                    AND (COALESCE(bio,'')!='' OR COALESCE(photo,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
+                    AND (COALESCE(bio,'')!='' OR COALESCE(headshot,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
         c.close()
         out = []
         for r in rows:
@@ -3474,7 +3479,7 @@ class H(http.server.BaseHTTPRequestHandler):
             out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(),
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
                         "img": f"/headshot/{r['id']}.jpg" if (r.get("photo") or "").startswith("data:image/") else "",
-                        "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or ""})
+                        "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or ""})
         return out
 
     def embed_instructors_json(self):
@@ -3555,7 +3560,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 "photo":u.get("photo") or "", "skills":json.loads(u.get("skills") or "[]"),
                 "address":u.get("address") or "",
                 "phone":u.get("phone") or "",
-                "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
+                "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website","etsy")},
+                "headshot_px":u.get("headshot_px") or 0,
                 "signoff":u.get("signoff") or "",
                 "bio":u.get("bio") or "",
                 "paperwork_open":n_paper,
@@ -3569,8 +3575,11 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             rows = [{"id":r["id"],"name":r["name"],"email":r["email"],"role":r["role"],
                      "pending":bool(r["must_change_pw"]), "photo":r["photo"] or "",
-                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or "", "paperwork":{}}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone FROM users
+                     "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or "", "paperwork":{},
+                     "headshot_px": r["headshot_px"] or 0, "bio_words": len((r["bio"] or "").split()),
+                     "links": [k for k in ("facebook","instagram","website","etsy","tiktok") if r["social_" + k]]}
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,bio,
+                                          social_facebook,social_instagram,social_website,social_etsy,social_tiktok FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             by_id = {r["id"]: r for r in rows}
             for p_ in c.execute("SELECT id,user_id,kind,status,requested_at,reminded_at,done_at,value,file_name,drive_link,note,self_reported FROM paperwork"):
@@ -3917,7 +3926,7 @@ class H(http.server.BaseHTTPRequestHandler):
             auto_ids = [x["id"] for x in mine if x["id"] != cls["id"]][:3]
             return self.send_json({"subject": subj, "body": body, "audience_counts": counts, "mine": mine, "others": others,
                                    "auto_ids": auto_ids,
-                                   "has_links": any(instr.get("social_" + k) for k in ("instagram","facebook","tiktok","website")),
+                                   "has_links": any(instr.get("social_" + k) for k in ("instagram","facebook","tiktok","website","etsy")),
                                    "footer": instructor_footer(instr, True)})
         if p == "/api/supplies":
             u = self.current_user()
@@ -4210,6 +4219,35 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db(); r = lockbox_row(c, u["id"]); c.close()
             return self.send_json({"contract": lockbox_contract(), "signed": bool(r),
                    "signed_at": r["signed_at"] if r else None, "name": r["name"] if r else None})
+        mhd = re.match(r"^/api/admin/headshot/(\d+)$", p)
+        if mhd or p == "/api/admin/headshots.zip":
+            # Headshots for the website: one, or all of them zipped, named by person.
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            q = "SELECT id, name, headshot, headshot_px FROM users WHERE deleted_at IS NULL AND headshot LIKE 'data:image/%'"
+            rows = c.execute(q + (" AND id=?" if mhd else " ORDER BY name"), ((int(mhd.group(1)),) if mhd else ())).fetchall()
+            c.close()
+            def _file(r):
+                head, b64 = r["headshot"].split(",", 1)
+                ext = {"image/png": "png", "image/webp": "webp"}.get(head[5:].split(";")[0], "jpg")
+                safe = re.sub(r"[^A-Za-z0-9]+", "-", r["name"] or f"user-{r['id']}").strip("-") or f"user-{r['id']}"
+                return f"{safe}-{r['headshot_px'] or ''}px.{ext}", base64.b64decode(b64)
+            if mhd:
+                if not rows: return self.send_json({"error":"No headshot on file."},404)
+                fname, data = _file(rows[0])
+                self.send_response(200); self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
+            import zipfile
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+                for r in rows:
+                    fname, data = _file(r); z.writestr(fname, data)
+            data = buf.getvalue()
+            self.send_response(200); self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", 'attachment; filename="gibby-headshots.zip"')
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
         if p == "/api/admin/scheduler-errors":
             u = self.require("admin")
             if not u: return
@@ -4694,15 +4732,34 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("UPDATE users SET address=? WHERE id=?",(address,u["id"]))
             soc = b.get("socials")
             if isinstance(soc, dict):
-                for k in ("instagram","facebook","tiktok","website"):
+                for k in ("instagram","facebook","tiktok","website","etsy"):
                     v = str(soc.get(k) or "").strip()[:200]
                     if v and not v.startswith("http"):
-                        v = {"instagram":"https://instagram.com/","facebook":"https://facebook.com/","tiktok":"https://tiktok.com/@"}.get(k, "https://") + v.lstrip("@/")
+                        if re.match(r"^(www\.)?[\w.-]+\.[a-z]{2,}(/|$)", v, re.I):
+                            v = "https://" + v            # they typed a web address without the https
+                        else:                             # a bare handle: put it on its platform
+                            v = {"instagram":"https://instagram.com/","facebook":"https://facebook.com/","tiktok":"https://tiktok.com/@",
+                                 "etsy":"https://www.etsy.com/shop/"}.get(k, "https://") + v.lstrip("@/")
                     c.execute(f"UPDATE users SET social_{k}=? WHERE id=?", (v or None, u["id"]))
             if b.get("signoff") is not None:
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
             if b.get("bio") is not None:
-                c.execute("UPDATE users SET bio=? WHERE id=?", (re.sub(r"\s+\n", "\n", str(b.get("bio") or "")).strip()[:1500] or None, u["id"]))
+                bio = re.sub(r"[ \t]+\n", "\n", str(b.get("bio") or "")).strip()[:1500]
+                nwords = len(bio.split())
+                if bio and not (BIO_MIN_WORDS <= nwords <= BIO_MAX_WORDS):
+                    c.close()
+                    return self.send_json({"error": f"Your bio is {nwords} word{'' if nwords == 1 else 's'}; it needs to be between {BIO_MIN_WORDS} and {BIO_MAX_WORDS} words for the website."},400)
+                c.execute("UPDATE users SET bio=? WHERE id=?", (bio or None, u["id"]))
+            if b.get("headshot") is not None:
+                hs = str(b.get("headshot") or "")
+                if hs and not hs.startswith("data:image/"):
+                    c.close(); return self.send_json({"error":"That does not look like an image."},400)
+                if len(hs) > 2_000_000:
+                    c.close(); return self.send_json({"error":"That headshot is too large. Try a smaller file."},400)
+                px = int(b.get("headshot_px") or 0)
+                if hs and px < HEADSHOT_MIN_PX:
+                    c.close(); return self.send_json({"error": f"That photo is only {px}px across. The website needs at least {HEADSHOT_MIN_PX}px; please choose a larger, sharper photo."},400)
+                c.execute("UPDATE users SET headshot=?, headshot_px=? WHERE id=?", (hs or None, px if hs else None, u["id"]))
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             c.commit(); c.close()
