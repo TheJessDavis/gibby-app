@@ -104,6 +104,32 @@ function applyOverrides(classes,rules){
 }
 
 /* ---------------- art workshops list ---------------- */
+/* ---------------- teaching artists ----------------
+   Any page with a Code block containing <div id="gibby-instructors"></div>
+   gets every teaching artist who has a headshot or bio on their app profile,
+   alphabetical, straight from the app. Edit a profile and the site follows. */
+function renderInstructors(){
+  var host=document.getElementById('gibby-instructors');
+  if(!host||host.getAttribute('data-done'))return;
+  host.setAttribute('data-done','1');
+  fetch(APP+'/embed/instructors.json').then(function(r){return r.json()}).then(function(d){
+    var list=d.instructors||[];
+    if(!list.length){host.innerHTML='';return}
+    var h='<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
+    list.forEach(function(i){
+      h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
+        +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:160px;height:160px;border-radius:50%;object-fit:cover;margin-bottom:12px">'
+               :'<div style="width:160px;height:160px;border-radius:50%;background:#EDE8DC;margin-bottom:12px"></div>')
+        +'<h3 style="margin:0 0 4px">'+esc(i.name)+'</h3>'
+        +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
+        +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
+        +(i.website?'<p style="margin-top:8px"><a href="'+esc(i.website)+'" target="_blank" rel="noopener">'+esc(i.website.replace(/^https?:\/\//,'').replace(/\/$/,''))+'</a></p>':'')
+        +'</div>';
+    });
+    host.innerHTML=h+'</div>';
+    rep('artists='+list.length);
+  }).catch(function(e){rep('artists fetch failed: '+e)});
+}
 function renderList(list,classes){
   classes.forEach(function(c){
     var li=document.createElement('li');li.className='list-item gibby-item';
@@ -266,6 +292,7 @@ function ginit(){
   for(var i=0;i<olds.length;i++)olds[i].remove();
   var onWorkshops=location.pathname.indexOf('artworkshops')!==-1;
   var onHome=location.pathname==='/'||location.pathname==='';
+  renderInstructors();
   if(!onWorkshops&&!onHome)return;
   var tries=0;
   function load(){

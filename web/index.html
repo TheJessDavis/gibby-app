@@ -646,9 +646,9 @@ async function renderProfile(){
     <div style="display:flex;gap:16px;align-items:center;margin:6px 0 14px">
       ${avaHTML({name:(ME&&ME.name)||'', photo:PF_PHOTO}, true)}
       <div>
-        <button class="btn ghost" style="padding:8px 14px" onclick="document.getElementById('pf_file').click()">${PF_PHOTO?'Change photo':'Add a photo'}</button>
-        ${PF_PHOTO?`<button class="btn ghost" style="padding:8px 14px;margin-left:6px" onclick="pfClearPhoto()">Remove</button>`:''}
-        <div class="hint" style="margin-top:6px">Optional. It shows as a little circle next to your name.</div>
+        <button class="btn ghost" style="padding:8px 14px" onclick="document.getElementById('pf_file').click()">${PF_PHOTO?'Change headshot':'Add a headshot'}</button>
+        ${PF_PHOTO?`<button class="btn ghost" style="margin-left:6px;padding:8px 14px" onclick="pfClearPhoto()">Remove</button>`:''}
+        <div class="hint" style="margin-top:6px">Your headshot appears next to your name in the app and on The Everett's website with your bio.</div>
       </div>
     </div>
     <input type="file" id="pf_file" accept="image/*" style="display:none" onchange="pfPickPhoto(event)">
@@ -662,6 +662,9 @@ async function renderProfile(){
     <input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="TikTok" style="margin-top:6px">
     <input id="pf_web" value="${esc((ME&&ME.socials&&ME.socials.website)||'')}" placeholder="Website or shop" style="margin-top:6px">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
+    <label style="margin-top:14px">Your bio (for the website)</label>
+    <textarea id="pf_bio" rows="5" maxlength="1500" placeholder="Two or three sentences about you and your art, written the way you would introduce yourself to a new class.">${esc((ME&&ME.bio)||'')}</textarea>
+    <div class="hint">Shown with your headshot on The Everett's teaching artists page. Saving updates the website on its own.</div>
 
     <label style="margin-top:18px">Your skills</label>
     <div class="skillcloud">${PF_SKILLS.length
@@ -1061,7 +1064,7 @@ async function saveProfile(){
   if(!name) return showErr('perr','Name is required.');
   try{
     await api('/api/profile','POST',{name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value});
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio:$('#pf_bio')?$('#pf_bio').value:undefined});
     await api('/api/me').then(r=>ME=r.user);
     PF_PHOTO=null; PF_SKILLS=null; boot();
   }
@@ -3766,7 +3769,7 @@ async function instrMine(){
   let allReqs=[]; try{ allReqs=(await api('/api/requests')).requests||[]; }catch(_){}
   allReqs.filter(r=>r.my_interest==='confirmed' && r.status!=='closed').forEach(r=>todos.push({t:`${r.kind==='sell'?'Sell or show':r.kind==='design'?'Design':'Assist'}: ${r.title}${r.when_text?' · '+r.when_text:''}`, go:"renderInstr('wanted')", k:(KIND_META[r.kind]||KIND_META.help).icon}));
   if(ME && !ME.phone && !paperOpen.some(x=>x.kind==='phone')) todos.push({t:'Add your phone number to your profile', go:'renderProfile()', k:'\u{1F4DE}'});
-  if(ME && !ME.photo) todos.push({t:'Add a photo to your profile', go:'renderProfile()', k:'\u{1F4F7}'});
+  if(ME && (!ME.photo || !ME.bio)) todos.push({t:(!ME.photo&&!ME.bio)?'Add your headshot and bio for the website':!ME.photo?'Add your headshot for the website':'Write your bio for the website', go:'renderProfile()', k:'\u{1F4F7}'});
   $('#tab').innerHTML = `<h2>Your <em>classes</em></h2>
     ${todos.length?`<label>To do (${todos.length})</label>
       <div class="card" style="padding:6px 8px">${todos.map(x=>`<button class="todoline" onclick="${x.go}"><span>${x.k}</span><b>${esc(x.t)}</b><span class="rowchev">\u203A</span></button>`).join('')}</div>`:''}

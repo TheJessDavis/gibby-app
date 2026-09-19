@@ -136,6 +136,9 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   (`integrations.ensure_art_for_all`, added at event creation and by a daily sweep over live org
   events). The API cannot make true add-ons, so it is a donation ticket beside the class ticket.
 - **Thank-yous** go to everyone who registered; check-in scans never narrow the list.
+- **Teaching artists on the website**: profile headshot (`users.photo`) and `users.bio`. Public feed
+  `/embed/instructors.json`, images at `/headshot/{id}.jpg`, preview page `/embed/instructors`.
+  `site-embed.js` fills any Squarespace Code block containing `<div id="gibby-instructors"></div>`.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 

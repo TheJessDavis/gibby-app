@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.91.0-art-for-all"
+VERSION = "10.92.0-artist-bios"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -276,7 +276,7 @@ def init_db():
                      ("support","TEXT"),("highlight","TEXT"),("concern","TEXT"),("skipped","INTEGER")):
         try: c.execute(f"ALTER TABLE class_feedback ADD COLUMN {col} {typ}")
         except Exception: pass
-    for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff"):
+    for col in ("social_instagram","social_facebook","social_tiktok","social_website","signoff","bio"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
@@ -3100,6 +3100,21 @@ class H(http.server.BaseHTTPRequestHandler):
         p = urllib.parse.urlparse(self.path).path
         if p == "/embed": return self.embed_page()
         if p == "/embed.json": return self.embed_json()
+        if p == "/embed/instructors.json": return self.embed_instructors_json()
+        if p == "/embed/instructors": return self.embed_instructors_page()
+        mhs = re.match(r"^/headshot/(\d+)\.jpg$", p)
+        if mhs:
+            # Public headshot for the website's teaching artists list.
+            c = db(); r = c.execute("SELECT photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
+            if not r or not (r["photo"] or "").startswith("data:image/"): return self.send_error(404)
+            head, b64 = r["photo"].split(",", 1)
+            mime = head[5:].split(";")[0] or "image/jpeg"
+            data = base64.b64decode(b64)
+            self.send_response(200)
+            self.send_header("Content-Type", mime); self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+            return
         if p == "/notify": return self.notify_page()
         if p == "/feedback": return self.feedback_page()
         if p == "/unsubscribe": return self.unsubscribe_page()
@@ -3446,6 +3461,55 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body); return
 
+    def _public_instructors(self):
+        """Teaching artists with a headshot or bio on their profile: the website's list."""
+        c = db()
+        rows = [dict(r) for r in c.execute("""SELECT id, name, photo, bio, skills, social_website, social_instagram, role
+                    FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin')
+                    AND (COALESCE(bio,'')!='' OR COALESCE(photo,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
+        c.close()
+        out = []
+        for r in rows:
+            if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
+            out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(),
+                        "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
+                        "img": f"/headshot/{r['id']}.jpg" if (r.get("photo") or "").startswith("data:image/") else "",
+                        "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or ""})
+        return out
+
+    def embed_instructors_json(self):
+        body = json.dumps({"instructors": self._public_instructors()}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body); return
+
+    def embed_instructors_page(self):
+        """A plain page of the same cards: a preview for admins, and usable in an
+        iframe if the site ever needs one."""
+        cards = []
+        for i in self._public_instructors():
+            img = (f'<img src="{i["img"]}" alt="" style="width:120px;height:120px;border-radius:50%;object-fit:cover;flex:none">' if i["img"]
+                   else '<div style="width:120px;height:120px;border-radius:50%;background:#EDE8DC;flex:none"></div>')
+            bio = "".join(f"<p style='margin:0 0 8px'>{html.escape(x)}</p>" for x in i["bio"].split("\n\n") if x.strip())
+            sk = " · ".join(html.escape(s) for s in i["skills"])
+            cards.append(f'<div style="display:flex;gap:18px;align-items:flex-start;padding:18px 0;border-bottom:1px solid #e6e1d6">{img}'
+                         f'<div><h3 style="margin:0 0 4px;font-size:1.15rem">{html.escape(i["name"])}</h3>'
+                         + (f'<div style="font-size:.85rem;color:#6b655a;margin-bottom:8px">{sk}</div>' if sk else "")
+                         + bio + '</div></div>')
+        page = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<title>Teaching artists at The Gibby</title>'
+                '<body style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#171512;line-height:1.5">'
+                '<h1 style="font-size:1.6rem">Teaching artists</h1>' + ("".join(cards) or "<p>No profiles yet.</p>") + '</body>')
+        body = page.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body); return
+
     def embed_page(self):
         """RETIRED. The website no longer iframes this: theeverett.org/artworkshops
         reads /embed.json and renders the cards natively in its own theme. The route
@@ -3493,6 +3557,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "phone":u.get("phone") or "",
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website")},
                 "signoff":u.get("signoff") or "",
+                "bio":u.get("bio") or "",
                 "paperwork_open":n_paper,
                 "lockbox_signed":lb_signed,
                 "contracts_to_sign":n_contracts},
@@ -4636,6 +4701,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.execute(f"UPDATE users SET social_{k}=? WHERE id=?", (v or None, u["id"]))
             if b.get("signoff") is not None:
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
+            if b.get("bio") is not None:
+                c.execute("UPDATE users SET bio=? WHERE id=?", (re.sub(r"\s+\n", "\n", str(b.get("bio") or "")).strip()[:1500] or None, u["id"]))
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             c.commit(); c.close()
