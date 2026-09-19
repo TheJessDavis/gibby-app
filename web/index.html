@@ -2573,9 +2573,11 @@ async function adminApprovals(){
     <label style="margin-top:20px">Poster review (${gfx.classes.length})</label>
     <p class="sub" style="margin-top:2px">Approved, waiting on you to okay the graphic before it goes public.</p>
     ${gfx.classes.map(cardCls).join('') || '<div class="muted">No posters waiting for review.</div>'}
-    <label style="margin-top:20px">After-class emails (${fu.classes.length})</label>
+    <label style="margin-top:20px">After-class emails (${fu.classes.filter(c=>!c.exempt).length})</label>
     <p class="sub" style="margin-top:2px">Classes that finished in the last 45 days. The thank-you goes out on its own two mornings after the last session; the instructor's note rides on top when they wrote one.</p>
-    ${fu.classes.map(c=>`<div class="card">
+    ${fu.classes.filter(c=>c.exempt).length?`<details style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:800;font-size:13px">Skipped (${fu.classes.filter(c=>c.exempt).length}): nobody registered or open studio, so no email and no note asked for</summary>
+      ${fu.classes.filter(c=>c.exempt).map(c=>`<div class="meta" style="margin:4px 0">${esc(c.title)} · ${esc(c.instructor_name||'')} · ended ${esc(c.end_date||'')} · ${esc(c.exempt)}</div>`).join('')}</details>`:''}
+    ${fu.classes.filter(c=>!c.exempt).map(c=>`<div class="card">
       <div class="row"><div><h3 style="font-size:1rem">${esc(c.title)}</h3>
         <div class="meta">${esc(c.instructor_name)} &middot; ended ${esc(c.end_date||'')}</div></div>
         ${c.exempt?`<span class="pill pend">no email: ${esc(c.exempt)}</span>`:c.note_written?'<span class="pill appr">note written</span>':c.followup_status==='declined'?'<span class="pill pend">no note (instructor\'s choice)</span>':'<span class="pill inc">no note</span>'}</div>
@@ -3091,7 +3093,7 @@ async function publishClass(id, ev){
 }
 /* The single source of truth for age ranges. Used by the class form, the admin
    edit form and the template editor. */
-const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Ages 15–18','Ages 16+','Ages 18+','Ages 21+'];
+const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Ages 14–18','Ages 16+','Ages 18+','Ages 21+'];
 function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
 async function openEditForm(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;

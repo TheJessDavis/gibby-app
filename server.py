@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.89.0-email-limits"
+VERSION = "10.89.1-ages-exempt"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -212,6 +212,16 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS tracked_links(
         id INTEGER PRIMARY KEY, token TEXT UNIQUE, url TEXT, kind TEXT, ref_id INTEGER, target_class_id INTEGER,
         clicks INTEGER DEFAULT 0, last_click TEXT, created TEXT)""")
+    # The teen band is 14 to 18 now (was 15 to 18): relabel what classes and templates already hold.
+    for tbl in ("classes", "templates", "drafts"):
+        try:
+            c.execute(f"UPDATE {tbl} SET age_range=REPLACE(age_range, 'Ages 15\u201318', 'Ages 14\u201318') WHERE age_range LIKE '%Ages 15\u201318%'")
+        except Exception:
+            pass
+    try:
+        c.execute("UPDATE drafts SET payload=REPLACE(payload, 'Ages 15\u201318', 'Ages 14\u201318') WHERE payload LIKE '%Ages 15\u201318%'")
+    except Exception:
+        pass
     # One-time repair: attendee names that arrived as byte reprs ("b'Katie' b'Gorman'").
     for r in c.execute("SELECT id, name FROM registrations WHERE name LIKE ?", ("%b'%",)).fetchall():
         fixed = re.sub(r"b'([^']*)'", r"\1", r["name"] or "").strip()
