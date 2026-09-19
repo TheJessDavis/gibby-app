@@ -2590,7 +2590,7 @@ async function adminApprovals(){
       <div class="meta" style="margin-top:8px">
         ${c.thanks_sent_at
           ? `Thank-you sent ${esc(c.thanks_sent_at.slice(0,16).replace('T',' '))}${c.followup_status==='sent'?' with the instructor\'s note':' without a note'}${c.late_sent_at?`; late note sent ${esc(c.late_sent_at.slice(0,16).replace('T',' '))}`:''}. <b>${c.register_clicks||0} Register click${c.register_clicks===1?'':'s'}</b> on the next-classes links.`
-          : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ${c.attendance_known?'people who checked in':'ticket holders (no check-in data, neutral wording)'}.`}
+          : `Not sent yet. Will go to <b>${c.followup_recipients}</b> ticket holder${c.followup_recipients===1?'':'s'} (everyone who registered).`}
       </div>
       ${c.codes_issued?`<div class="meta" style="margin-top:6px">\u{1F39F}\uFE0F ${c.codes_issued} personal code${c.codes_issued===1?'':'s'} sent, ${c.codes_redeemed||0} used so far. <a href="#" onclick="showThanksCodes(${c.id},'cc${c.id}');return false">Show</a><div id="cc${c.id}"></div></div>`:''}
       ${c.fb_submitted_at && c.fb_skipped?`<div class="meta" style="margin-top:8px">${esc(c.instructor_name||'The instructor')} skipped the questionnaire for this one.</div>`:''}

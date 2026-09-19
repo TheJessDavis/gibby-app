@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.90.0-ages-templates"
+VERSION = "10.90.1-thanks-everyone"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -526,25 +526,12 @@ def class_finance(cls, enrolled):
     }
 
 def followup_audience(c, class_id):
-    """Who should get the after-class note, and do we actually know who attended?
-
-    Decided per class from the data rather than from a setting, because The Gibby
-    may scan tickets for one class and not the next:
-
-      * If ANY registration is checked in, the door was scanned, so the check-in
-        data is trustworthy. Write to those people only, and it is safe to say
-        "thanks for coming".
-      * If NOBODY is checked in, that means tickets were never scanned, not that
-        nobody turned up. Write to everyone holding a ticket, but the copy must
-        not assume they were there.
-
-    Returns (emails, attendance_known)."""
+    """Who gets the after-class note: everyone holding a ticket, every time.
+    Check-in scans are not used to narrow it (the owner's rule), so the copy
+    never assumes who was in the room. Returns (emails, attendance_known=False)."""
     rows = [dict(r) for r in c.execute(
-        "SELECT email, checked_in FROM registrations WHERE class_id=? AND refunded=0", (class_id,))]
-    attended = [r["email"] for r in rows if r["checked_in"]]
-    if attended:
-        return attended, True
-    return [r["email"] for r in rows if r["email"]], False
+        "SELECT email FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'", (class_id,))]
+    return [r["email"] for r in rows], False
 
 def enrollment(c, class_id):
     return c.execute("SELECT COUNT(*) FROM registrations WHERE class_id=? AND refunded=0",(class_id,)).fetchone()[0]
@@ -2573,9 +2560,8 @@ def followup_people(c, class_id):
     rows = [dict(r) for r in c.execute(
         "SELECT name, email, checked_in FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'",
         (class_id,))]
-    attended = [r for r in rows if r["checked_in"]]
-    if attended:
-        return attended, True
+    # Everyone who held a ticket, every time. Check-in data is not used to trim
+    # the list (the owner's rule), so the wording stays neutral about attendance.
     return rows, False
 
 def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=None):
