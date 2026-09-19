@@ -132,6 +132,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   same alerts went out hourly.)
 - **Help cards**: `ensure_help_card` runs at approval and every scheduler tick for approved classes
   with `needs_volunteer`, so any class asking for an assistant appears under Opportunities > Help.
+- **Art for All**: every Eventbrite event carries a "name your amount" donation ticket type
+  (`integrations.ensure_art_for_all`, added at event creation and by a daily sweep over live org
+  events). The API cannot make true add-ons, so it is a donation ticket beside the class ticket.
+- **Thank-yous** go to everyone who registered; check-in scans never narrow the list.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 

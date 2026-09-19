@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.90.1-thanks-everyone"
+VERSION = "10.91.0-art-for-all"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2953,6 +2953,16 @@ def sync_calendar():
         LAST_SYNC_ERROR = f"{type(e).__name__}: {e}"
         raise
 
+def daily_art_for_all_if_due():
+    """Once a day, make sure every live Eventbrite event carries the Art for All donation line."""
+    today = datetime.date.today().isoformat()
+    if _meta_get("art_for_all_day") == today: return
+    cfg = integrations.load_config()
+    if not cfg.get("eventbrite_token"): return
+    n = integrations.sweep_art_for_all(cfg)
+    _meta_set("art_for_all_day", today)
+    if n: print(f"[eventbrite] Art for All donation line added to {n} event(s)")
+
 def scheduler_loop():
     # Calendar slots refresh every 5 minutes so a change on the Gibby calendar
     # shows up almost immediately. The heavier lifecycle work (emails, Eventbrite
@@ -2981,6 +2991,8 @@ def scheduler_loop():
             except Exception as e: print("[digest] error:", e)
             try: sweep_materials_sheet()
             except Exception as e: print("[materials] sweep error:", e)
+            try: daily_art_for_all_if_due()
+            except Exception as e: print("[eventbrite] Art for All sweep error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
