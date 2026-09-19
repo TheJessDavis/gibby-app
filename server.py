@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.89.1-ages-exempt"
+VERSION = "10.90.0-ages-templates"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -762,14 +762,15 @@ def age_label(age_range):
     parts = [p.strip() for p in (age_range or "").split(",") if p.strip()]
     if not parts: return ""
     if any(p.lower().startswith("all") for p in parts): return "All ages"
+    named = [p for p in parts if not _age_bounds(p)]     # 'High School Students', 'Seniors': kept as written
     spans = sorted(b for b in (_age_bounds(p) for p in parts) if b)
-    if not spans: return age_range                # unparseable: leave it alone
+    if not spans: return ", ".join(named)
     merged = [list(spans[0])]
     for lo, hi in spans[1:]:
         if lo <= merged[-1][1] + 1: merged[-1][1] = max(merged[-1][1], hi)
         else: merged.append([lo, hi])
     out = [f"{lo}+" if hi >= 200 else (str(lo) if lo == hi else f"{lo}–{hi}") for lo, hi in merged]
-    return "Ages " + " & ".join(out)
+    return ", ".join(["Ages " + " & ".join(out)] + named)
 
 def audit(c, class_id, prev_status, new_status, actor_id):
     """Append one immutable entry recording a Class status change. Snapshots the
@@ -7056,6 +7057,14 @@ class H(http.server.BaseHTTPRequestHandler):
             c.commit(); c.close()
             print(f"[template] {u['name']} saved class #{cid} '{title}' as a template")
             return self.send_json({"ok":True, "existing":False})
+        if p.startswith("/api/templates/") and p.endswith("/delete"):
+            u = self.require("admin")
+            if not u: return
+            tid = int(p.split("/")[3]); c=db()
+            row = c.execute("SELECT title FROM templates WHERE id=?", (tid,)).fetchone()
+            c.execute("DELETE FROM templates WHERE id=?", (tid,)); c.commit(); c.close()
+            print(f"[template] {u['name']} removed template #{tid} {row['title'] if row else ''!r}")
+            return self.send_json({"ok":True})
         if p.startswith("/api/templates/") and p.endswith("/archive"):
             u = self.require("admin")
             if not u: return

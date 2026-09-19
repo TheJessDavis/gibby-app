@@ -1346,7 +1346,13 @@ async function adminTemplates(){
     ${templates.map(t=>`<div class="card"><div class="row"><div><h3>${esc(t.title)}</h3>
        <div class="meta">${esc(t.category)} · ${esc(t.age)}</div></div>
        <span class="pill ${t.archived?'inc':'appr'}">${t.archived?'archived':'active'}</span></div>
-       <button class="btn ghost" style="margin-top:10px" onclick="archiveTpl(${t.id})">${t.archived?'Unarchive':'Archive'}</button></div>`).join('')}`;
+       <div class="two" style="margin-top:10px"><button class="btn ghost" onclick="archiveTpl(${t.id})">${t.archived?'Unarchive':'Archive'}</button>
+       <button class="btn ghost" style="color:#B4442C" onclick="removeTpl(${t.id},'${esc(t.title)}')">Remove</button></div></div>`).join('')}`;
+}
+async function removeTpl(id, title){
+  if(!confirm(`Remove the template "${title}" for good? Classes already made from it are not affected.`)) return;
+  try{ await api('/api/templates/'+id+'/delete','POST',{}); }catch(e){ alert(e.message); return; }
+  adminTemplates();
 }
 async function addTemplate(){ await api('/api/templates','POST',{title:$('#tt').value,category:$('#tc').value,age:$('#ta').value,description:$('#td').value,supplies:[]}); adminTemplates(); }
 async function archiveTpl(id){ await api('/api/templates/'+id+'/archive','POST'); adminTemplates(); }
@@ -3093,7 +3099,7 @@ async function publishClass(id, ev){
 }
 /* The single source of truth for age ranges. Used by the class form, the admin
    edit form and the template editor. */
-const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Ages 14–18','Ages 16+','Ages 18+','Ages 21+'];
+const AGES=['All Ages','Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Ages 14–18','Ages 16+','Ages 18+','Ages 21+','Elementary Students','Middle School Students','High School Students','Seniors'];
 function segPick(b){ b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on')); b.classList.add('on'); }
 async function openEditForm(id){
   const c=(window.__classes||[]).find(x=>x.id===id); if(!c) return;
@@ -3114,7 +3120,7 @@ async function openEditForm(id){
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
     <label>One-line teaser</label><input id="e_summary" maxlength="140" value="${esc(c.summary||'')}"
       placeholder="The single line Eventbrite shows above the description">
-    <label>Age range</label><select id="e_age">${AGES.map(a=>`<option ${a===c.age_range?'selected':''}>${a}</option>`).join('')}</select>
+    <label>Age range (pick every group that fits)</label>${ageChips(c.age_range)}
     <label>Alcohol available for purchase?</label>
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
     <label>Can other resident teaching artists audit this class?</label>
@@ -3147,7 +3153,7 @@ function openLiveEdit(id){
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
     <label>One-line teaser</label><input id="e_summary" maxlength="140" value="${esc(c.summary||'')}"
       placeholder="The single line Eventbrite shows above the description">
-    <label>Age range</label><select id="e_age">${AGES.map(a=>`<option ${a===c.age_range?'selected':''}>${a}</option>`).join('')}</select>
+    <label>Age range (pick every group that fits)</label>${ageChips(c.age_range)}
     <label>Alcohol available for purchase?</label>
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
     <label>Can other resident teaching artists audit this class?</label>
@@ -3168,7 +3174,7 @@ function openLiveEdit(id){
 async function submitLiveEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
-  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
+  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(),
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
@@ -3183,7 +3189,7 @@ async function submitLiveEdit(id){
 async function submitEdit(id, quiet){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
-  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:$('#e_age').value,
+  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(),
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
@@ -4326,7 +4332,7 @@ function openForm(slot, draftPayload){
   initFormHelpers();
 }
 // Under-14 groups trigger the "do you need a volunteer assistant?" question.
-const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14'];
+const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Elementary Students','Middle School Students'];
 function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
 /* Mirrors age_label() on the server so the instructor sees the exact phrase that
    will appear on Eventbrite and the poster, not the raw checkbox list. */
@@ -4341,15 +4347,25 @@ function ageBounds(s){
 function ageLabel(list){
   if(!list.length) return '';
   if(list.some(a=>/^all/i.test(a))) return 'All ages';
+  const named=list.filter(a=>!ageBounds(a));
   const spans=list.map(ageBounds).filter(Boolean).sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
-  if(!spans.length) return list.join(', ');
+  if(!spans.length) return named.join(', ');
   const m=[spans[0].slice()];
   for(const [lo,hi] of spans.slice(1)){
     if(lo<=m[m.length-1][1]+1) m[m.length-1][1]=Math.max(m[m.length-1][1],hi);
     else m.push([lo,hi]);
   }
-  return 'Ages '+m.map(([lo,hi])=>hi>=200?`${lo}+`:(lo===hi?`${lo}`:`${lo}–${hi}`)).join(' & ');
+  return ['Ages '+m.map(([lo,hi])=>hi>=200?`${lo}+`:(lo===hi?`${lo}`:`${lo}–${hi}`)).join(' & ')].concat(named).join(', ');
 }
+/* The admin edit forms: the same multi-pick as the class form, pre-ticked from
+   the stored comma list, with the public phrase previewed underneath. */
+function ageChips(stored){
+  const have=(stored||'').split(',').map(s=>s.trim()).filter(Boolean);
+  return `<div class="chkgrid" id="e_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" ${have.includes(a)?'checked':''} onchange="ageChipsChanged()"> ${a}</label>`).join('')}</div>
+    <div class="hint" id="e_agepreview">${have.length?'Will appear as: '+esc(ageLabel(have)):''}</div>`;
+}
+function readAgeChips(){ return [...document.querySelectorAll('#e_ages input:checked')].map(x=>x.value).join(', '); }
+function ageChipsChanged(){ const p=$('#e_agepreview'); const sel=[...document.querySelectorAll('#e_ages input:checked')].map(x=>x.value); if(p) p.textContent = sel.length?'Will appear as: '+ageLabel(sel):''; }
 function ageChanged(){
   const sel=selectedAges();
   const kid=sel.some(a=>KID_AGES.includes(a));
@@ -4716,7 +4732,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

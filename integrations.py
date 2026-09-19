@@ -251,17 +251,27 @@ def ages_open_line(cls):
         return ""
     if label.lower().replace("-", " ") == "all ages":
         return "Open to all ages"
-    body = re.sub(r"(?i)^ages\s+", "", label)
-    outs = []
-    for part in [p.strip() for p in body.split("&") if p.strip()]:
-        m = re.match(r"^(\d+)\s*[–—-]\s*(\d+)$", part)
-        if m:
-            outs.append(f"{m.group(1)} to {m.group(2)}"); continue
-        m = re.match(r"^(\d+)\+$", part)
-        if m:
-            outs.append(f"{m.group(1)} and up"); continue
-        outs.append(part)
-    return "Open to ages " + " and ".join(outs)
+    # 'Ages 8–12 & 14–18, High School Students, Seniors' -> numeric spans first,
+    # then the named groups as plain words.
+    chunks = [x.strip() for x in label.split(",") if x.strip()]
+    nums, named = [], []
+    for chunk in chunks:
+        if re.match(r"(?i)^ages\s+", chunk) or re.search(r"\d", chunk):
+            body = re.sub(r"(?i)^ages\s+", "", chunk)
+            for part in [p.strip() for p in body.split("&") if p.strip()]:
+                m = re.match(r"^(\d+)\s*[–—-]\s*(\d+)$", part)
+                if m:
+                    nums.append(f"{m.group(1)} to {m.group(2)}"); continue
+                m = re.match(r"^(\d+)\+$", part)
+                if m:
+                    nums.append(f"{m.group(1)} and up"); continue
+                nums.append(part)
+        else:
+            named.append(chunk.lower() if not chunk.isupper() else chunk)
+    outs = ([("ages " + " and ".join(nums))] if nums else []) + named
+    if not outs:
+        return ""
+    return "Open to " + (outs[0] if len(outs) == 1 else ", ".join(outs[:-1]) + " and " + outs[-1])
 
 def _event_description(cls):
     """The full Eventbrite description for a class: the ages phrase, a video
