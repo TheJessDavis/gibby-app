@@ -122,6 +122,16 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   contract (`LOCKBOX_CONTRACT_DEFAULT`, editable in meta) is signed with a typed name into the
   `lockbox` table. The app never holds the code: each signature emails Michelle Truban (meta
   `lockbox_to`, set under People > Lockbox) the instructor's name and email, and she sends the code.
+- **Email limits** (`mailer.LIMITS`, table `mail_sent` in the app database): automated mail may go
+  to the same person with the same subject once per 24 h, and at most 40 an hour / 200 a day in
+  total; past that it stops and the watch address gets one "[Limit]" email. Mail a person triggers
+  (origin "user", worked out from the request thread) is not capped. Counts show under More > Email.
+- **Scheduler safety**: `send_class_email` commits its email_log claim at once, and `run_scheduler`
+  handles each class in its own try/commit (`_one`). Errors land in meta `scheduler_errors`, read
+  with `GET /api/admin/scheduler-errors`. (Before this, one crash rolled back every claim and the
+  same alerts went out hourly.)
+- **Help cards**: `ensure_help_card` runs at approval and every scheduler tick for approved classes
+  with `needs_volunteer`, so any class asking for an assistant appears under Opportunities > Help.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 

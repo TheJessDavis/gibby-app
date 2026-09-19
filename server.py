@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.88.2-scheduler-hotfix"
+VERSION = "10.89.0-email-limits"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -982,6 +982,27 @@ def queue_worker():
         except Exception as e: print("[queue] worker error:", e)
         time.sleep(QUEUE_TICK)
 
+def ensure_help_card(c, cls, instr=None, actor_id=None):
+    """A class whose instructor asked for a volunteer assistant gets a Help card
+    on the Opportunities tab. Called at approval and swept hourly, so a class
+    edited to need help later, or one approved before this existed, gets its
+    card too. Returns True when a card was created."""
+    if not cls.get("needs_volunteer") or cls.get("status") != "approved":
+        return False
+    if c.execute("SELECT 1 FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone():
+        return False
+    if instr is None:
+        instr = c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
+        instr = dict(instr) if instr else {}
+    c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,class_id)
+                 VALUES(?,?,?,?,?,'open',?,?,?,?,'help',?)""",
+              (f"Assist {(instr.get('name') or 'the instructor').split(' ')[0]} with {cls.get('title')}",
+               "Posted automatically because the instructor asked for a volunteer assistant.",
+               cls.get("room") or "", cls.get("age_label") or cls.get("age_range") or "",
+               f"{cls.get('slot_date') or ''} {cls.get('class_time') or cls.get('slot_time') or ''}".strip(),
+               actor_id, now(), (cls.get("description") or "")[:600], "[]", cls["id"]))
+    return True
+
 def publish_now(c, cls, actor_id=None, spawn=True):
     """Final step, after the admin has reviewed the graphic: post to Eventbrite with
     that graphic attached, add the class to the Google Calendar, email the instructor.
@@ -990,16 +1011,7 @@ def publish_now(c, cls, actor_id=None, spawn=True):
     instr = dict(c.execute("SELECT * FROM users WHERE id=?",(cls["instructor_id"],)).fetchone())
     c.execute("UPDATE classes SET status='approved' WHERE id=?",(cls["id"],))
     audit(c, cls["id"], cls.get("status"), "approved", actor_id)
-    if cls.get("needs_volunteer") and not c.execute("SELECT 1 FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone():
-        # The instructor asked for an assistant: that becomes a Help card on the
-        # Opportunities tab the moment the class is real. Closes itself after class.
-        c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,class_id)
-                     VALUES(?,?,?,?,?,'open',?,?,?,?,'help',?)""",
-                  (f"Assist {(instr.get('name') or 'the instructor').split(' ')[0]} with {cls.get('title')}",
-                   "Posted automatically because the instructor asked for a volunteer assistant.",
-                   cls.get("room") or "", cls.get("age_label") or cls.get("age_range") or "",
-                   f"{cls.get('slot_date') or ''} {cls.get('class_time') or cls.get('slot_time') or ''}".strip(),
-                   actor_id, now(), (cls.get("description") or "")[:600], "[]", cls["id"]))
+    ensure_help_card(c, cls, instr, actor_id)
     # Demo students exist so DEV screens have data. On a live install they are
     # poison: fake enrollment numbers, and real-looking addresses that would
     # receive real emails. Only seed when nothing is live.
@@ -2644,6 +2656,8 @@ def run_scheduler(asof=None):
         instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
         cfg = mailer.load_email_config()
         if cls["status"] == "approved":
+            if end_days >= 0 and ensure_help_card(c, cls):
+                actions.append(f"help card posted for {cls['title']}")
             if 7 < days <= 14 and enrolled < (cls["min_p"] or 0):
                 sent, why = send_class_email(c, cls, "low_alert", emails_for(c,"WHERE role='admin'"),
                     f"Low enrollment: {cls['title']}",
@@ -2865,7 +2879,11 @@ def run_scheduler(asof=None):
                 break
     except Exception as e:
         print(f"[scheduler] fb token warning check failed: {e}")
-    c.commit(); c.close()
+    try:
+        c.commit()
+    except Exception as ex:
+        record_scheduler_error("final commit", ex)
+    c.close()
     if actions: print("[scheduler]", "; ".join(actions))
     return actions
 
@@ -4218,6 +4236,7 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"integrations": rows, "live": bool(cfg["live"]),
                                    "drive": drive, "thanks": thanks_settings(), "deadline": deadline_settings(),
                                    "backup": backup_status(),
+                                   "email_limits": mailer.limit_stats(),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
@@ -7406,6 +7425,7 @@ class Threaded(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
 
 if __name__ == "__main__":
+    mailer.LIMIT_DB = DB          # the email safety caps keep their counts in the app database
     try:
         mailer.COPY_TO = thanks_settings().get("copy_all") or ""
         mailer.RUNTIME_BRIDGE = {"url": _meta_get("mail_bridge_url"), "key": _meta_get("mail_bridge_key")}

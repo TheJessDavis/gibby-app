@@ -198,13 +198,123 @@ def _check_bridge_reply(raw):
 
 COPY_TO = ""      # every outgoing email is copied here (set by the server from Connections > Email)
 
-def _copy(subject, body, recips, cfg, from_name=None):
+# ------------------------------------------------------------- limits ----
+# Hard ceilings on what the app may send on its own. They live in a table in
+# the app's database (LIMIT_DB, set by the server) so a restart or redeploy
+# never resets them. Automated mail (scheduler, sweeps) is held to:
+#   - the same subject to the same person at most once in SAME_SUBJECT_HOURS,
+#   - AUTO_PER_HOUR / AUTO_PER_DAY messages in total (copies to the watch
+#     address not counted).
+# Mail a person triggered from the app (origin "user") keeps only the
+# ten-minute double-tap dedupe above, so a deliberate re-send still works.
+LIMIT_DB = ""
+LIMITS = {"same_subject_hours": 24, "auto_per_hour": 40, "auto_per_day": 200}
+_LIMIT_ALERTED_DAY = ""
+
+def _ldb():
+    import sqlite3
+    c = sqlite3.connect(LIMIT_DB, timeout=10)
+    c.execute("PRAGMA busy_timeout=8000")
+    c.execute("""CREATE TABLE IF NOT EXISTS mail_sent(id INTEGER PRIMARY KEY, recipient TEXT, subj_hash TEXT,
+                 subject TEXT, sent_at TEXT, origin TEXT)""")
+    c.execute("CREATE INDEX IF NOT EXISTS mail_sent_rs ON mail_sent(recipient, subj_hash, sent_at)")
+    return c
+
+def _subj_hash(subject):
+    import hashlib
+    return hashlib.sha1((subject or "").strip().lower().encode("utf-8", "replace")).hexdigest()
+
+def _limit(recips, subject, origin):
+    """Return the recipients this message may still go to under the limits."""
+    if not LIMIT_DB or origin != "auto":
+        return recips
+    import datetime as _dt
+    try:
+        c = _ldb(); nowdt = _dt.datetime.now(); h = _subj_hash(subject)
+        since = (nowdt - _dt.timedelta(hours=LIMITS["same_subject_hours"])).isoformat(timespec="seconds")
+        allowed, blocked = [], []
+        for r in recips:
+            if c.execute("SELECT 1 FROM mail_sent WHERE recipient=? AND subj_hash=? AND sent_at>=? AND origin='auto'",
+                         (r.lower(), h, since)).fetchone():
+                blocked.append(r); continue
+            allowed.append(r)
+        if blocked:
+            print(f"[email] LIMIT: {subject!r} already went to {blocked} in the last {LIMITS['same_subject_hours']}h; not sending again")
+        is_copy = subject.startswith("[Copy") or subject.startswith("[Limit")
+        if allowed and not is_copy:
+            hour_ago = (nowdt - _dt.timedelta(hours=1)).isoformat(timespec="seconds")
+            day_ago = (nowdt - _dt.timedelta(days=1)).isoformat(timespec="seconds")
+            n_h = c.execute("SELECT COUNT(*) FROM mail_sent WHERE origin='auto' AND sent_at>=? AND subject NOT LIKE '[Copy%'", (hour_ago,)).fetchone()[0]
+            n_d = c.execute("SELECT COUNT(*) FROM mail_sent WHERE origin='auto' AND sent_at>=? AND subject NOT LIKE '[Copy%'", (day_ago,)).fetchone()[0]
+            if n_h + len(allowed) > LIMITS["auto_per_hour"] or n_d + len(allowed) > LIMITS["auto_per_day"]:
+                print(f"[email] LIMIT: automated mail cap reached ({n_h} this hour, {n_d} today); not sending {subject!r} to {allowed}")
+                blocked += allowed; allowed = []
+                _limit_alert(n_h, n_d, subject)
+        for r in blocked:
+            c.execute("INSERT INTO mail_sent(recipient,subj_hash,subject,sent_at,origin) VALUES(?,?,?,?,'blocked')",
+                      (r.lower(), h, (subject or "")[:200], nowdt.isoformat(timespec="seconds")))
+        c.commit(); c.close()
+        return allowed
+    except Exception as e:
+        print("[email] limiter error (sending anyway):", e)
+        return recips
+
+def _record_sent(recips, subject, origin):
+    if not LIMIT_DB: return
+    import datetime as _dt
+    try:
+        c = _ldb(); h = _subj_hash(subject); t = _dt.datetime.now().isoformat(timespec="seconds")
+        c.executemany("INSERT INTO mail_sent(recipient,subj_hash,subject,sent_at,origin) VALUES(?,?,?,?,?)",
+                      [(r.lower(), h, (subject or "")[:200], t, origin) for r in recips])
+        c.execute("DELETE FROM mail_sent WHERE sent_at < ?", ((_dt.datetime.now() - _dt.timedelta(days=45)).isoformat(timespec="seconds"),))
+        c.commit(); c.close()
+    except Exception as e:
+        print("[email] limiter record error:", e)
+
+def _limit_alert(n_h, n_d, subject):
+    """Tell the watch address once a day that the cap was hit."""
+    global _LIMIT_ALERTED_DAY
+    import datetime as _dt
+    today = _dt.date.today().isoformat()
+    if not COPY_TO or _LIMIT_ALERTED_DAY == today: return
+    _LIMIT_ALERTED_DAY = today
+    try:
+        send(COPY_TO, "[Limit] The app paused its automated emails",
+             f"The Gibby Class Manager hit its safety cap for automated email ({n_h} in the last hour, {n_d} in the last day; "
+             f"the caps are {LIMITS['auto_per_hour']} an hour and {LIMITS['auto_per_day']} a day).\n\n"
+             f"The message it held back was: {subject!r}. Anything else automated is held until the count drops. "
+             f"Emails people send from the app are not affected.\n\nIf this is unexpected, something is looping; "
+             f"see Email under More in the app for today's counts.", copy=False, origin="user")
+    except Exception as e:
+        print("[email] limit alert failed:", e)
+
+def limit_stats():
+    """For the Email settings page: what went out and what was held back."""
+    out = {"caps": dict(LIMITS), "auto_last_hour": 0, "auto_today": 0, "blocked_today": 0, "user_today": 0}
+    if not LIMIT_DB: return out
+    import datetime as _dt
+    try:
+        c = _ldb(); nowdt = _dt.datetime.now()
+        hour_ago = (nowdt - _dt.timedelta(hours=1)).isoformat(timespec="seconds")
+        day_ago = (nowdt - _dt.timedelta(days=1)).isoformat(timespec="seconds")
+        out["auto_last_hour"] = c.execute("SELECT COUNT(*) FROM mail_sent WHERE origin='auto' AND sent_at>=? AND subject NOT LIKE '[Copy%'", (hour_ago,)).fetchone()[0]
+        out["auto_today"] = c.execute("SELECT COUNT(*) FROM mail_sent WHERE origin='auto' AND sent_at>=? AND subject NOT LIKE '[Copy%'", (day_ago,)).fetchone()[0]
+        out["user_today"] = c.execute("SELECT COUNT(*) FROM mail_sent WHERE origin='user' AND sent_at>=? AND subject NOT LIKE '[Copy%'", (day_ago,)).fetchone()[0]
+        out["blocked_today"] = c.execute("SELECT COUNT(*) FROM mail_sent WHERE origin='blocked' AND sent_at>=?", (day_ago,)).fetchone()[0]
+        out["blocked"] = [{"to": r[0], "subject": r[1], "at": r[2]} for r in c.execute(
+            "SELECT recipient, subject, sent_at FROM mail_sent WHERE origin='blocked' AND sent_at>=? ORDER BY id DESC LIMIT 20", (day_ago,)).fetchall()]
+        c.close()
+    except Exception as e:
+        print("[email] limiter stats error:", e)
+    return out
+
+def _copy(subject, body, recips, cfg, from_name=None, origin="auto"):
     """One copy of an outgoing email to the Gibby's watch address."""
     if not COPY_TO or any(r.lower() == COPY_TO.lower() for r in recips) or subject.startswith("[Copy"):
         return
     try:
         send(COPY_TO, f"[Copy to {', '.join(recips)}] {subject}",
-             f"(Sent{' as ' + from_name if from_name else ''} to {', '.join(recips)})\n\n{body}", cfg, copy=False)
+             f"(Sent{' as ' + from_name if from_name else ''} to {', '.join(recips)})\n\n{body}", cfg, copy=False, origin=origin)
     except Exception as e:
         print("[email] copy failed:", e)
 
@@ -251,21 +361,25 @@ def _worker():
 
 threading.Thread(target=_worker, daemon=True, name="email-worker").start()
 
-def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None, wait=False, banner=None):
+def send(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None, wait=False, banner=None, origin=None):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF.
     Inside a request (see defer_in_this_thread) the message is queued and True is
-    returned at once; pass wait=True when the caller needs the real outcome."""
-    if getattr(_tl, "defer", False) and not wait:
+    returned at once; pass wait=True when the caller needs the real outcome.
+    origin: "user" for mail a person triggered, "auto" for the scheduler; worked
+    out from the calling thread when not given (see the limits above)."""
+    in_request = getattr(_tl, "defer", False)
+    origin = origin or ("user" if in_request else "auto")
+    if in_request and not wait:
         recips = [to] if isinstance(to, str) else list(to)
         recips = [r for r in recips if r and "@" in r]
         if not recips: return False
         fresh = _dedupe(recips, subject, body)
         if not fresh: return True
-        _queue.put(((fresh, subject, body), dict(cfg=cfg, attachments=attachments, reply_to=reply_to, from_name=from_name, copy=copy, images=images, banner=banner, _deduped=True)))
+        _queue.put(((fresh, subject, body), dict(cfg=cfg, attachments=attachments, reply_to=reply_to, from_name=from_name, copy=copy, images=images, banner=banner, _deduped=True, origin=origin)))
         return True
-    return _send_now(to, subject, body, cfg=cfg, attachments=attachments, reply_to=reply_to, from_name=from_name, copy=copy, images=images, banner=banner)
+    return _send_now(to, subject, body, cfg=cfg, attachments=attachments, reply_to=reply_to, from_name=from_name, copy=copy, images=images, banner=banner, origin=origin)
 
-def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None, _deduped=False, banner=None):
+def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from_name=None, copy=True, images=None, _deduped=False, banner=None, origin="auto"):
     """attachments: list of (filename, bytes, mime) tuples, e.g. a contract PDF."""
     cfg = cfg or load_email_config()
     recips = [to] if isinstance(to, str) else list(to)
@@ -276,6 +390,9 @@ def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from
         recips = _dedupe(recips, subject, body)
     if not recips:
         return True          # already sent moments ago; nothing more to do
+    recips = _limit(recips, subject, origin)
+    if not recips:
+        return False         # held back by the limits above (logged there)
     # Every email links back to the app, so nobody has to hunt for the address.
     if APP_URL not in body:
         body = body.rstrip() + f"\n\nOpen the Gibby Class Manager: {APP_URL}"
@@ -283,6 +400,7 @@ def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from
         print(f"[email] DRY-RUN from={cfg['mail_from']} to={recips} subject={subject!r}"
               + (f" attachments={[a[0] for a in attachments]}" if attachments else "")
               + (f" (+copy to {COPY_TO})" if copy and COPY_TO and not subject.startswith("[Copy") else ""))
+        _record_sent(recips, subject, origin)
         return True
     global LAST_ERROR, LAST_ROUTE
     errors = []
@@ -291,7 +409,8 @@ def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from
             if send_via_bridge(recips, subject, body, cfg, attachments, reply_to, from_name, images, banner):
                 LAST_ERROR = ""; LAST_ROUTE = "bridge"
                 print(f"[email] SENT via bridge to={recips} subject={subject!r}")
-                if copy: _copy(subject, body, recips, cfg, from_name)
+                _record_sent(recips, subject, origin)
+                if copy: _copy(subject, body, recips, cfg, from_name, origin)
                 return True
         except Exception as e:
             errors.append(f"Google bridge: {e}")
@@ -320,7 +439,8 @@ def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from
                 s.send_message(msg)
             LAST_ERROR = ""; LAST_ROUTE = "smtp"
             print(f"[email] SENT via smtp to={recips} subject={subject!r}")
-            if copy: _copy(subject, body, recips, cfg, from_name)
+            _record_sent(recips, subject, origin)
+            if copy: _copy(subject, body, recips, cfg, from_name, origin)
             return True
         except Exception as e:
             errors.append(f"SMTP: {type(e).__name__}: {e}")

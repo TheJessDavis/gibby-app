@@ -2040,6 +2040,10 @@ async function adminEmail(){
   const bridgeSet = !!(d.mail_bridge && (d.mail_bridge.dedicated||d.mail_bridge.url));
   $('#tab').innerHTML=`<h2>Email</h2>
     <p class="sub">Everything the app sends goes as gibby@everetttheatre.com. You get a copy of every email.</p>
+    ${(()=>{ const L=d.email_limits||{}; const caps=L.caps||{}; return `<div class="card" style="background:#EAF4E2"><h3 style="font-size:1rem;margin:0 0 6px">Email limits</h3>
+      <div class="meta">The app may send the same automated email to the same person <b>once a day</b>, and no more than <b>${caps.auto_per_hour||40} automated emails an hour</b> or <b>${caps.auto_per_day||200} a day</b>. Past that it stops and emails you once. Emails people send from the app are not capped.</div>
+      <div class="meta" style="margin-top:6px">Last 24 hours: <b>${L.auto_today||0}</b> automated, <b>${L.user_today||0}</b> sent by people, <b>${L.blocked_today||0}</b> held back${L.auto_last_hour?` · ${L.auto_last_hour} automated in the last hour`:''}.</div>
+      ${(L.blocked||[]).length?`<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:800;font-size:12.5px">Held back today</summary>${L.blocked.map(b=>`<div class="meta">${esc(b.at.slice(11,16))} · ${esc(b.to)} · ${esc(b.subject)}</div>`).join('')}</details>`:''}</div>`; })()}
     <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Thank-you emails</h3><div class="meta">Sent two mornings after every class, with the instructor\u2019s note and photos, review links and a personal code.</div>ith Gmail SMTP as the fallback.</div></div></div>
 
       <input id="th_google" placeholder="Google review link" value="${esc((d.thanks||{}).google_url||'')}" style="margin-top:6px">
@@ -4226,9 +4230,10 @@ function openForm(slot, draftPayload){
     <textarea id="f_supnotes" rows="2" placeholder="Things already in the studio you will use, substitutions that are fine, what to buy first if money is tight, prep needed before class..."></textarea>
 
     <label>Students</label>
-    <div id="f_volwrap" class="hidden">
+    <div id="f_volwrap">
       <label>Do you need a volunteer to assist with this class?</label>
       <div class="seg" id="f_vol"><button class="on" data-v="no" onclick="segPick(this)">No</button><button data-v="yes" onclick="segPick(this)">Yes</button></div>
+      <div class="hint">Yes posts a "Help wanted" card on the Opportunities tab once the class is approved, so another teaching artist can offer to assist.</div>
     </div>
 
     <label>Will alcohol be available for purchase?</label>
@@ -4346,7 +4351,6 @@ function ageLabel(list){
 function ageChanged(){
   const sel=selectedAges();
   const kid=sel.some(a=>KID_AGES.includes(a));
-  $('#f_volwrap').classList.toggle('hidden', !kid);
   const p=$('#f_agepreview');
   if(p) p.textContent = sel.length ? `Will appear as: ${ageLabel(sel)}` : '';
 }
@@ -4576,7 +4580,7 @@ function collectForm(){
     title:$('#f_title').value, description:$('#f_desc').value,
     age_range: ages.join(', '), length:$('#f_len').value, pre_class:$('#f_pre').value,
     summary:$('#f_summary')?$('#f_summary').value.trim():'',
-    needs_volunteer: kid && seg('#f_vol')==='yes',
+    needs_volunteer: seg('#f_vol')==='yes',
     own_materials: $('#f_own').checked, material_cost: materialsPerStudent(Math.max(1,+$('#c_plan').value||1)),
     supply_links: collectSupplies(), planned:+$('#c_plan').value||0, pay_per_student:+($('#c_pps')?$('#c_pps').value:0)||0,
     supply_notes: $('#f_supnotes') ? $('#f_supnotes').value.trim() : '',
