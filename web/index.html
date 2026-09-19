@@ -1914,9 +1914,12 @@ async function adminRequests(){
       ${(r.interest||[]).length?`<div style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">${r.interest.map(i=>`<div class="meta" style="margin:3px 0"><b>${esc(i.name)}</b>${i.phone?' · <a href="tel:'+esc(i.phone)+'">'+esc(i.phone)+'</a>':''} · ${esc(i.email)}${i.note?`<div>\u201C${esc(i.note)}\u201D</div>`:''}
           ${i.proposal?`<details style="margin:4px 0"><summary style="cursor:pointer;font-weight:800">\u{1F4E8} Proposal: ${esc(i.proposal.title)}${i.proposal.tier?' · '+esc(i.proposal.tier):''}${i.proposal.cost_per_kit?' · about '+money(i.proposal.cost_per_kit)+' supplies':''}</summary>
             <div style="margin:6px 0">${esc(i.proposal.description)}</div>
+            ${(i.proposal.audience||i.proposal.hours)?`<div class="meta">${[i.proposal.audience?'For: '+esc(i.proposal.audience):'', i.proposal.hours?'Time to finish: '+esc(i.proposal.hours):''].filter(Boolean).join(' · ')}</div>`:''}
             ${(i.files||[]).length?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${i.files.map(f=>(f.mime||'').startsWith('image/')?`<a href="/api/interest-files/${f.id}" target="_blank" rel="noopener"><img src="${f.thumb||('/api/interest-files/'+f.id)}" alt="" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line)"></a>`:`<a href="/api/interest-files/${f.id}" target="_blank" rel="noopener">\u{1F4CE} ${esc(f.name)}</a>`).join('')}</div>`:''}
             ${(i.proposal.supplies||[]).length?`<div><b>Supplies:</b>${i.proposal.supplies.map(x=>`<div>\u2022 ${x.qty||''} ${esc(x.name)}${x.price?' · '+money(x.price)+' each':''}${x.link?' · <a href="'+esc(x.link)+'" target="_blank" rel="noopener noreferrer">link</a>':''}</div>`).join('')}</div>`:''}
-            ${i.proposal.backup?`<div><b>Backup:</b> ${esc(i.proposal.backup)}</div>`:''}</details>`:''}
+            ${i.proposal.prep?`<div><b>Prep before packing:</b> ${esc(i.proposal.prep)}</div>`:''}
+            ${i.proposal.backup?`<div><b>Backup:</b> ${esc(i.proposal.backup)}</div>`:''}
+            <div class="meta" style="margin-top:4px">${i.proposal.originality_name?'\u2713 Originality confirmed, signed '+esc(i.proposal.originality_name):'\u26A0 Originality not confirmed'}</div></details>`:''}
           ${i.status==='confirmed'?'<span class="pill appr">confirmed</span>':i.status==='declined'?'<span class="pill inc">declined</span>':`<a href="#" onclick="interestAct(${r.id},${i.id},'confirm');return false">Confirm</a> · <a href="#" onclick="interestAct(${r.id},${i.id},'decline');return false">Decline</a>`}</div>`).join('')}</div>`
         :(r.kind!=='teach'&&r.status==='open'?'<div class="meta" style="margin-top:6px">Nobody has raised a hand yet.</div>':'')}
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini">${esc(k)}</span>`).join('')}</div>`:''}
@@ -3941,14 +3944,20 @@ function proposalForm(id, existing){
     <p class="sub" style="margin:0 0 10px">For: ${esc(r.title||'')}. Everything here goes to The Gibby in the app; nothing is published.</p>
     <label style="margin-top:0">Name of your idea</label><input id="pp_title" value="${esc(e.title||'')}" placeholder="e.g. Felt snowflake garland kit">
     <label>Describe it (two or three sentences)</label><textarea id="pp_desc" rows="3" placeholder="What it is, who it is for, and how it fits the brief.">${esc(e.description||'')}</textarea>
-    <label>Tier or option <span style="color:var(--ink-soft);font-weight:600">(if the brief lists them)</span></label><input id="pp_tier" value="${esc(e.tier||'')}" placeholder="e.g. Standard">
-    <label>Photo or sketch <span style="color:var(--ink-soft);font-weight:600">(up to 3)</span></label>
+    <label>Who is it for?</label><select id="pp_aud">${['','Little kids, 3 to 6','Kids','Adults'].map(a=>`<option value="${a}" ${a===(e.audience||'')?'selected':''}>${a||'Pick one'}</option>`).join('')}</select>
+    <label>How long would a beginner take to finish it at home?</label><select id="pp_hours">${['','About 1 hour','1 to 2 hours','2 to 3 hours','3 to 4 hours'].map(a=>`<option value="${a}" ${a===(e.hours||'')?'selected':''}>${a||'Pick one'}</option>`).join('')}</select>
+    <label>Tier you think it is <span style="color:var(--ink-soft);font-weight:600">(optional; The Gibby assigns the tier)</span></label><input id="pp_tier" value="${esc(e.tier||'')}" placeholder="Simple, Moderate or Complex">
+    <label>Photo or sketch of the finished project <span style="color:var(--ink-soft);font-weight:600">(up to 3)</span></label>
     <input type="file" id="pp_files" accept="image/*,application/pdf" multiple onchange="ppPickFiles(event)"><div id="pp_filelist" class="meta" style="margin-top:4px"></div>
-    <label>Supply list: item, where to buy, cost, how many per kit</label>
+    <label>Supply list for one kit: item, where to buy, cost each, how many per kit</label>
     <div id="pp_sup">${sup.map(x=>ppRowHTML(x)).join('')}</div>
     <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="document.getElementById('pp_sup').insertAdjacentHTML('beforeend', ppRowHTML({}))">+ Another item</button>
     <div class="meta" style="margin-top:6px" id="pp_total"></div>
+    <label>Prep before packing <span style="color:var(--ink-soft);font-weight:600">(cutting, drilling, sorting, mixing; remember it is done 25 times)</span></label><textarea id="pp_prep" rows="2" placeholder="e.g. Cut felt into 4-inch squares, pre-drill the wooden discs. Or: none, everything goes in as purchased.">${esc(e.prep||'')}</textarea>
     <label>Backup plan <span style="color:var(--ink-soft);font-weight:600">(if an item is hard to get)</span></label><textarea id="pp_backup" rows="2">${esc(e.backup||'')}</textarea>
+    <label style="margin-top:12px">Originality confirmation</label>
+    <label class="chk" style="align-items:flex-start"><input type="checkbox" id="pp_orig" ${e.originality_name?'checked':''}> <span>This design is my original work or clearly public domain. It uses no purchased patterns (including Etsy and Ravelry) without written commercial resale permission, and no characters, logos, brands or material from books, shows, movies or games.</span></label>
+    <label>Type your full name to sign that confirmation</label><input id="pp_origname" value="${esc(e.originality_name||(ME&&ME.name)||'')}" placeholder="Your full name">
     <div class="err" id="pp_err"></div>
     <div class="two" style="margin-top:14px">
       <button class="btn ghost" onclick="document.getElementById('propmodal').remove()">Cancel</button>
@@ -3976,9 +3985,13 @@ async function ppPickFiles(ev){
   ev.target.value=''; ppDrawFiles();
 }
 async function sendProposal(id){
-  const proposal={title:$('#pp_title').value.trim(), description:$('#pp_desc').value.trim(), tier:$('#pp_tier').value.trim(), supplies:ppRows(), backup:$('#pp_backup').value.trim()};
+  const proposal={title:$('#pp_title').value.trim(), description:$('#pp_desc').value.trim(), tier:$('#pp_tier').value.trim(), supplies:ppRows(), backup:$('#pp_backup').value.trim(),
+    audience:$('#pp_aud').value, hours:$('#pp_hours').value, prep:$('#pp_prep').value.trim(), originality_name:$('#pp_orig').checked?$('#pp_origname').value.trim():''};
   const err=$('#pp_err');
   if(!proposal.title || proposal.description.length<20){ err.textContent='Give it a name and a couple of sentences.'; err.classList.add('show'); return; }
+  if(!proposal.audience){ err.textContent='Pick who the kit is for.'; err.classList.add('show'); return; }
+  if(!proposal.supplies.length){ err.textContent='Add at least one supply with where to buy it and the cost.'; err.classList.add('show'); return; }
+  if(!$('#pp_orig').checked || proposal.originality_name.length<3){ err.textContent='Please tick the originality confirmation and type your name to sign it.'; err.classList.add('show'); return; }
   try{ await api('/api/requests/'+id+'/interest','POST',{proposal, files:PROP_FILES}); }
   catch(e){ err.textContent=e.message; err.classList.add('show'); return; }
   const m=$('#propmodal'); if(m) m.remove();

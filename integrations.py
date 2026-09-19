@@ -574,7 +574,6 @@ def post_eventbrite(cls, cfg, image_url=None):
             print("[eventbrite] could not set the registration cutoff:", e)
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
         json_body={"ticket_class": ticket})
-    ensure_art_for_all(eid, cfg, ticket_classes=[ticket])
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/publish/", token=cfg["eventbrite_token"], json_body={})
     sc_ok = _push_structured_content(eid, cls, cfg)
     return _ok(eid, "event published"
@@ -648,49 +647,6 @@ def delete_discount(cfg, discount_id):
         _req(f"https://www.eventbriteapi.com/v3/discounts/{discount_id}/", method="DELETE", token=cfg["eventbrite_token"]); return True
     except Exception:
         return False
-
-ART_FOR_ALL_NAME = 'Donate to "Art for All"'
-ART_FOR_ALL_DESC = ('Donate to "Art for All" and give access to art and economic mobility programs '
-                    'to High School students in foster care.')
-
-def ensure_art_for_all(eid, cfg, ticket_classes=None):
-    """Every class listing carries a 'name your amount' donation line for Art for
-    All. Eventbrite's API cannot create true add-ons (that category is read-only),
-    so this is a donation ticket type beside the class ticket. Idempotent: returns
-    True only when it had to add one."""
-    if not (eid and cfg.get("eventbrite_token")): return False
-    try:
-        if ticket_classes is None:
-            ticket_classes = (_req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/",
-                                   method="GET", token=cfg["eventbrite_token"]) or {}).get("ticket_classes") or []
-        if any((t.get("name") or "").strip().lower() == ART_FOR_ALL_NAME.lower() for t in ticket_classes):
-            return False
-        _req(f"https://www.eventbriteapi.com/v3/events/{eid}/ticket_classes/", token=cfg["eventbrite_token"],
-             json_body={"ticket_class": {"name": ART_FOR_ALL_NAME, "description": ART_FOR_ALL_DESC,
-                                         "donation": True, "quantity_total": 500, "sorting": 99}})
-        return True
-    except Exception as e:
-        print(f"[eventbrite] Art for All ticket on {eid} failed: {e}")
-        return False
-
-def sweep_art_for_all(cfg, _req_fn=None):
-    """Once a day: every live or started event on the organization gets the Art
-    for All donation line if it is missing (covers events made outside the app)."""
-    req = _req_fn or _req
-    token, org = cfg.get("eventbrite_token"), cfg.get("eventbrite_org_id")
-    if not (token and org): return 0
-    n, continuation = 0, None
-    base = (f"https://www.eventbriteapi.com/v3/organizations/{org}/events/"
-            f"?status=live,started&order_by=start_desc&expand=ticket_classes&page_size=50")
-    for _ in range(20):
-        url = base + (f"&continuation={urllib.parse.quote(continuation)}" if continuation else "")
-        res = req(url, method="GET", token=token) or {}
-        for e in res.get("events") or []:
-            if ensure_art_for_all(e.get("id"), cfg, e.get("ticket_classes") or []): n += 1
-        pg = res.get("pagination") or {}
-        continuation = pg.get("continuation")
-        if not continuation or not pg.get("has_more_items"): break
-    return n
 
 def list_org_events(cfg, _req_fn=None):
     """Every live or started event on the organization, oldest first, with the

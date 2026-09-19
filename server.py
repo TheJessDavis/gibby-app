@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.93.0-headshots-links"
+VERSION = "10.94.0-kit-proposals"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2958,16 +2958,6 @@ def sync_calendar():
         LAST_SYNC_ERROR = f"{type(e).__name__}: {e}"
         raise
 
-def daily_art_for_all_if_due():
-    """Once a day, make sure every live Eventbrite event carries the Art for All donation line."""
-    today = datetime.date.today().isoformat()
-    if _meta_get("art_for_all_day") == today: return
-    cfg = integrations.load_config()
-    if not cfg.get("eventbrite_token"): return
-    n = integrations.sweep_art_for_all(cfg)
-    _meta_set("art_for_all_day", today)
-    if n: print(f"[eventbrite] Art for All donation line added to {n} event(s)")
-
 def scheduler_loop():
     # Calendar slots refresh every 5 minutes so a change on the Gibby calendar
     # shows up almost immediately. The heavier lifecycle work (emails, Eventbrite
@@ -2996,8 +2986,6 @@ def scheduler_loop():
             except Exception as e: print("[digest] error:", e)
             try: sweep_materials_sheet()
             except Exception as e: print("[materials] sweep error:", e)
-            try: daily_art_for_all_if_due()
-            except Exception as e: print("[eventbrite] Art for All sweep error:", e)
             try: sweep_master_sheet()
             except Exception as e: print("[sheet] sweep error:", e)
             try: daily_backup_if_due()
@@ -5484,7 +5472,7 @@ class H(http.server.BaseHTTPRequestHandler):
             title = (b.get("title") or "").strip()[:120]
             if len(title) < 3: return self.send_json({"error":"Give the request a short title, like 'Kids pottery'."},400)
             c = db()
-            desc = (b.get("description") or "").strip()[:1500]
+            desc = (b.get("description") or "").strip()[:6000]
             skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
             kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else "teach"
             c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,button_label)
@@ -5525,7 +5513,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=?, kind=COALESCE(?,kind), button_label=? WHERE id=?""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
                        (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120],
-                       (b.get("description") or "").strip()[:1500], json.dumps(skills), kind, (b.get("button_label") or "").strip()[:60] or None, rid))
+                       (b.get("description") or "").strip()[:6000], json.dumps(skills), kind, (b.get("button_label") or "").strip()[:60] or None, rid))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         msh = re.match(r"^/api/classes/(\d+)/share-link$", p)
@@ -5632,9 +5620,15 @@ class H(http.server.BaseHTTPRequestHandler):
                     if nm or link: sup.append({"name": nm, "link": link, "price": price, "qty": qty})
                 prop = {"title": str(pr.get("title") or "").strip()[:120], "description": str(pr.get("description") or "").strip()[:1500],
                         "tier": str(pr.get("tier") or "").strip()[:60], "supplies": sup, "backup": str(pr.get("backup") or "").strip()[:800],
+                        "audience": str(pr.get("audience") or "").strip()[:40], "hours": str(pr.get("hours") or "").strip()[:40],
+                        "prep": str(pr.get("prep") or "").strip()[:800],
+                        "originality_name": re.sub(r"\s+", " ", str(pr.get("originality_name") or "")).strip()[:120],
+                        "originality_at": now() if str(pr.get("originality_name") or "").strip() else "",
                         "cost_per_kit": round(sum(x["price"] * x["qty"] for x in sup), 2)}
                 if not prop["title"] or len(prop["description"]) < 20:
                     c.close(); return self.send_json({"error":"Give your proposal a name and a couple of sentences."},400)
+                if len(prop["originality_name"]) < 3:
+                    c.close(); return self.send_json({"error":"Please confirm the design is your own and sign it with your name."},400)
             c.execute("""INSERT INTO request_interest(request_id,user_id,note,status,created,proposal) VALUES(?,?,?,'raised',?,?)
                          ON CONFLICT(request_id,user_id) DO UPDATE SET note=excluded.note, proposal=COALESCE(excluded.proposal, request_interest.proposal)""",
                       (rid, u["id"], note, now(), json.dumps(prop) if prop else None))
@@ -5654,6 +5648,9 @@ class H(http.server.BaseHTTPRequestHandler):
             prop_txt = ""
             if prop:
                 prop_txt = (f"\n\nProposal: {prop['title']}" + (f" ({prop['tier']})" if prop["tier"] else "") + f"\n{prop['description']}"
+                            + (f"\nFor: {prop['audience']}" if prop.get("audience") else "") + (f"\nTime to finish: {prop['hours']}" if prop.get("hours") else "")
+                            + (f"\nPrep before packing: {prop['prep']}" if prop.get("prep") else "")
+                            + (f"\nOriginality confirmed, signed {prop['originality_name']}" if prop.get("originality_name") else "")
                             + (f"\n\nSupplies (about ${prop['cost_per_kit']:.2f} per kit):\n" + "\n".join(f"  \u2022 {x['qty']} x {x['name']}" + (f" ${x['price']:.2f}" if x['price'] else "") + (f" ({x['link']})" if x['link'] else "") for x in prop["supplies"]) if prop["supplies"] else "")
                             + (f"\n\nBackup: {prop['backup']}" if prop["backup"] else ""))
             mailer.send(admins, f"{u['name']} {verb}: {row['title']}",
