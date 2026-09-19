@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.88.1-lockbox-notify"
+VERSION = "10.88.2-scheduler-hotfix"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2221,6 +2221,7 @@ def send_class_email(c, cls, email_type, recipients, subject, body, asof=None, c
     try:
         c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(?,?,?,?)",
                   (cid, email_type, now(), len(recips)))
+        c.commit()      # the claim must survive whatever happens later in this job
     except sqlite3.IntegrityError:
         return suppressed("already sent (another job claimed it first)")
 
@@ -2613,15 +2614,28 @@ def send_after_class(c, cls, email_type="followup", asof=None, cfg=None, note=No
     c.execute("UPDATE classes SET followup_status=?, followed_up=1 WHERE id=?", (new_status, cid))
     return True, f"{rule['label']} sent to {ok} of {len(people)}" + (" (with the instructor's note)" if note.strip() else "")
 
+def record_scheduler_error(where, ex):
+    """Keep the last few scheduler failures where an admin (or the API) can see
+    them, since Render's console is not always at hand."""
+    import traceback
+    print(f"[scheduler] error in {where}: {ex}")
+    try:
+        errs = json.loads(_meta_get("scheduler_errors") or "[]")
+    except Exception:
+        errs = []
+    errs.append({"at": now(), "where": where, "error": f"{type(ex).__name__}: {ex}",
+                 "trace": traceback.format_exc()[-1500:]})
+    _meta_set("scheduler_errors", json.dumps(errs[-12:]))
+
 def run_scheduler(asof=None):
     """One daily tick. Fires the brief's lifecycle automations. Every send goes
     through send_class_email, which enforces status/duplicate/date guards and logs
     anything it suppresses. Returns the actions taken (for logging/UI)."""
     today = asof or datetime.date.today()
     c = db(); actions = []
-    for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled') AND deleted_at IS NULL").fetchall():
+    def _one(r):
         cls = dict(r); d = _class_date(cls)
-        if not d: continue
+        if not d: return
         days = (d - today).days                       # to the FIRST session
         end = _class_end_date(cls) or d
         end_days = (end - today).days                 # to the LAST session (series-aware)
@@ -2796,6 +2810,16 @@ def run_scheduler(asof=None):
                     f"Thank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
                                else f"marketing request suppressed for {cls['title']}: {why}")
+    for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled') AND deleted_at IS NULL").fetchall():
+        # Each class is its own unit of work. A claim in email_log is saved the
+        # moment it is made, and one class raising never stops the others or
+        # rolls back what was already sent (that is how the same alert went out
+        # every hour for a night).
+        try:
+            _one(r); c.commit()
+        except Exception as ex:
+            c.commit()
+            record_scheduler_error(f"class #{r['id']} {r['title']!r}", ex)
     try:
         for r in c.execute("SELECT r.id, cl.slot_date, cl.session_dates, cl.is_series FROM class_requests r JOIN classes cl ON cl.id=r.class_id WHERE r.kind='help' AND r.status='open' AND r.class_id IS NOT NULL").fetchall():
             end = _class_end_date(dict(r)) or _class_date(dict(r))
@@ -4094,6 +4118,12 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db(); r = lockbox_row(c, u["id"]); c.close()
             return self.send_json({"contract": lockbox_contract(), "signed": bool(r),
                    "signed_at": r["signed_at"] if r else None, "name": r["name"] if r else None})
+        if p == "/api/admin/scheduler-errors":
+            u = self.require("admin")
+            if not u: return
+            try: errs = json.loads(_meta_get("scheduler_errors") or "[]")
+            except Exception: errs = []
+            return self.send_json({"errors": errs})
         if p == "/api/admin/lockbox":
             u = self.require("admin")
             if not u: return
