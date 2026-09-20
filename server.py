@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.94.1-assistant-toggle"
+VERSION = "10.94.2-help-review"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -987,7 +987,8 @@ def ensure_help_card(c, cls, instr=None, actor_id=None):
     on the Opportunities tab. Called at approval and swept hourly, so a class
     edited to need help later, or one approved before this existed, gets its
     card too. Returns True when a card was created."""
-    if not cls.get("needs_volunteer") or cls.get("status") != "approved":
+    # Approved, or approved and waiting on the poster: the class is real either way.
+    if not cls.get("needs_volunteer") or cls.get("status") not in ("approved", "graphic_review"):
         return False
     old = c.execute("SELECT id, status FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone()
     if old:
@@ -2837,6 +2838,13 @@ def run_scheduler(asof=None):
                     f"Thank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
                                else f"marketing request suppressed for {cls['title']}: {why}")
+    # Classes approved but still in poster review get their Help card now too.
+    try:
+        for r in c.execute("SELECT * FROM classes WHERE status='graphic_review' AND needs_volunteer=1 AND deleted_at IS NULL").fetchall():
+            if ensure_help_card(c, dict(r)): actions.append(f"help card posted for {r['title']}")
+        c.commit()
+    except Exception as ex:
+        record_scheduler_error("help cards for classes in poster review", ex)
     for r in c.execute("SELECT * FROM classes WHERE status IN ('approved','cancelled') AND deleted_at IS NULL").fetchall():
         # Each class is its own unit of work. A claim in email_log is saved the
         # moment it is made, and one class raising never stops the others or

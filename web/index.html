@@ -2914,7 +2914,7 @@ function cardCls(c){
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${actingRole()==='instructor' && ['pending','graphic_review','instructor_review','approved'].includes(c.status) && classEndKey(c)>=todayKey()
       ? (c.needs_volunteer
-          ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Assistant requested${c.status==='approved'?' (posted under Opportunities > Help)':' (posts under Opportunities once approved)'} · <a href="#" onclick="needHelp(${c.id},false);return false">no longer needed</a></div>`
+          ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Assistant requested${c.status==='approved'?' (posted under Opportunities > Help)':' (posts under Opportunities once The Gibby approves it)'} · <a href="#" onclick="needHelp(${c.id},false);return false">no longer needed</a></div>`
           : `<button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="needHelp(${c.id},true)">🙋 I need a volunteer assistant</button>`)
       : ''}
     ${actingRole()==='admin' && c.audit_ok ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 Open to other teaching artists to take free${c.learners?` · ${c.learners} coming`:''}</div>`:''}
