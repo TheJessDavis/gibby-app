@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.94.0-kit-proposals"
+VERSION = "10.94.1-assistant-toggle"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -989,8 +989,11 @@ def ensure_help_card(c, cls, instr=None, actor_id=None):
     card too. Returns True when a card was created."""
     if not cls.get("needs_volunteer") or cls.get("status") != "approved":
         return False
-    if c.execute("SELECT 1 FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone():
-        return False
+    old = c.execute("SELECT id, status FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone()
+    if old:
+        if old["status"] == "open": return False
+        c.execute("UPDATE class_requests SET status='open', closed_at=NULL WHERE id=?", (old["id"],))   # asked again: reopen the same card
+        return True
     if instr is None:
         instr = c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
         instr = dict(instr) if instr else {}
@@ -1002,6 +1005,14 @@ def ensure_help_card(c, cls, instr=None, actor_id=None):
                f"{cls.get('slot_date') or ''} {cls.get('class_time') or cls.get('slot_time') or ''}".strip(),
                actor_id, now(), (cls.get("description") or "")[:600], "[]", cls["id"]))
     return True
+
+def sync_help_card(c, cls, actor_id=None):
+    """Flag on: make sure the Help card exists (approved classes only). Flag off:
+    close any open card for the class."""
+    if cls.get("needs_volunteer"):
+        return ensure_help_card(c, cls, None, actor_id)
+    c.execute("UPDATE class_requests SET status='closed', closed_at=? WHERE class_id=? AND kind='help' AND status='open'", (now(), cls["id"]))
+    return False
 
 def publish_now(c, cls, actor_id=None, spawn=True):
     """Final step, after the admin has reviewed the graphic: post to Eventbrite with
@@ -5108,6 +5119,28 @@ class H(http.server.BaseHTTPRequestHandler):
                                        f"Shopping list from the class form ({row['planned'] or row['max_p'] or '?'} students planned).")
             c.execute("UPDATE classes SET supplies_ordered_at=? WHERE id=?", (now(), cid)); c.commit(); c.close()
             return self.send_json({"ok":True, "id":rid})
+        mnh = re.match(r"^/api/classes/(\d+)/need-help$", p)
+        if mnh:
+            # The instructor (or an admin) says this class needs a volunteer
+            # assistant, or no longer does. The Help card follows at once.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            cid = int(mnh.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            if u["role"] != "admin" and row["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"That is not your class."},403)
+            need = 1 if b.get("need") else 0
+            c.execute("UPDATE classes SET needs_volunteer=? WHERE id=?", (need, cid))
+            fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
+            made = sync_help_card(c, fresh, u["id"])
+            c.commit(); c.close()
+            if need and u["role"] != "admin":
+                mailer.send(emails_for(db(), "WHERE role='admin'"), f"{u['name']} needs an assistant for {row['title']}",
+                    f"{u['name']} asked for a volunteer assistant for \"{row['title']}\" ({row['slot_date']}). "
+                    + ("A Help card is now on the Opportunities tab for other teaching artists to answer." if made or row["status"] == "approved"
+                       else "A Help card will appear on the Opportunities tab once the class is approved.")
+                    + f"\n\nOpen the app: {mailer.APP_URL}")
+            return self.send_json({"ok":True, "needs_volunteer": bool(need), "card": bool(made)})
         if p == "/api/lockbox/sign":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -6494,11 +6527,13 @@ class H(http.server.BaseHTTPRequestHandler):
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
+            if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
             if not sets: c.close(); return self.send_json({"error":"Nothing to change."},400)
             vals.append(cid)
             c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
             audit(c, cid, row["status"], "edited-live", u["id"])
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?",(cid,)).fetchone())
+            sync_help_card(c, fresh, u["id"])
             c.commit(); c.close()
             cfg = integrations.load_config()
             try: eb_result = integrations.update_eventbrite_details(fresh, cfg)
@@ -7077,6 +7112,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
+            if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
             if b.get("quiet"):
                 # A small fix (a capital letter, a typo): save it and leave the class
                 # exactly where it was. No status change, no email, no approval loop.
