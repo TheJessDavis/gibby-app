@@ -112,9 +112,21 @@ function renderInstructors(){
   var host=document.getElementById('gibby-instructors');
   if(!host||host.getAttribute('data-done'))return;
   host.setAttribute('data-done','1');
+  // Paint the last list at once from this browser's memory, then refresh it.
+  var cached=null; try{cached=JSON.parse(localStorage.getItem('gibby-artists')||'null')}catch(e){}
+  if(cached&&cached.instructors&&cached.instructors.length){paintArtists(host,cached.instructors)}
+  else{host.innerHTML='<div style="opacity:.6;padding:24px 0">Loading our teaching artists\u2026</div>'}
   fetch(APP+'/embed/instructors.json').then(function(r){return r.json()}).then(function(d){
+    try{localStorage.setItem('gibby-artists',JSON.stringify(d))}catch(e){}
     var list=d.instructors||[];
     if(!list.length){host.innerHTML='';return}
+    if(cached&&JSON.stringify(cached)===JSON.stringify(d))return;
+    paintArtists(host,list);
+    rep('artists='+list.length);
+  }).catch(function(e){rep('artists fetch failed: '+e)});
+}
+function paintArtists(host,list){
+  {
     var h='<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
     list.forEach(function(i){
       h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
@@ -128,8 +140,7 @@ function renderInstructors(){
         +'</div>';
     });
     host.innerHTML=h+'</div>';
-    rep('artists='+list.length);
-  }).catch(function(e){rep('artists fetch failed: '+e)});
+  }
 }
 /* One line under the Art Workshops intro pointing at the teaching artists page.
    Placed by this script so the busy workshops page never needs hand editing. */

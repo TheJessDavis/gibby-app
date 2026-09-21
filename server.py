@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.101.2-signup-only"
+VERSION = "10.102.0-closed-months"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -292,7 +292,7 @@ def init_db():
         except Exception: pass
     try: c.execute("ALTER TABLE users ADD COLUMN headshot_px INTEGER")   # the square side of the website headshot
     except Exception: pass
-    for col in ("bio_parts", "headshot_by"):     # the three bio prompts as JSON; who supplied the headshot (artist | gibby)
+    for col in ("bio_parts", "headshot_by", "headshot_web"):     # bio prompts JSON; who supplied the headshot; a 600px copy for the website
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
@@ -2151,7 +2151,16 @@ def _avail_months(c):
 
 FALL_MONTHS = {8, 9, 10, 11}
 
+def closed_months():
+    """Months an admin has closed to new bookings, as (year, month) pairs; meta 'closed_months' like '2026-10, 2026-11'."""
+    out = set()
+    for part in (_meta_get("closed_months") or "").replace(";", ",").split(","):
+        try: y, m = (int(x) for x in part.strip().split("-")[:2]); out.add((y, m))
+        except ValueError: pass
+    return out
+
 def month_is_visible(c, month, today=None):
+    if (season_year(month), month) in closed_months(): return False   # closed by an admin
     if month in FALL_MONTHS: return True     # fall booking is open from day one
     # An admin can open booking through a given month early (Connections > Email >
     # Deadline reminders), e.g. so spring classes can be submitted before a deadline.
@@ -2494,7 +2503,9 @@ DEADLINE_DEFAULTS = {"what": "all spring classes (January through April)", "date
                      "start": "2026-09-30", "every": "14", "open_through": "2027-04"}
 
 def deadline_settings():
-    return {k: (_meta_get("deadline_" + k) or v) for k, v in DEADLINE_DEFAULTS.items()}
+    d = {k: (_meta_get("deadline_" + k) or v) for k, v in DEADLINE_DEFAULTS.items()}
+    d["closed_months"] = _meta_get("closed_months") or ""
+    return d
 
 def send_deadline_reminders(c, today, force=False, cfg=None):
     """One reminder to every instructor on the campaign days. Returns the number sent."""
@@ -3144,7 +3155,7 @@ class H(http.server.BaseHTTPRequestHandler):
         mhs = re.match(r"^/headshot/(\d+)\.jpg$", p)
         if mhs:
             # Public headshot for the website's teaching artists list.
-            c = db(); r = c.execute("SELECT headshot AS photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
+            c = db(); r = c.execute("SELECT COALESCE(headshot_web, headshot) AS photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
             if not r or not (r["photo"] or "").startswith("data:image/"): return self.send_error(404)
             head, b64 = r["photo"].split(",", 1)
             mime = head[5:].split(";")[0] or "image/jpeg"
@@ -3505,14 +3516,16 @@ class H(http.server.BaseHTTPRequestHandler):
     def _public_instructors(self):
         """Teaching artists with a headshot or bio on their profile: the website's list."""
         c = db()
-        rows = [dict(r) for r in c.execute("""SELECT id, name, headshot AS photo, bio, skills, social_website, social_instagram, social_etsy, role
+        rows = [dict(r) for r in c.execute("""SELECT id, name, substr(COALESCE(headshot_web, headshot), 1, 12) || substr(COALESCE(headshot_web, headshot), -64) AS photo,
+                    bio, skills, social_website, social_instagram, social_etsy, role
                     FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin')
                     AND (COALESCE(bio,'')!='' OR COALESCE(headshot,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
         c.close()
         today = datetime.date.today()
         upcoming = {}
         c2 = db()
-        for cl in c2.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL AND instructor_id IS NOT NULL""").fetchall():
+        for cl in c2.execute("""SELECT id, title, slot_date, session_dates, is_series, close_days, instructor_id, external_ids
+                                 FROM classes WHERE status='approved' AND deleted_at IS NULL AND instructor_id IS NOT NULL""").fetchall():
             cl = dict(cl)
             try: ext = json.loads(cl.get("external_ids") or "{}")
             except Exception: ext = {}
@@ -3585,7 +3598,7 @@ class H(http.server.BaseHTTPRequestHandler):
             n = c.execute("SELECT COUNT(*) FROM slots WHERE status='available' AND deleted_at IS NULL").fetchone()[0]
             c.close()
             icfg = integrations.load_config()
-            return self.send_json({"version": VERSION, "open_slots": n,
+            return self.send_json({"version": VERSION, "open_slots": n, "started": STARTED_AT,
                 "calendar_source": gcal.LAST_SOURCE,
                 "sync_error": LAST_SYNC_ERROR,
                 "posting_live": bool(icfg.get("live")),
@@ -3666,15 +3679,16 @@ class H(http.server.BaseHTTPRequestHandler):
                             d = dict(r); d["mine"] = True      # the picker marks these "your current time"
                             rows.append(d)
                     rows.sort(key=lambda r: r["id"])
-            c.close()
             notice = None
+            closed = closed_months()
+            months = sorted({p.month for p in (parse_day(r["date"]) for r in rows) if p}, key=_season_key)
+            closed_here = [m for m in months if (season_year(m), m) in closed]
             if u["role"] == "instructor":
-                # Months unlock one at a time; hide the rest and say when the next opens.
-                months = sorted({p.month for p in (parse_day(r["date"]) for r in rows) if p}, key=_season_key)
-                spring = [m for m in months if m not in FALL_MONTHS]
-                show = set(spring[:visible_month_count()]) | (set(months) & FALL_MONTHS)
+                # One rule for what an instructor may book: month_is_visible (fall open,
+                # admin's open-through, months unlocking one at a time, closed months).
+                show = {m for m in months if month_is_visible(c, m)}
                 rows = [r for r in rows if (lambda p: p and p.month in show)(parse_day(r["date"]))]
-                hidden = [m for m in months if m not in show]
+                hidden = [m for m in months if m not in show and m not in closed_here]
                 if hidden:
                     t = datetime.date.today()
                     unlock = _month_last_day(t)
@@ -3682,6 +3696,14 @@ class H(http.server.BaseHTTPRequestHandler):
                         unlock = _month_last_day(unlock + datetime.timedelta(days=1))
                     notice = (f"{_MON_FULL[hidden[0]-1]} dates open on {day_label(unlock)}. "
                               f"A new month opens on the last day of every month.")
+            else:
+                # Admins see everything except months closed on purpose.
+                rows = [r for r in rows if (lambda p: p and (season_year(p.month), p.month) not in closed)(parse_day(r["date"]))]
+            if closed_here:
+                names = [_MON_FULL[m-1] for m in closed_here]
+                cl_txt = (names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]) + (" is" if len(names) == 1 else " are") + " closed to new bookings."
+                notice = (cl_txt + " " + notice) if notice else cl_txt
+            c.close()
             return self.send_json({"slots": rows, "notice": notice})
         if p in ("/api/templates","/api/templates/all"):
             u = self.require()
@@ -4851,7 +4873,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 px = int(b.get("headshot_px") or 0)
                 if hs and px < HEADSHOT_MIN_PX:
                     c.close(); return self.send_json({"error": f"That photo is only {px}px across. The website needs at least {HEADSHOT_MIN_PX}px; please choose a larger, sharper photo."},400)
-                c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by=? WHERE id=?", (hs or None, px if hs else None, "artist" if hs else None, u["id"]))
+                hw = str(b.get("headshot_web") or "")
+                c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by=?, headshot_web=? WHERE id=?", (hs or None, px if hs else None, "artist" if hs else None, hw if (hs and hw.startswith("data:image/") and len(hw) < 400_000) else None, u["id"]))
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             c.commit(); c.close()
@@ -5245,7 +5268,8 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             head, b64 = hs.split(",", 1)
             # the small avatar comes from the same picture so the app matches the site
-            c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=? WHERE id=? AND deleted_at IS NULL", (hs, px, b.get("photo") or hs, int(mhp.group(1))))
+            hw = str(b.get("headshot_web") or "")
+            c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=?, headshot_web=? WHERE id=? AND deleted_at IS NULL", (hs, px, b.get("photo") or hs, hw if (hw.startswith("data:image/") and len(hw) < 400_000) else None, int(mhp.group(1))))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/incidents":
@@ -5296,6 +5320,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour incident report went to Michelle Truban and Seth Cosans with the completed form attached. "
                 f"Thank you for filing it promptly.\n\nThe Gibby", attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")])
             return self.send_json({"ok":True, "id": rid, "folder": folder_link})
+        mhw = re.match(r"^/api/admin/headshot/(\d+)/web$", p)
+        if mhw:
+            # A 600px copy of an existing headshot for the website (made in the browser).
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json(); hw = str(b.get("headshot_web") or "")
+            if not hw.startswith("data:image/") or len(hw) > 400_000: return self.send_json({"error":"bad image"},400)
+            c = db(); c.execute("UPDATE users SET headshot_web=? WHERE id=?", (hw, int(mhw.group(1)))); c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/admin/incident-settings":
             u = self.require("admin")
             if not u: return
@@ -6019,6 +6052,7 @@ class H(http.server.BaseHTTPRequestHandler):
             for k in DEADLINE_DEFAULTS:
                 if k in b: _meta_set("deadline_" + k, str(b.get(k) or "").strip())
             if "open_through" in b: _meta_set("open_through", str(b.get("open_through") or "").strip())
+            if "closed_months" in b: _meta_set("closed_months", str(b.get("closed_months") or "").strip()[:200])
             return self.send_json({"ok": True, "deadline": deadline_settings()})
         if p == "/api/admin/deadline-send":
             u = self.require("admin")
@@ -7815,6 +7849,7 @@ def invite_instructor(c, name, email, proto, host):
     return uid, name
 
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
+STARTED_AT = now()     # tells a cold start from a warm one (see /api/version)
 
 class Threaded(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True

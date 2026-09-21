@@ -1047,7 +1047,7 @@ function pfCustomSkill(){
 }
 function pfClearPhoto(){ PF_PHOTO=''; PF_HEADSHOT=''; PF_HEADSHOT_PX=0; renderProfile(); }
 const BIO_MIN=40, BIO_MAX=80, HEADSHOT_MIN=600, HEADSHOT_MAX=1400;
-let PF_HEADSHOT=null, PF_HEADSHOT_PX=0;
+let PF_HEADSHOT=null, PF_HEADSHOT_PX=0, PF_HEADSHOT_WEB=null;
 function bioParts(){ return [1,2,3].map(i=>($('#pf_bio'+i)?$('#pf_bio'+i).value.trim():'')); }
 function bioCount(){ const o=$('#pf_biocount'); if(!o) return; const t={value:bioParts().filter(Boolean).join(' ')}; const n=t.value.trim()?t.value.trim().split(/\s+/).length:0;
   o.textContent = n===0 ? '' : n<BIO_MIN ? `${n} words so far, ${BIO_MIN-n} more to go` : n>BIO_MAX ? `${n} words, ${n-BIO_MAX} over the limit of ${BIO_MAX}` : `${n} words. Just right.`;
@@ -1070,6 +1070,9 @@ function pfPickPhoto(ev){
     const big=Math.min(side,HEADSHOT_MAX), c2=document.createElement('canvas'); c2.width=c2.height=big; g=c2.getContext('2d');
     g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,big,big);
     PF_HEADSHOT=c2.toDataURL('image/jpeg',.88); PF_HEADSHOT_PX=big;
+    const c3=document.createElement('canvas'); c3.width=c3.height=600; g=c3.getContext('2d');
+    g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,600,600);
+    PF_HEADSHOT_WEB=c3.toDataURL('image/jpeg',.82);
     renderProfile();
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
@@ -1153,7 +1156,7 @@ async function saveProfile(){
     if(bio && (nw<BIO_MIN || nw>BIO_MAX)) return showErr('perr',`Your bio is ${nw} word${nw===1?'':'s'} in all; it needs to be between ${BIO_MIN} and ${BIO_MAX} words.`);
     const body={name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
       socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value, etsy:$('#pf_etsy')?$('#pf_etsy').value:''}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio, bio_parts:parts};
-    if(PF_HEADSHOT!==null){ body.headshot=PF_HEADSHOT; body.headshot_px=PF_HEADSHOT_PX; }
+    if(PF_HEADSHOT!==null){ body.headshot=PF_HEADSHOT; body.headshot_px=PF_HEADSHOT_PX; body.headshot_web=PF_HEADSHOT_WEB||''; }
     await api('/api/profile','POST',body);
     await api('/api/me').then(r=>ME=r.user);
     PF_PHOTO=null; PF_SKILLS=null; PF_HEADSHOT=null; PF_HEADSHOT_PX=0; boot();
@@ -1890,7 +1893,9 @@ async function adminHeadshot(uid, ev){
     g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,big,big);
     const c1=document.createElement('canvas'); c1.width=c1.height=240; g=c1.getContext('2d');
     g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,240,240);
-    try{ await api('/api/admin/headshot/'+uid,'POST',{headshot:c2.toDataURL('image/jpeg',.88), headshot_px:big, photo:c1.toDataURL('image/jpeg',.82)}); }catch(e){ alert(e.message); return; }
+    const c3=document.createElement('canvas'); c3.width=c3.height=600; g=c3.getContext('2d');
+    g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,600,600);
+    try{ await api('/api/admin/headshot/'+uid,'POST',{headshot:c2.toDataURL('image/jpeg',.88), headshot_px:big, photo:c1.toDataURL('image/jpeg',.82), headshot_web:c3.toDataURL('image/jpeg',.82)}); }catch(e){ alert(e.message); return; }
     adminPeople();
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
@@ -2229,6 +2234,8 @@ async function adminEmail(){
         <div><label style="margin-top:0">First reminder</label><input id="dl_start" type="date" value="${esc((d.deadline||{}).start||'')}"></div></div>
       <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Repeat every (days)</label><input id="dl_every" type="number" min="1" value="${esc((d.deadline||{}).every||'14')}"></div>
         <div><label style="margin-top:0">Booking open through (YYYY-MM)</label><input id="dl_open" placeholder="2027-04" value="${esc((d.deadline||{}).open_through||'')}"></div></div>
+      <label>Months closed to new bookings (YYYY-MM, comma separated)</label><input id="dl_closed" placeholder="e.g. 2026-10, 2026-11" value="${esc((d.deadline||{}).closed_months||'')}">
+      <div class="hint">Instructors cannot pick dates in a closed month. Classes already booked there are not affected.</div>
       <div class="hint">Reminders go out on the first date, every N days after, and on the deadline morning. Clear the deadline to stop them. "Booking open through" lets instructors book those months now instead of waiting for the usual month-end unlock.</div>
       <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="saveDeadline()">Save reminders</button><button class="btn ghost" onclick="sendDeadlineNow()">Send one now</button></div>
     </div><div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Send now</h3>
@@ -2324,7 +2331,7 @@ async function reimbPaid(id, paid){
   renderAdmin('money');
 }
 async function saveDeadline(){
-  try{ await api('/api/admin/deadline-settings','POST',{what:$('#dl_what').value, date:$('#dl_date').value, start:$('#dl_start').value, every:$('#dl_every').value, open_through:$('#dl_open').value}); alert('Saved.'); }
+  try{ await api('/api/admin/deadline-settings','POST',{what:$('#dl_what').value, date:$('#dl_date').value, start:$('#dl_start').value, every:$('#dl_every').value, open_through:$('#dl_open').value, closed_months:$('#dl_closed').value}); alert('Saved.'); }
   catch(e){ alert(e.message); }
 }
 async function sendDeadlineNow(){
