@@ -95,7 +95,8 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - Class requests post quietly unless the admin chooses "Post it and email everyone".
 - No em dashes anywhere in copy.
 - Never handle passwords or payment details for the owner.
-- No "Final numbers" headcount email at the registration cutoff (removed Sep 21, 2026).
+- No "Final numbers" headcount email at the registration cutoff, and no "A week out and not
+  full" promote nudge (both removed Sep 21, 2026). The under-minimum decision email stays.
 
 ## How the main flows work
 

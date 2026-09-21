@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.94.4-pay-estimate"
+VERSION = "10.94.5-no-week-nudge"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2691,25 +2691,8 @@ def run_scheduler(asof=None):
                     f"Keep open or Cancel and refund. Students are only emailed if you cancel.",
                     today, cfg)
                 if sent: actions.append(f"under-minimum decision nudge: {cls['title']}")
-            if days == 7 and enrolled < (cls["max_p"] or 0):
-                # A week out and not full. NOTHING is posted automatically: the
-                # app never publishes anything a person did not approve. The
-                # admins get one nudge and the dashboard's Promote button does
-                # the posting. The email_log claim keeps the nudge once-only.
-                try:
-                    c.execute("INSERT INTO email_log(class_id,email_type,sent_at,recipients) VALUES(?,?,?,0)",
-                              (cls["id"], "fb_week_boost", now()))
-                    nudged = True
-                except sqlite3.IntegrityError:
-                    nudged = False
-                if nudged:
-                    mailer.send(emails_for(c, "WHERE role='admin'"),
-                        f"A week out and not full: {cls['title']}",
-                        f"\"{cls['title']}\" on {cls['slot_date']} has {enrolled}/{cls['max_p']} "
-                        f"seats taken with a week to go.\n\nNothing has been posted. Open the app "
-                        f"and tap Promote if you want a \"spots still open\" post on the Gibby's "
-                        f"Facebook Page.")
-                    actions.append(f"week-out promote nudge: {cls['title']}")
+            # No "a week out and not full" nudge: the owner asked for it to stop
+            # (Sep 21, 2026). The under-minimum decision email above still goes.
             # No "final numbers" email at the registration cutoff: the owner asked for
             # it to stop (Sep 21, 2026). Eventbrite still closes sales on its own and
             # the roster email the day before carries the count.
