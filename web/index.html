@@ -566,7 +566,7 @@ async function bootInner(){
   // The tour runs ONCE per person per tour version: new people see it on their
   // first login, everyone else sees it once more when the tour changes.
   if(user && !user.must_change_pw && (user.tour_seen||0) < TOUR_VERSION) setTimeout(startTour, 600);
-  if(user && location.hash==='#opportunities'){ history.replaceState(null,'',location.pathname); setTimeout(()=>{ if(actingRole()==='instructor') renderInstr('wanted'); else { HUB_MODE='wanted'; renderAdmin('requests'); } }, 300); }
+  if(user && location.hash==='#opportunities'){ history.replaceState(null,'',location.pathname); setTimeout(()=>{ if(actingRole()==='instructor') renderInstr('wanted'); else { renderAdmin('requests'); } }, 300); }
   const mrev=/^#review-(\d+)$/.exec(location.hash||'');
   if(mrev){ REVIEW_FOCUS=+mrev[1]; history.replaceState(null,'',location.pathname+location.search); }
   if(actingRole()==='admin') renderAdmin(REVIEW_FOCUS?'approvals':'dashboard'); else renderInstr('mine');
@@ -700,7 +700,7 @@ async function renderProfile(focus){
   if(focus){ const el=$('#pf_'+focus); if(el){ setTimeout(()=>{ el.scrollIntoView({behavior:'smooth',block:'center'}); if(el.tagName==='TEXTAREA'||el.tagName==='INPUT') el.focus(); }, 80); } }
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
+const MORE_ITEMS=[['supplies','\u{1F9FA}','Orders'],['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['email','\u2709\uFE0F','Email'],['integrations','\u{1F50C}','Integrations'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 const WIDE = window.matchMedia ? window.matchMedia('(min-width:900px)') : null;
 let BNAV_LAST=null;
@@ -1210,7 +1210,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequestsHub, supplies:adminRequestsHub,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1224,7 +1224,7 @@ async function loadNavBadges(){
       if(n>0) b.insertAdjacentHTML('beforeend', `<span class="navbadge">${n}</span>`); };
     put('approvals', c.needs_you);
     put('dashboard', c.failed);
-    put('requests', c.orders||0);
+    put('supplies', c.orders||0);
   }catch(_){/* badges are decoration; the queues are the truth */}
 }
 async function adminDashboard(){
@@ -1241,8 +1241,8 @@ async function adminDashboard(){
   if(d.pending.length) todo.push({k:'\u{1F4DD}', t:n(d.pending.length,'1 class waiting for approval','N classes waiting for approval'), go:"renderAdmin('approvals')"});
   if((d.graphic||[]).length) todo.push({k:'\u{1F5BC}️', t:n(d.graphic.length,'1 poster to review','N posters to review'), go:"renderAdmin('approvals')"});
   d.low.forEach(c=>todo.push({k:'\u{1F4C9}', t:`${c.title} is under minimum (${c.enrolled}/${c.min_p})`, go:`jumpTo('#low${c.id}')`}));
-  if(d.hands_raised) todo.push({k:'\u{1F64B}', t:n(d.hands_raised,'1 raised hand or proposal to confirm','N raised hands or proposals to confirm'), go:"HUB_MODE='wanted';renderAdmin('requests')"});
-  if(d.supplies_waiting) todo.push({k:'\u{1F9FA}', t:n(d.supplies_waiting,'1 supply order to place','N supply orders to place'), go:"HUB_MODE='orders';renderAdmin('requests')"});
+  if(d.hands_raised) todo.push({k:'\u{1F64B}', t:n(d.hands_raised,'1 raised hand or proposal to confirm','N raised hands or proposals to confirm'), go:"renderAdmin('requests')"});
+  if(d.supplies_waiting) todo.push({k:'\u{1F9FA}', t:n(d.supplies_waiting,'1 supply order to place','N supply orders to place'), go:"renderAdmin('supplies')"});
   if(d.photo_drafts) todo.push({k:'\u{1F4F7}', t:n(d.photo_drafts,'1 photo post to approve','N photo posts to approve'), go:"renderAdmin('marketing')"});
   if(d.reimbursements) todo.push({k:'\u{1F4B5}', t:n(d.reimbursements,'1 reimbursement to pay','N reimbursements to pay'), go:"renderAdmin('money')"});
   const waiting=[d.returned.length?n(d.returned.length,'1 class sent back','N classes sent back'):'', d.contracts_unsigned?n(d.contracts_unsigned,'1 contract unsigned','N contracts unsigned'):''].filter(Boolean);
@@ -1253,7 +1253,7 @@ async function adminDashboard(){
     ${waiting.length?`<div class="meta" style="margin:6px 2px 0">Waiting on instructors: ${waiting.join(' · ')}.</div>`:''}
     ${d.channel_summary?`<div class="meta" style="margin:6px 2px 0">\u{1F4C8} ${esc(d.channel_summary)} <a href="#" onclick="renderAdmin('money');return false">Details</a></div>`:''}
     <div class="two" style="margin:14px 0 4px">
-      <button class="btn ghost" onclick="HUB_MODE='wanted';renderAdmin('requests')">\u{1F4CC} Post an opportunity</button>
+      <button class="btn ghost" onclick="renderAdmin('requests')">\u{1F4CC} Post an opportunity</button>
       <button class="btn ghost" onclick="runScheduler()">⚙️ Run scheduler now</button></div>
     ${d.email_error?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0;margin-top:12px">
       <div class="row"><div><h3>⚠ Email is not going out</h3>
@@ -1758,7 +1758,7 @@ async function adminSupplies(){
       ${s.status==='requested'?`<button class="btn warn" onclick="supplyAct(${s.id},'declined')">Decline</button><button class="btn dark" onclick="supplyAct(${s.id},'ordered')">Ordered</button>`
        :s.status==='ordered'?`<span></span><button class="btn green" onclick="supplyAct(${s.id},'ready')">Ready at the Gibby</button>`
        :`<button class="btn ghost" onclick="supplyAct(${s.id},'requested')">Reopen</button><span></span>`}</div></div>`;
-  $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
+  $('#tab').innerHTML=`<h2>Supply <em>orders</em></h2>
     <p class="sub">Instructors ask from My classes: the class, a link to the exact item and how many. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
     <div class="card"><h3 style="font-size:1rem;margin:0 0 4px">Materials spreadsheet</h3>
       <div class="meta">Every class's supply list, one tab per season (Fall 2026, Spring 2027, Summer 2027), rebuilt from the app every hour and after each submission.</div>
@@ -1987,7 +1987,7 @@ async function adminRequests(){
       ${more?`<button class="btn ghost" style="margin-top:6px;padding:8px 14px" onclick="RQ_SHOW_ALL['${key}']=true;adminRequests()">Show all ${list.length}</button>`:''}`;
   };
   const openByKind=KIND_ORDER.map(k=>group(KM[k], open.filter(r=>(r.kind||'teach')===k), 'open-'+k)).join('');
-  $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
+  $('#tab').innerHTML=`<h2>Requests</h2>
     <details class="card" id="rq_form" ${RQ_EDIT?'open':''} style="margin-bottom:4px"><summary style="cursor:pointer;font-weight:800;font-size:1rem" id="rq_formtitle">\u{1F4CC} Post an opportunity</summary>
       <div class="hint" style="margin-top:6px">A class to teach, a helping hand, a chance to sell or show, or paid design work. Instructors see it on their Opportunities tab; email everyone only when you choose to.</div>
       <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell</button><button data-v="design" onclick="rqSetKind('design')">\u{1F9E9} Design</button></div>
