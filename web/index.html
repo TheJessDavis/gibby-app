@@ -80,7 +80,7 @@
   @font-face{font-family:'Summer Fresh';src:url('/SummerFresh.ttf') format('truetype');font-display:swap}
   h2{font-size:28px;letter-spacing:-.03em;margin:6px 0 4px;font-weight:800}
   h2 em{font-family:var(--serif);font-style:italic;font-weight:600}
-  .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4}
+  .sub{font-size:13px;color:var(--ink-soft);margin:0 0 16px;line-height:1.4;font-weight:500}
   .tabs{display:flex;gap:7px;margin-bottom:16px;flex-wrap:wrap}
   .tabs button{flex:0 1 auto;border:none;background:var(--white);padding:9px 16px;border-radius:999px;font-weight:800;font-size:12.5px;cursor:pointer;color:var(--ink);box-shadow:0 3px 9px rgba(0,0,0,.05)}
   .tabs button.on{background:var(--ink);color:#fff}
@@ -166,11 +166,17 @@
   .btn.dark{background:var(--ink);color:#fff}.btn.green{background:#5a9c4d;color:#fff}
   .btn.warn{background:#fff;color:#C4442A;box-shadow:inset 0 0 0 2px rgba(242,118,92,.5)}
   .btn.ghost{background:rgba(0,0,0,.06);color:var(--ink)}
-  .hint{font-size:11px;color:var(--ink-soft);margin-top:6px;line-height:1.35}
+  .hint{font-size:11px;color:var(--ink-soft);margin-top:6px;line-height:1.35;font-weight:500}
+  #tab .meta, .card .meta{font-weight:500} .meta b, .meta strong{font-weight:800}
+  .clsrow .rowt span{font-weight:500} .todoline b{font-weight:700}
   .err{background:var(--coral);color:#fff;border-radius:12px;padding:10px 14px;font-size:12.5px;font-weight:800;margin:10px 0;display:none}
   .err.show{display:block}
   .ok-note{background:#DCEFD6;color:#2f6a26;border-radius:12px;padding:10px 14px;font-size:12.5px;font-weight:700;margin:10px 0}
   .muted{color:var(--ink-soft);font-size:13px;text-align:center;padding:30px 10px}
+  #toast{position:fixed;left:12px;right:12px;bottom:96px;z-index:120;max-width:440px;margin:0 auto;background:var(--ink);color:#fff;border-radius:14px;padding:12px 40px 12px 16px;font-size:13.5px;font-weight:600;line-height:1.4;white-space:pre-line;box-shadow:0 10px 30px rgba(0,0,0,.25);animation:toastin .18s ease-out}
+  #toast button{position:absolute;top:6px;right:8px;border:0;background:none;color:#fff;font-size:18px;line-height:1;cursor:pointer;padding:4px;opacity:.7}
+  @keyframes toastin{from{transform:translateY(10px);opacity:0}to{transform:none;opacity:1}}
+  @media(min-width:900px){#toast{bottom:24px;left:auto;right:32px;margin:0}}
   .photo{border:2px dashed var(--line);border-radius:14px;padding:18px;text-align:center;cursor:pointer;background:#fff;font-weight:700;font-size:13px;color:var(--ink-soft)}
   .photo img{max-width:100%;border-radius:10px;display:block}
   .fab{position:fixed;bottom:0;left:0;right:0;max-width:440px;margin:0 auto;padding:14px 20px 20px;
@@ -689,17 +695,20 @@ async function renderProfile(focus){
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="PF_PHOTO=null;PF_SKILLS=null;boot()">Back</button>
     <div style="height:8px"></div>
-    ${actingRole()==='admin'||(ME&&ME.lockbox_signed)?'':`<button class="btn ghost" onclick="openLockbox()">\u{1F510} Sign the lockbox contract</button>
+    ${actingRole()==='admin'||(ME&&ME.lockbox_signed)?'':`<button class="btn ghost" onclick="openLockbox()">Sign the lockbox contract</button>
     <div style="height:8px"></div>`}
-    <button class="btn ghost" onclick="startTour()">🧭 Take the tour again</button>
+    <button class="btn ghost" onclick="startTour()">Take the tour again</button>
     <div style="height:8px"></div>
-    <button class="btn ghost" onclick="logout()">👋 Sign out</button>
+    <button class="btn ghost" onclick="logout()">Sign out</button>
   </div>`;
   if(focus){ const el=$('#pf_'+focus); if(el){ setTimeout(()=>{ el.scrollIntoView({behavior:'smooth',block:'center'}); if(el.tagName==='TEXTAREA'||el.tagName==='INPUT') el.focus(); }, 80); } }
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['supplies','\u{1F9FA}','Orders'],['incidents','\u{1F6A8}','Incidents'],['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
-  ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['email','\u2709\uFE0F','Email'],['integrations','\u{1F50C}','Integrations'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
+const MORE_ITEMS=[['all','\u{1F4CB}','All classes','Classes'],['calendar','\u{1F5D3}\uFE0F','Calendar','Classes'],['slots','\u{1F39F}\uFE0F','Slots','Classes'],['templates','\u{1F4A1}','Templates','Classes'],
+  ['money','\u{1F4B0}','Money','Money'],['supplies','\u{1F9FA}','Orders','Money'],
+  ['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
+  ['incidents','\u{1F6A8}','Incidents','Records'],['audit','\u{1F50D}','Audit','Records'],['archive','\u{1F5C3}\uFE0F','Archive','Records']];
+const MORE_GROUPS=['Classes','Money','Reach','Records'];
 /* A tab left open across a deploy keeps old code and can misread new answers.
    Watch the version and reload quietly when nothing is half-typed. */
 let APP_VER=null, VER_BANNER=false;
@@ -717,6 +726,18 @@ async function checkVersion(){
 setInterval(checkVersion, 5*60*1000);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkVersion(); });
 setTimeout(checkVersion, 4000);
+/* Quiet messages instead of browser pop-ups. Confirmations that can't be
+   undone still use confirm(). */
+let TOAST_T=null;
+function toast(msg){
+  const old=document.getElementById('toast'); if(old) old.remove(); clearTimeout(TOAST_T);
+  const t=document.createElement('div'); t.id='toast';
+  const text=String(msg==null?'':msg).trim(); t.textContent=text;
+  const x=document.createElement('button'); x.textContent='\u00d7'; x.setAttribute('aria-label','Dismiss'); x.onclick=()=>t.remove(); t.appendChild(x);
+  document.body.appendChild(t);
+  TOAST_T=setTimeout(()=>{ if(t.parentNode) t.remove(); }, Math.min(14000, 2600 + text.length*35));
+}
+window.alert = (m)=>toast(m);
 const WIDE = window.matchMedia ? window.matchMedia('(min-width:900px)') : null;
 let BNAV_LAST=null;
 if(WIDE && WIDE.addEventListener) WIDE.addEventListener('change', ()=>{ if(BNAV_LAST && $('#bnav') && $('#bnav').style.display!=='none') buildBnav(BNAV_LAST.role, BNAV_LAST.active); });
@@ -734,8 +755,7 @@ function buildBnav(role, active){
       + item('requests','\u{1F4CC}','Requests',"renderAdmin('requests')")
       + item('people','\u{1F465}','People',"renderAdmin('people')")
       + (wide
-        ? `<div class="navsec">More</div>`
-          + MORE_ITEMS.map(([k,i,l])=>`<button class="navsub ${active===k?'on':''}" data-tab="${k}" onclick="renderAdmin('${k}')"><span class="bi">${i}</span><span class="bl">${l}</span></button>`).join('')
+        ? MORE_GROUPS.map(g=>`<div class="navsec" style="${g===MORE_GROUPS[0]?'':'border-top:0;margin-top:2px;padding-top:6px'}">${g}</div>`+MORE_ITEMS.filter(m=>m[3]===g).map(([k,i,l])=>`<button class="navsub ${active===k?'on':''}" data-tab="${k}" onclick="renderAdmin('${k}')"><span class="bi">${i}</span><span class="bl">${l}</span></button>`).join('')).join('')
           + `<div class="navsec">You</div>`
           + `<button class="navsub" data-tab="profile" onclick="renderProfile()"><span class="bi">\u270F\uFE0F</span><span class="bl">Profile</span></button>`
           + `<button class="navsub" onclick="logout()"><span class="bi">\u{1F44B}</span><span class="bl">Sign out</span></button>`
@@ -760,7 +780,8 @@ function openMore(){
   const sh=$('#moresheet');
   const who = ME ? `<div class="mwho" style="grid-column:1/-1">${avaHTML(ME)}<span>${esc(ME.name)}<small>${esc(ME.email||'')}</small></span></div>` : '';
   sh.innerHTML = who
-    + MORE_ITEMS.map(([k,i,l])=>`<button onclick="closeMore();renderAdmin('${k}')"><span class="bi">${i}</span>${l}</button>`).join('')
+    + MORE_GROUPS.map(g=>`<div class="mgroup" style="grid-column:1/-1;font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft);padding:6px 4px 0">${g}</div>`
+        + MORE_ITEMS.filter(m=>m[3]===g).map(([k,i,l])=>`<button onclick="closeMore();renderAdmin('${k}')"><span class="bi">${i}</span>${l}</button>`).join('')).join('')
     + `<button onclick="closeMore();renderProfile()"><span class="bi">✏️</span>Profile</button>`
     + `<button onclick="closeMore();logout()"><span class="bi">\u{1F44B}</span>Sign out</button>`;
   sh.style.display='grid';
@@ -1269,8 +1290,8 @@ async function adminDashboard(){
     ${waiting.length?`<div class="meta" style="margin:6px 2px 0">Waiting on instructors: ${waiting.join(' · ')}.</div>`:''}
     ${d.channel_summary?`<div class="meta" style="margin:6px 2px 0">\u{1F4C8} ${esc(d.channel_summary)} <a href="#" onclick="renderAdmin('money');return false">Details</a></div>`:''}
     <div class="two" style="margin:14px 0 4px">
-      <button class="btn ghost" onclick="renderAdmin('requests')">\u{1F4CC} Post an opportunity</button>
-      <button class="btn ghost" onclick="runScheduler()">⚙️ Run scheduler now</button></div>
+      <button class="btn ghost" onclick="renderAdmin('requests')">Post an opportunity</button>
+      <button class="btn ghost" onclick="runScheduler()">Run scheduler now</button></div>
     ${d.email_error?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0;margin-top:12px">
       <div class="row"><div><h3>⚠ Email is not going out</h3>
         <div class="meta">The last email the app tried to send was rejected, so instructors and admins are not getting notifications, invitations or contracts.</div></div></div>
@@ -1662,9 +1683,9 @@ async function adminPeople(){
     </div></div>`;
   $('#tab').innerHTML=`<h2>Instructors <em>&amp; admins</em></h2>
     <p class="sub">Adding someone emails them an invitation to set their own password. You never handle passwords. The email address is required: it is how they sign in and where every reminder, approval and reset goes.</p>
-    <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">\u{1F4CB} Request paperwork from everyone missing it</button>
-    <div class="two" style="margin-bottom:10px"><a class="btn ghost" style="text-align:center" href="/api/admin/headshots.zip">\u{1F4F7} Download all headshots (zip)</a>
-      <a class="btn ghost" style="text-align:center" href="/embed/instructors" target="_blank" rel="noopener noreferrer">\u{1F441}\uFE0F Preview the website list</a></div>
+    <button class="btn ghost" style="margin-bottom:10px" onclick="paperRequest(0,'everyone who is missing it')">Request paperwork from everyone missing it</button>
+    <div class="two" style="margin-bottom:10px"><a class="btn ghost" style="text-align:center" href="/api/admin/headshots.zip">Download all headshots (zip)</a>
+      <a class="btn ghost" style="text-align:center" href="/embed/instructors" target="_blank" rel="noopener noreferrer">Preview the website list</a></div>
     ${lb?`<details class="card" id="lockbox" style="margin-bottom:10px" ${LB_OPEN?'open':''} ontoggle="LB_OPEN=this.open"><summary style="cursor:pointer;font-weight:800">\u{1F510} Lockbox contract (${lb.signed.length} signed, ${lb.unsigned.filter(x=>x.role==='instructor').length} instructor${lb.unsigned.filter(x=>x.role==='instructor').length===1?'':'s'} not yet)</summary>
       <p class="sub" style="margin:8px 0 6px">Instructors sign the Key Code Holder Contract in the app. Each signature emails the person below with the instructor's email address, and they send the code.</p>
       <label>Who sends the code (emailed each time someone signs)</label><input id="lb_to" value="${esc(lb.to||'')}" placeholder="mtruban@theeverett.com">
@@ -1675,7 +1696,7 @@ async function adminPeople(){
       ${lb.signed.length?lb.signed.map(x=>`<div class="meta" style="margin:2px 0">\u2713 <b>${esc(x.name||x.email)}</b> · ${esc((x.signed_at||'').slice(0,10))}${x.via==='admin'?' (marked by an admin)':x.signed_name&&x.signed_name!==x.name?' as '+esc(x.signed_name):''} · <a href="#" onclick="lockboxMark(${x.id},false);return false">undo</a></div>`).join(''):'<div class="hint">Nobody yet.</div>'}
       <label style="margin-top:14px">Not signed (${lb.unsigned.length})</label>
       ${lb.unsigned.map(x=>`<div class="meta" style="margin:2px 0">${esc(x.name||x.email)}${x.role==='admin'?' <span class="pill appr">admin</span>':''} · <a href="#" onclick="lockboxMark(${x.id},true);return false">mark signed on paper</a></div>`).join('')}
-      ${lb.unsigned.some(x=>x.role==='instructor')?`<button class="btn ghost" style="margin-top:10px" onclick="lockboxRemind()">\u2709\uFE0F Email every instructor who has not signed</button>`:''}
+      ${lb.unsigned.some(x=>x.role==='instructor')?`<button class="btn ghost" style="margin-top:10px" onclick="lockboxRemind()">Email every instructor who has not signed</button>`:''}
       <details style="margin-top:12px"><summary style="cursor:pointer;font-weight:800;font-size:13px">Contract text${lb.contract_custom?' (edited)':''}</summary>
         <textarea id="lb_text" rows="12" style="margin-top:8px;font-size:12.5px">${esc(lb.contract||'')}</textarea>
         <div class="hint">What instructors read and sign. Names in it (Michelle Truban, Seth Cosans) can be changed here.</div>
@@ -1990,7 +2011,7 @@ async function adminRequests(){
       ${r.notes?`<div class="meta" style="margin-top:4px">${esc(r.notes)}</div>`:''}
       ${r.status==='claimed'?`<div class="meta" style="margin-top:4px;color:#3F7A32;font-weight:800">Claimed by ${esc(r.claimed_by_name||'?')} ${esc((r.claimed_at||'').slice(0,10))}${r.class_title?' · submitted as '+esc(r.class_title)+' ('+esc(r.class_status)+')':' · proposal in progress'}</div>`:''}</div>
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
-    <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>${r.status==='open'?`<button class="btn ghost" onclick="rqNotify(${r.id})">\u2709\uFE0F Email everyone</button>`:'<span></span>'}</div>
+    <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="rqEdit(${r.id})">Edit</button>${r.status==='open'?`<button class="btn ghost" onclick="rqNotify(${r.id})">Email everyone</button>`:'<span></span>'}</div>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
   const KIND_ORDER=['teach','help','sell','design'];
   const row=r=>`<details class="clsrow ${(r.interest||[]).some(i=>i.status==='raised')?'cls-back':r.status==='open'?'cls-pending':r.status==='claimed'?'cls-approved':'cls-off'}" ${RQ_OPEN===r.id?'open':''}>
@@ -2140,14 +2161,14 @@ async function adminIntegrations(){
         : 'No backup has run yet.'}</div></div>${d.backup&&d.backup.ok?'<span class="pill appr">protected</span>':'<span class="pill inc">at risk</span>'}</div></summary><div style="padding:0 16px 14px">
       <div class="meta" style="margin-top:8px">A full copy of the database (classes, registrations, accounts, contracts and signatures) is snapshotted every night into the <b>Gibby Backups</b> folder on Drive.</div>
       ${d.backup&&d.backup.link?`<a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.backup.link}" target="_blank">Open the latest backup on Drive</a>`:''}
-      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="${d.drive.backups}" target="_blank" rel="noopener">\u{1F4C1} Open the backups folder on Drive</a>
+      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="${d.drive.backups}" target="_blank" rel="noopener">Open the backups folder on Drive</a>
       <button class="btn ghost" style="margin-top:8px" onclick="backupNow()">Back up now</button>
       <div class="meta" style="margin-top:10px">${d.compact&&d.compact.ok
         ? 'Compacted '+esc((d.compact.at||'').slice(0,10))+': '+Math.round(d.compact.before_bytes/1048576)+' MB \u2192 '+Math.round(d.compact.after_bytes/1048576)+' MB'
         : 'Old audit entries can hold large images. Compacting removes those blobs (never the history itself) and reclaims disk.'}</div>
       <button class="btn ghost" style="margin-top:6px" onclick="compactDb()">Compact database</button></div></details>
     <details class="card" style="padding:0"><summary style="cursor:pointer;padding:14px 16px;list-style:none"><div class="row"><div><h3 style="margin:0">Contracts on Drive</h3><div class="meta">Signed contracts are filed to the Gibby Contracts folder as PDFs</div></div></div></summary><div style="padding:0 16px 14px">
-      <a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.drive.contracts}" target="_blank" rel="noopener">\u{1F4C1} Open the contracts folder on Drive</a>
+      <a class="btn ghost" style="margin-top:10px;display:block;text-align:center;text-decoration:none" href="${d.drive.contracts}" target="_blank" rel="noopener">Open the contracts folder on Drive</a>
       <button class="btn ghost" style="margin-top:8px" onclick="refileContracts()">Re-file every signed contract as a PDF</button>
       <div class="hint">Use this once to replace the old unreadable .html copies. New contracts file themselves.</div></div></details>
     <p class="hint">Real posting code is wired in (<b>integrations.py</b>). Add account keys to <b>config.json</b> and set <b>"live": true</b> to actually post. Until then every platform runs in dry-run and logs what it would send.</p>`;
@@ -3013,7 +3034,7 @@ function cardCls(c){
     ${actingRole()==='instructor' && ['pending','graphic_review','instructor_review','approved'].includes(c.status) && classEndKey(c)>=todayKey()
       ? (c.needs_volunteer
           ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Assistant requested${c.status==='approved'?' (posted under Opportunities > Help)':' (posts under Opportunities once The Gibby approves it)'} · <a href="#" onclick="needHelp(${c.id},false);return false">no longer needed</a></div>`
-          : `<button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="needHelp(${c.id},true)">🙋 I need a volunteer assistant</button>`)
+          : `<button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="needHelp(${c.id},true)">I need a volunteer assistant</button>`)
       : ''}
     ${actingRole()==='admin' && c.audit_ok ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 Open to other teaching artists to take free${c.learners?` · ${c.learners} coming`:''}</div>`:''}
     ${actingRole()==='instructor' && c.audit_ok && c.learners ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 ${c.learners} teaching artist${c.learners===1?'':'s'} coming to take this class</div>`:''}
@@ -3087,31 +3108,31 @@ function cardCls(c){
     ${c.status==='incomplete' && actingRole()==='instructor' ? `<button class="btn dark" style="margin-top:10px" onclick="startResubmit(${c.id})">Fix and resubmit</button>`:''}
     ${c.contract_status==='signed'?`<div class="meta" style="margin-top:8px">\u{1F58A}\uFE0F Contract signed by ${esc(c.contract_name||'')} on ${esc((c.contract_signed_at||'').slice(0,10))}</div>
       ${c.contract_signature?`<img src="${c.contract_signature}" alt="signature" style="height:36px;margin-top:4px;background:#fff;border-radius:8px;padding:2px 8px">`:''}
-      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="/contract-pdf/${c.id}" target="_blank">⬇ Download contract (PDF)</a>`:''}
+      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="/contract-pdf/${c.id}" target="_blank">Download contract (PDF)</a>`:''}
     ${c.contract_status==='sent' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px;color:#B45309">\u{1F4DD} Contract sent, waiting on signature</div>`:''}
     ${(()=>{ let fq=c.faq; try{ if(typeof fq==='string') fq=JSON.parse(fq||'[]'); }catch(_){ fq=[]; }
       return (fq&&fq.length)?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">FAQ (${fq.length})</summary>
         ${fq.map(x=>`<div class="meta" style="margin-top:5px"><b>${esc(x.q)}</b><br>${esc(x.a)}</div>`).join('')}</details>`:''; })()}
     ${actingRole()==='instructor' && c.status!=='cancelled' ? (c.template_requested
       ? `<div class="meta" style="margin-top:8px">\u2b50 Requested as a template. The Gibby is considering it.</div>`
-      : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">\u2b50 Request this to be a template</button>`) : ''}
+      : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">Request this to be a template</button>`) : ''}
     ${c.is_kids?`<div class="meta" style="margin-top:8px">\u{1F9D2} Kids' class: liability waiver, photo release and a <b>required</b> emergency contact are collected at Eventbrite checkout.</div>`:''}
     ${actingRole()==='admin' && c.status!=='cancelled'
-      ? `<button class="btn ghost" style="margin-top:8px" onclick="saveAsTemplate(${c.id})">\u2b50 Save as template${c.template_requested?' (instructor asked!)':''}</button>` : ''}
+      ? `<button class="btn ghost" style="margin-top:8px" onclick="saveAsTemplate(${c.id})">Save as template${c.template_requested?' (instructor asked!)':''}</button>` : ''}
     ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
       <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
       <div class="meta" style="margin-top:10px">${c.enrolled}/${c.max_p} enrolled ${c.enrolled<c.min_p?'· <span style="color:#B45309;font-weight:800">below minimum</span>':''}</div>
       ${c.rating_n?`<div class="meta" style="margin-top:6px"><b style="color:#B4761A">\u2605 ${c.rating_avg}</b> from ${c.rating_n} student${c.rating_n===1?'':'s'}${(c.rating_comments||[]).length?`<div style="margin-top:4px">${c.rating_comments.slice(0,3).map(x=>`<div style="border-left:3px solid var(--line);padding-left:8px;margin-top:4px">\u201c${esc(x.text)}\u201d</div>`).join('')}${c.rating_comments.length>3?`<div class="hint">and ${c.rating_comments.length-3} more</div>`:''}</div>`:''}</div>`:''}
-      ${c.status==='approved' && (c.external_ids||{}).eventbrite_id ? `<button class="btn dark" style="margin-top:10px" onclick="shareClass(${c.id})">\u{1F517} Share a tracked link</button>` : ''}
+      ${c.status==='approved' && (c.external_ids||{}).eventbrite_id ? `<button class="btn dark" style="margin-top:10px" onclick="shareClass(${c.id})">Share a tracked link</button>` : ''}
       <button class="btn ghost" style="margin-top:10px" onclick="viewRoster(${c.id})">View roster</button>
-      <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
-      <button class="btn ghost" style="margin-top:8px" onclick="orderForm(${c.id})">\u{1F9FA} Ask the Gibby to order supplies</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">Class photos</button>
+      <button class="btn ghost" style="margin-top:8px" onclick="orderForm(${c.id})">Ask the Gibby to order supplies</button>
       <div id="sq${c.id}"></div>
 
       <div id="rb${c.id}"></div>
       ${c.cal_start?`<div class="two" style="margin-top:8px">
-        <a class="btn ghost" style="text-decoration:none;text-align:center" href="/class-ics/${c.id}.ics">\u{1F4C5} Add to calendar</a>
+        <a class="btn ghost" style="text-decoration:none;text-align:center" href="/class-ics/${c.id}.ics">Add to calendar</a>
         <a class="btn ghost" style="text-decoration:none;text-align:center" target="_blank" rel="noopener" href="https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(c.title)}&dates=${c.cal_start}/${c.cal_end}&ctz=America/New_York&location=${encodeURIComponent('The Gibby, '+(c.room||''))}&details=${encodeURIComponent('Your class at The Gibby. Details and roster: '+location.origin)}">Google Calendar</a></div>
       <div class="hint">Add to calendar opens in Apple Calendar or Outlook${c.is_series?' with every session':''}. Google Calendar adds the ${c.is_series?'first session':'class'} to your Google account.</div>`:''}
       <div id="photos${c.id}"></div>
@@ -3739,6 +3760,32 @@ async function instrAudit(){
 
 /* The Everett Incident Report, filled in the app. PDF to its own Drive folder,
    emailed to Michelle and Seth the moment it is sent. */
+/* One place for everything an instructor asks The Gibby for. */
+function askGibby(){
+  const m=document.createElement('div'); m.id='askmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.45);z-index:70;display:flex;align-items:flex-end;justify-content:center;padding:12px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:20px;max-width:440px;width:100%;padding:10px 8px 8px">
+    <div style="font-family:'Summer Fresh',var(--disp);font-size:26px;padding:6px 10px 2px">Ask The Gibby</div>
+    <button class="todoline" onclick="document.getElementById('askmodal').remove();orderForm(0)"><span>\u{1F9FA}</span><b>Order supplies for a class</b><span class="rowchev">\u203A</span></button>
+    <button class="todoline" onclick="document.getElementById('askmodal').remove();renderInstr('reimb')"><span>\u{1F9FE}</span><b>Get paid back for something I bought</b><span class="rowchev">\u203A</span></button>
+    <button class="todoline" onclick="document.getElementById('askmodal').remove();incidentForm()"><span>\u{1F6A8}</span><b>Report an incident</b><span class="rowchev">\u203A</span></button>
+    <button class="todoline" onclick="document.getElementById('askmodal').remove();needHelpPick()"><span>\u{1F64B}</span><b>Ask for a volunteer assistant</b><span class="rowchev">\u203A</span></button>
+    <button class="btn ghost" style="margin-top:8px" onclick="document.getElementById('askmodal').remove()">Cancel</button></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+function needHelpPick(){
+  const up=(window.__classes||[]).filter(c=>['pending','graphic_review','instructor_review','approved'].includes(c.status) && !c.needs_volunteer);
+  if(!up.length) return alert('Every upcoming class of yours already has an assistant requested, or there is nothing upcoming yet.');
+  const m=document.createElement('div'); m.id='askmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.45);z-index:70;display:flex;align-items:flex-end;justify-content:center;padding:12px';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:20px;max-width:440px;width:100%;padding:10px 8px 8px">
+    <div style="font-family:'Summer Fresh',var(--disp);font-size:26px;padding:6px 10px 2px">Which class?</div>
+    ${up.map(c=>`<button class="todoline" onclick="document.getElementById('askmodal').remove();needHelp(${c.id},true)"><span>\u{1F3A8}</span><b>${esc(c.title)}</b><span class="rowchev">\u203A</span></button>`).join('')}
+    <button class="btn ghost" style="margin-top:8px" onclick="document.getElementById('askmodal').remove()">Cancel</button></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
 async function incidentForm(){
   let d; try{ d=await api('/api/incidents'); }catch(e){ return alert(e.message); }
   hideBnav();
@@ -4048,21 +4095,20 @@ async function instrMine(){
     ${todos.length?`<label>To do (${todos.length})</label>
       <div class="card needs" style="padding:6px 8px">${todos.map(x=>`<button class="todoline" onclick="${x.go}"><span>${x.k}</span><b>${esc(x.t)}</b><span class="rowchev">\u203A</span></button>`).join('')}</div>`:''}
     <div class="two" style="margin-bottom:12px">
-      ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
-      <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
-    <button class="btn ghost" style="margin-bottom:12px;background:var(--white);color:#B4442C;border:1px solid #E8B4A8" onclick="incidentForm()">\u{1F6A8} Report an incident</button>
+      ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">Email my students</button>`:`<button class="btn dark" onclick="renderInstr('open')">Book a class</button>`}
+      <button class="btn ghost" onclick="askGibby()">Ask The Gibby</button></div>
 
     ${paperOpen.length?`<label>The Gibby needs from you (${paperOpen.length})</label>
       <p class="sub" style="margin-top:2px">Quick paperwork so we can pay you and keep everyone safe. Nothing here is shared with students.</p>
       ${(()=>{ const n=(paperOpen.find(x=>x.note)||{}).note; return n?`<div class="meta" style="margin:0 0 8px"><b>From The Gibby:</b> ${linkify(n)}</div>`:''; })()}
       ${paperOpen.map(x=>`<div class="card needs" id="pw${x.id}">
         <div class="row"><div><h3 style="font-size:1rem">${esc(x.label)}</h3><div class="meta">${esc(x.what.replace(/\s*\(https?:[^)]*\)/,''))}</div></div></div>
-        ${x.kind==='lockbox'?`<button class="btn dark" style="margin-top:8px" onclick="openLockbox()">\u{1F510} Read and sign the contract</button>`
+        ${x.kind==='lockbox'?`<button class="btn dark" style="margin-top:8px" onclick="openLockbox()">Read and sign the contract</button>`
         :x.kind==='phone'?`<input id="pwv${x.id}" type="tel" value="${esc(myPhone)}" placeholder="Your phone number" style="margin-top:8px">
           <button class="btn dark" style="margin-top:8px" onclick="paperComplete(${x.id},'phone')">Save my number</button>
           ${myPhone?`<label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'phone',true,true)"> The number on file (${esc(myPhone)}) is still current</label>`:''}`
-        :`${x.kind==='w9'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer">\u{1F4C4} Open the blank W-9 form</a>`:''}
-          ${x.kind==='background'&&bgForm?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="/api/paperwork/background-form" target="_blank" rel="noopener noreferrer">\u{1F4C4} Open the background check form</a>`:''}
+        :`${x.kind==='w9'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer">Open the blank W-9 form</a>`:''}
+          ${x.kind==='background'&&bgForm?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="/api/paperwork/background-form" target="_blank" rel="noopener noreferrer">Open the background check form</a>`:''}
           <input type="file" id="pwf${x.id}" accept="image/*,application/pdf" style="display:none" onchange="paperComplete(${x.id},'${x.kind}')">
           <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('pwf${x.id}').click()">${x.kind==='w9'?'\u{1F4F7} Upload my signed W-9 (photo or PDF)':(bgForm?'\u{1F4F7} Upload my completed form (photo or PDF)':'\u{1F4CE} Attach confirmation and mark done')}</button>
           ${x.kind==='background'?`<button class="btn ghost" style="margin-top:8px" onclick="paperComplete(${x.id},'background',true)">I have completed it (nothing to attach)</button>`:''}
@@ -4085,7 +4131,7 @@ async function instrMine(){
           : c.followup_status==='ready'
             ? "Written. It goes to your students tomorrow morning with The Gibby's thank-you underneath. You can still change it until then."
             : "Goes out tomorrow morning with The Gibby's thank-you (review links and a discount) underneath. Skip it and The Gibby's thank-you goes alone."}</div>
-        <button class="btn ghost" style="margin-top:10px" onclick="viewPhotos(${c.id},'n')">\u{1F4F7} Add up to 5 photos from class to the thank-you</button>
+        <button class="btn ghost" style="margin-top:10px" onclick="viewPhotos(${c.id},'n')">Add up to 5 photos from class to the thank-you</button>
         <div id="photos${c.id}n"></div>
         <div class="two" style="margin-top:10px">
           <button class="btn ghost" onclick="saveFollowup(${c.id},true)">Save draft</button>
@@ -5026,7 +5072,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
