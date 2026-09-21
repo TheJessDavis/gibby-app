@@ -123,7 +123,7 @@ function renderInstructors(){
         +'<h3 style="margin:0 0 4px">'+esc(i.name)+'</h3>'
         +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
         +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
-        +((i.classes||[]).length?'<div style="margin-top:12px;font-size:.9em"><b>Upcoming classes</b><div style="opacity:.7;font-size:.9em;margin-bottom:6px">Tap a class to register</div>'+i.classes.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'')
+        +((i.classes||[]).length?'<div style="margin-top:12px;font-size:.9em"><b>Upcoming classes</b><div style="height:6px"></div>'+i.classes.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'')
         +((i.website||i.etsy||i.instagram)?'<p style="margin-top:8px">'+[['website',i.website],['etsy',i.etsy],['instagram',i.instagram]].filter(function(x){return x[1]}).map(function(x){return '<a href="'+esc(x[1])+'" target="_blank" rel="noopener">'+(x[0]==='website'?esc(x[1].replace(/^https?:\/\//,'').replace(/\/$/,'')):x[0]==='etsy'?'Etsy shop':'Instagram')+'</a>'}).join(' \u00b7 ')+'</p>':'')
         +'</div>';
     });

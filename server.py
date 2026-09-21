@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.101.1-artists-three"
+VERSION = "10.101.2-signup-only"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3471,8 +3471,10 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception: ext = {}
             if not ext.get("eventbrite_id"): continue
             d = _class_date(cls)
-            end = _class_end_date(cls) or d
-            if not d or (end and end < today): continue
+            # Listed only while someone can still sign up: first session ahead and
+            # registration open. A series that has already started drops off.
+            if not d or d < today: continue
+            if int(cls.get("close_days") or 0) and (d - today).days < int(cls.get("close_days") or 0): continue
             # The site's own cards read "September 10", not "Thu, Sep 10", so the
             # app's cards match that rather than standing out (Michelle, Aug 2026).
             when = (f"{_MON_FULL[d.month-1]} {d.day} · "
@@ -3515,8 +3517,11 @@ class H(http.server.BaseHTTPRequestHandler):
             try: ext = json.loads(cl.get("external_ids") or "{}")
             except Exception: ext = {}
             if not ext.get("eventbrite_id"): continue
-            d = _class_date(cl); end = _class_end_date(cl) or d
-            if not d or (end and end < today): continue
+            d = _class_date(cl)
+            # Only classes someone can still sign up for: the first session is still
+            # ahead and registration has not closed. A series already running is out.
+            if not d or d < today: continue
+            if int(cl.get("close_days") or 0) and (d - today).days < int(cl.get("close_days") or 0): continue
             when = f"{_MON_FULL[d.month-1]} {d.day}"
             if cl.get("is_series"):
                 try: n = len(json.loads(cl.get("session_dates") or "[]"))
