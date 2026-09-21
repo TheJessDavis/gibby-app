@@ -151,6 +151,14 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   `/embed/instructors.json` includes each artist's upcoming approved classes (Eventbrite links tagged
   `aff=site-artists`), images at `/headshot/{id}.jpg`, preview at `/embed/instructors`.
   `site-embed.js` fills a Squarespace Code block containing `<div id="gibby-instructors"></div>`.
+- **Reimbursements** (Reimburse tab, `reimb_requests` + `reimb_files`): the Everett's Expense
+  Reimbursement & Check Request filled in the app. Class picker limited to the instructor's own
+  classes, dated lines by category (`REIMB_CATEGORIES`), receipts required (photo or PDF), delivery
+  choice. On submit: form PDF via `pdfgen.contract_pdf`, PDF and receipts filed under "Gibby
+  Reimbursements" on Drive, emailed with attachments to `reimb_to()` (default Tina Johnson
+  tjohnson@theeverett.org and Michelle Truban; editable under More > Email), copy to the
+  instructor. Admins see the list under Money and tick Paid. The old per-class "Get paid back for
+  supplies" flow (`reimbursements` table) is retired; its route answers 410.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.97.3-orders-own-screen"
+VERSION = "10.98.0-reimburse"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -235,6 +235,13 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN button_label TEXT")   # what instructors tap, e.g. "Submit a Craft Kit Proposal"
     except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS reimb_requests(
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, class_id INTEGER, class_title TEXT, name TEXT,
+        items TEXT, details TEXT, advance REAL DEFAULT 0, subtotal REAL, total REAL, delivery TEXT, address TEXT,
+        status TEXT DEFAULT 'submitted', created TEXT, drive_folder TEXT, pdf_link TEXT, receipts TEXT,
+        emailed_to TEXT, paid_at TEXT, paid_by INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS reimb_files(
+        id INTEGER PRIMARY KEY, req_id INTEGER NOT NULL, name TEXT, mime TEXT, b64 TEXT, link TEXT, created TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS lockbox(
         id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, name TEXT, signed_at TEXT,
         via TEXT DEFAULT 'app', by_admin INTEGER, ip TEXT)""")
@@ -698,9 +705,10 @@ RATE_LIMITS = {                 # name: (max requests, window seconds)
     "submit":  (12, 3600),      # class form submissions, per instructor (Jess: up to 12 at once)
     "approve": (20, 3600),      # approval decisions, per admin
     "claim":   (24, 3600),      # slot claim attempts, per instructor (a claim precedes every submission)
+    "reimb":   (10, 3600),      # reimbursement requests, per instructor
 }
 RATE_LABEL = {"submit": "class submissions", "approve": "approval decisions",
-              "claim": "slot claims"}
+              "claim": "slot claims", "reimb": "reimbursement requests"}
 
 def rate_check(name, user_id, count=True):
     """Returns (allowed, retry_after_seconds, remaining). Fails OPEN: if the limiter
@@ -1492,6 +1500,28 @@ My typed signature states that I will be a responsible key code holder and will 
 BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own words
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
 
+REIMB_TO_DEFAULT = "tjohnson@theeverett.org, mtruban@theeverett.org"   # Tina Johnson (treasurer) and Michelle Truban
+REIMB_CATEGORIES = ["Set materials", "Set/show paint", "Props", "Costumes", "Misc (show)",
+                    "Paint (facilities)", "Office supplies", "Concessions", "Misc (facilities)"]
+REIMB_DELIVERY = ["Mailed", "Hand delivered", "Placed in office"]
+
+def reimb_to():
+    return [e.strip() for e in (_meta_get("reimb_to") or REIMB_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
+
+def reimb_pdf_text(r, items, receipts):
+    """The Everett's Expense Reimbursement & Check Request, as the lines of a PDF."""
+    L = ["EVERETT THEATRE", "Expense Reimbursement & Check Request", "",
+         f"Name: {r['name']}", f"Date: {r['created'][:10]}", f"Class: {r['class_title']}", "",
+         "Receipt date     Category                  Amount"]
+    for it in items:
+        L.append(f"{it['date']:<16} {it['category']:<25} ${it['amount']:>9.2f}")
+    L += ["", f"Sub total: ${r['subtotal']:.2f}", f"Less advance: ${r['advance']:.2f}", f"TOTAL DUE: ${r['total']:.2f}", "",
+          "Details:", r['details'] or "(none)", "",
+          f"Reimbursement delivery: {r['delivery']}" + (f" to {r['address']}" if r['delivery'] == 'Mailed' and r['address'] else ""), "",
+          "Receipts attached: " + (", ".join(x['name'] for x in receipts) or "none"), "",
+          "Submitted through the Gibby Class Manager. Date received: __________  Approved by: __________"]
+    return "\n".join(L)
+
 LOCKBOX_TO_DEFAULT = "mtruban@theeverett.org, mtruban@theeverett.com"   # Michelle Truban (both her addresses) sends the code herself once someone has signed
 
 def lockbox_to():
@@ -1972,7 +2002,7 @@ def admin_digest_text(c):
     for x in sp: L.append(f"  {x['name']} for {x['title']} by {x['needed_by'] or '?'}: {' / '.join((x['items'] or '').splitlines())[:140]}")
     photos = c.execute("SELECT COUNT(*) FROM social_posts WHERE status='draft'").fetchone()[0]
     reqs = c.execute("SELECT COUNT(*) FROM class_requests WHERE status='open'").fetchone()[0]
-    reimb = c.execute("SELECT COUNT(*) FROM reimbursements WHERE status='requested'").fetchone()[0]
+    reimb = c.execute("SELECT COUNT(*) FROM reimb_requests WHERE status='submitted'").fetchone()[0]
     L.append(""); L.append(f"ALSO WAITING: {photos} photo post(s) to approve, {reimb} reimbursement(s), {reqs} open class request(s)")
     L.append(""); L.append(f"Open the app: {mailer.APP_URL}")
     return "\n".join(L)
@@ -3476,7 +3506,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
             out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:6],
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
-                        "img": f"/headshot/{r['id']}.jpg" if (r.get("photo") or "").startswith("data:image/") else "",
+                        "img": (f"/headshot/{r['id']}.jpg?v=" + hashlib.sha1((r.get("photo") or "")[-64:].encode()).hexdigest()[:8]) if (r.get("photo") or "").startswith("data:image/") else "",
                         "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or ""})
         return out
 
@@ -4216,6 +4246,37 @@ class H(http.server.BaseHTTPRequestHandler):
             if bg_paused(): rows = [r for r in rows if r["kind"] != "background"]
             for r in rows: r["label"] = kinds.get(r["kind"], {}).get("label", r["kind"]); r["what"] = kinds.get(r["kind"], {}).get("what", "")
             return self.send_json({"paperwork": rows, "phone": u.get("phone") or "", "bg_form_name": _meta_get("bg_form_name")})
+        if p == "/api/reimb":
+            # The instructor's own requests, and the classes they may claim against.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            mine = [dict(r) for r in c.execute("""SELECT id, title, slot_date, status FROM classes WHERE instructor_id=? AND deleted_at IS NULL
+                        AND status IN ('approved','graphic_review','pending') ORDER BY id DESC""", (u["id"],)).fetchall()]
+            reqs = [dict(r) for r in c.execute("""SELECT id, class_title, total, status, created, pdf_link, drive_folder, receipts, delivery
+                        FROM reimb_requests WHERE user_id=? ORDER BY id DESC""", (u["id"],)).fetchall()]
+            c.close()
+            for r in reqs: r["receipts"] = _loads_list(r.get("receipts"))
+            return self.send_json({"classes": mine, "requests": reqs, "categories": REIMB_CATEGORIES, "delivery": REIMB_DELIVERY,
+                                   "address": u.get("address") or "", "to": ", ".join(reimb_to())})
+        if p == "/api/admin/reimb":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT r.*, us.email AS instr_email FROM reimb_requests r JOIN users us ON us.id=r.user_id
+                        ORDER BY r.status='submitted' DESC, r.id DESC LIMIT 200""").fetchall()]
+            c.close()
+            for r in rows: r["items"] = _loads_list(r.get("items")); r["receipts"] = _loads_list(r.get("receipts"))
+            return self.send_json({"requests": rows, "to": ", ".join(reimb_to())})
+        mrf2 = re.match(r"^/api/reimb/(\d+)/file/(\d+)$", p)
+        if mrf2:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); f = c.execute("SELECT f.*, r.user_id FROM reimb_files f JOIN reimb_requests r ON r.id=f.req_id WHERE f.id=? AND f.req_id=?",
+                                    (int(mrf2.group(2)), int(mrf2.group(1)))).fetchone(); c.close()
+            if not f: return self.send_error(404)
+            if u["role"] != "admin" and f["user_id"] != u["id"]: return self.send_json({"error":"forbidden"},403)
+            self._send_b64(f["b64"], f["mime"], f["name"]); return
         if p == "/api/lockbox":
             # The contract, whether this person has signed it, and (only then) the code.
             u = self.current_user()
@@ -4334,7 +4395,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "hands_raised": db().execute("""SELECT COUNT(*) FROM request_interest i JOIN class_requests r ON r.id=i.request_id
                                                 WHERE i.status='raised' AND r.status='open'""").fetchone()[0],
                 "photo_drafts": db().execute("SELECT COUNT(*) FROM social_posts WHERE status='draft'").fetchone()[0],
-                "reimbursements": db().execute("SELECT COUNT(*) FROM reimbursements WHERE status='requested'").fetchone()[0],
+                "reimbursements": db().execute("SELECT COUNT(*) FROM reimb_requests WHERE status='submitted'").fetchone()[0],
                 "contracts_unsigned": db().execute("SELECT COUNT(*) FROM classes WHERE contract_status='sent' AND deleted_at IS NULL").fetchone()[0],
                 "pending": self._classes("WHERE c.status='pending' "),
                 "graphic": self._classes("WHERE c.status='graphic_review' "),
@@ -4358,6 +4419,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "drive": drive, "thanks": thanks_settings(), "deadline": deadline_settings(),
                                    "backup": backup_status(),
                                    "email_limits": mailer.limit_stats(),
+                                   "reimb_to": ", ".join(reimb_to()),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
@@ -5173,6 +5235,110 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=? WHERE id=? AND deleted_at IS NULL", (hs, px, b.get("photo") or hs, int(mhp.group(1))))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        if p == "/api/reimb":
+            # A reimbursement request: the Everett form, filled in the app, with
+            # receipts. Filed on Drive, emailed to the treasurer and Michelle.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            if self.rate_limited("reimb", u["id"]): return
+            b = self.read_json(); c = db()
+            cls = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (int(b.get("class_id") or 0),)).fetchone()
+            if not cls or (u["role"] != "admin" and cls["instructor_id"] != u["id"]):
+                c.close(); return self.send_json({"error":"Pick which of your classes this is for."},400)
+            items = []
+            for x in (b.get("items") or [])[:20]:
+                if not isinstance(x, dict): continue
+                try: amt = round(float(x.get("amount") or 0), 2)
+                except (TypeError, ValueError): amt = 0
+                cat = str(x.get("category") or "").strip()
+                dt = str(x.get("date") or "").strip()[:10]
+                if amt <= 0 or cat not in REIMB_CATEGORIES or not re.match(r"^\d{4}-\d{2}-\d{2}$", dt): continue
+                items.append({"date": dt, "category": cat, "amount": amt})
+            if not items: c.close(); return self.send_json({"error":"Add at least one line: the receipt date, what kind of expense, and the amount."},400)
+            if sum(it["amount"] for it in items) > 5000: c.close(); return self.send_json({"error":"That is over $5,000. Please talk to The Gibby first."},400)
+            details = str(b.get("details") or "").strip()[:1500]
+            if any(it["category"].startswith("Misc") for it in items) and len(details) < 5:
+                c.close(); return self.send_json({"error":"Misc lines need a word or two in Details about what they were."},400)
+            try: advance = max(0.0, round(float(b.get("advance") or 0), 2))
+            except (TypeError, ValueError): advance = 0.0
+            delivery = str(b.get("delivery") or "").strip()
+            if delivery not in REIMB_DELIVERY: c.close(); return self.send_json({"error":"Pick how you would like the check: mailed, hand delivered, or placed in the office."},400)
+            address = str(b.get("address") or "").strip()[:200]
+            if delivery == "Mailed" and len(address) < 8: c.close(); return self.send_json({"error":"Add the address the check should be mailed to."},400)
+            files = []
+            for f in (b.get("files") or [])[:6]:
+                if not isinstance(f, dict): continue
+                b64 = str(f.get("b64") or "")
+                if "," in b64[:40]: b64 = b64.split(",",1)[1]
+                mime = str(f.get("mime") or "").lower()[:80]
+                if not b64 or len(b64) > 6_000_000: continue
+                if not (mime.startswith("image/") or mime == "application/pdf"): continue
+                files.append({"name": re.sub(r"[^A-Za-z0-9._ -]+", "-", str(f.get("name") or "receipt"))[:80], "mime": mime, "b64": b64})
+            if not files: c.close(); return self.send_json({"error":"Attach the receipt: a photo or a PDF. Every request needs one."},400)
+            subtotal = round(sum(it["amount"] for it in items), 2); total = round(max(0.0, subtotal - advance), 2)
+            row = {"name": u["name"] or u["email"], "created": now(), "class_title": f"{cls['title']} ({cls['slot_date'] or ''})".strip(),
+                   "subtotal": subtotal, "advance": advance, "total": total, "details": details, "delivery": delivery, "address": address}
+            c.execute("""INSERT INTO reimb_requests(user_id,class_id,class_title,name,items,details,advance,subtotal,total,delivery,address,status,created)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,'submitted',?)""",
+                      (u["id"], cls["id"], row["class_title"], row["name"], json.dumps(items), details, advance, subtotal, total, delivery, address, row["created"]))
+            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            for f in files:
+                c.execute("INSERT INTO reimb_files(req_id,name,mime,b64,created) VALUES(?,?,?,?,?)", (rid, f["name"], f["mime"], f["b64"], now()))
+            c.commit(); c.close()
+            # The form as a PDF, then everything to Drive under its own folder.
+            pdf_bytes = pdfgen.contract_pdf(reimb_pdf_text(row, items, files), None, [f"Request #{rid}", f"Submitted {row['created'][:16].replace('T',' ')} by {row['name']} ({u['email']})"])
+            folder_title = f"{row['name']} - {row['created'][:10]} - {cls['title']}"
+            links, pdf_link, folder_link = [], None, None
+            try:
+                res = push_photo_to_drive({"title": folder_title}, f"Reimbursement request #{rid}.pdf", base64.b64encode(pdf_bytes).decode(), "application/pdf", root="Gibby Reimbursements")
+                pdf_link = res.get("link"); folder_link = res.get("folder")
+                for i, f in enumerate(files, 1):
+                    ext = "pdf" if f["mime"] == "application/pdf" else "jpg"
+                    r2 = push_photo_to_drive({"title": folder_title}, f"Receipt {i} - {f['name'].rsplit('.',1)[0][:40]}.{ext}", f["b64"], f["mime"], root="Gibby Reimbursements")
+                    links.append({"name": f["name"], "link": r2.get("link")})
+            except Exception as e:
+                print(f"[reimb] drive filing failed for #{rid}: {e}")
+                links = [{"name": f["name"], "link": None} for f in files]
+            c = db()
+            c.execute("UPDATE reimb_requests SET drive_folder=?, pdf_link=?, receipts=?, emailed_to=? WHERE id=?",
+                      (folder_link, pdf_link, json.dumps(links), ", ".join(reimb_to()), rid))
+            c.commit(); c.close()
+            atts = [(f"Reimbursement request #{rid}.pdf", pdf_bytes, "application/pdf")]
+            budget = 12_000_000
+            for f in files:
+                data = base64.b64decode(f["b64"])
+                if budget - len(data) < 0: break
+                budget -= len(data); atts.append((f["name"], data, f["mime"]))
+            lines = "\n".join(f"  {it['date']}  {it['category']}  ${it['amount']:.2f}" for it in items)
+            body = (f"{row['name']} submitted an expense reimbursement request through the Gibby Class Manager.\n\n"
+                    f"Class: {row['class_title']}\n\n{lines}\n\n  Sub total: ${subtotal:.2f}\n  Less advance: ${advance:.2f}\n  TOTAL DUE: ${total:.2f}\n\n"
+                    + (f"Details: {details}\n\n" if details else "")
+                    + f"Check delivery: {delivery}" + (f" to {address}" if delivery == "Mailed" else "") + "\n\n"
+                    + "The completed form (PDF) and the receipts are attached" + (f" and filed on Drive: {folder_link}" if folder_link else "") + ".\n\n"
+                    + f"Reply to this email to reach {row['name']} directly ({u['email']}).")
+            mailer.send(reimb_to(), f"Reimbursement request: ${total:.2f} from {row['name']} ({cls['title']})", body,
+                        attachments=atts, reply_to=u["email"])
+            mailer.send(u["email"], f"Your reimbursement request for {cls['title']} was sent",
+                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour request for ${total:.2f} for \"{cls['title']}\" went to Tina Johnson and Michelle Truban, "
+                f"with the form and your receipt{'s' if len(files) != 1 else ''} attached. They will be in touch about the check ({delivery.lower()}).\n\n"
+                + (f"Your copy on Drive: {folder_link}\n\n" if folder_link else "") + "Thank you,\nThe Gibby", attachments=atts[:1])
+            return self.send_json({"ok":True, "id": rid, "total": total, "folder": folder_link})
+        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid)$", p)
+        if mrp2:
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            if mrp2.group(2) == "paid": c.execute("UPDATE reimb_requests SET status='paid', paid_at=?, paid_by=? WHERE id=?", (now(), u["id"], int(mrp2.group(1))))
+            else: c.execute("UPDATE reimb_requests SET status='submitted', paid_at=NULL, paid_by=NULL WHERE id=?", (int(mrp2.group(1)),))
+            c.commit(); c.close(); return self.send_json({"ok":True})
+        if p == "/api/admin/reimb-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            to = [e.strip().lower() for e in str(b.get("to") or "").replace(";", ",").split(",") if e.strip()]
+            if not to or any(not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e) for e in to):
+                return self.send_json({"error":"That does not look like an email address."},400)
+            _meta_set("reimb_to", ", ".join(to)); return self.send_json({"ok":True, "to": ", ".join(to)})
         if p == "/api/lockbox/sign":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
@@ -5468,7 +5634,8 @@ class H(http.server.BaseHTTPRequestHandler):
             return self.send_json({"ok":bool(ok), "error": ("" if ok else mailer.LAST_ERROR)})
         mrb = re.match(r"^/api/classes/(\d+)/reimburse$", p)
         if mrb:
-            # Instructor asks to be paid back for supplies: amount, what for, receipt photo.
+            return self.send_json({"error":"Reimbursements moved: use the Reimburse tab."},410)
+        if False:
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)
             cid = int(mrb.group(1)); b = self.read_json(); c = db()

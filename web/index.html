@@ -730,6 +730,7 @@ function buildBnav(role, active){
     b.innerHTML = item('open','\u{1F5D3}\uFE0F','Book',"renderInstr('open')")
       + item('mine','\u{1F3A8}','My classes',"renderInstr('mine')")
       + item('wanted','\u{1F4CC}','Opportunities',"renderInstr('wanted')")
+      + item('reimb','\u{1F9FE}','Reimburse',"renderInstr('reimb')")
       + item('audit','\u{1F393}','Learn',"renderInstr('audit')")
       + (nSign?`<span style="position:relative">${''}</span>`:'')
       + item('profile','\u{1F464}','Profile',"renderProfile()");
@@ -1839,6 +1840,7 @@ async function adminHeadshot(uid, ev){
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
 }
+async function saveReimbTo(){ try{ await api('/api/admin/reimb-settings','POST',{to:$('#reimb_to').value}); alert('Saved.'); }catch(e){ alert(e.message); } }
 async function saveBgPaused(on){
   try{ await api('/api/admin/paperwork-settings','POST',{bg_paused:on}); }catch(e){ alert(e.message); }
   adminPeople();
@@ -2143,6 +2145,10 @@ async function adminEmail(){
       <div class="meta">The app may send the same automated email to the same person <b>once a day</b>, and no more than <b>${caps.auto_per_hour||40} automated emails an hour</b> or <b>${caps.auto_per_day||200} a day</b>. Past that it stops and emails you once. Emails people send from the app are not capped.</div>
       <div class="meta" style="margin-top:6px">Last 24 hours: <b>${L.auto_today||0}</b> automated, <b>${L.user_today||0}</b> sent by people, <b>${L.blocked_today||0}</b> held back${L.auto_last_hour?` · ${L.auto_last_hour} automated in the last hour`:''}.</div>
       ${(L.blocked||[]).length?`<details style="margin-top:6px"><summary style="cursor:pointer;font-weight:800;font-size:12.5px">Held back today</summary>${L.blocked.map(b=>`<div class="meta">${esc(b.at.slice(11,16))} · ${esc(b.to)} · ${esc(b.subject)}</div>`).join('')}</details>`:''}</div>`; })()}
+    <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Reimbursement requests</h3>
+      <div class="meta">Every request an instructor submits on the Reimburse tab is emailed here with the form and receipts, and filed under Gibby Reimbursements on Drive.</div>
+      <input id="reimb_to" value="${esc(d.reimb_to||'')}" placeholder="tjohnson@theeverett.org, mtruban@theeverett.org" style="margin-top:8px">
+      <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveReimbTo()">Save</button></div>
     <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Thank-you emails</h3><div class="meta">Sent two mornings after every class, with the instructor\u2019s note and photos, review links and a personal code.</div>ith Gmail SMTP as the fallback.</div></div></div>
 
       <input id="th_google" placeholder="Google review link" value="${esc((d.thanks||{}).google_url||'')}" style="margin-top:6px">
@@ -2237,6 +2243,10 @@ async function socialAct(id, action){
   if(r.error){ alert(r.error); return; }
   if(action==='post') alert(r.facebook&&r.facebook.status?('Done: '+r.facebook.status):'Posted.');
   adminMarketing();
+}
+async function reimbPaid(id, paid){
+  try{ await api('/api/admin/reimb/'+id+'/'+(paid?'paid':'unpaid'),'POST',{}); }catch(e){ alert(e.message); return; }
+  renderAdmin('money');
 }
 async function reimbAct(id, action){
   let note='';
@@ -2391,8 +2401,8 @@ async function markPaid(id, paid){
   renderAdmin('money');
 }
 async function adminMoney(){
-  const [d, integ, rbd] = await Promise.all([api('/api/report/money'), api('/api/integrations'), api('/api/reimbursements').catch(()=>({reimbursements:[]}))]);
-  window.__reimb = rbd.reimbursements||[];
+  const [d, integ, rbd] = await Promise.all([api('/api/report/money'), api('/api/integrations'), api('/api/admin/reimb').catch(()=>({requests:[]}))]);
+  window.__reimb = rbd.requests||[];
   const DRIVE = integ.drive || {};
   const t = d.totals;
   const league = (rows, unit) => rows.length ? rows.map((r,i)=>`<div class="lg">
@@ -2414,17 +2424,12 @@ async function adminMoney(){
        <details style="margin-top:10px"><summary class="meta" style="cursor:pointer">The raw Eventbrite codes</summary><div class="meta" style="margin-top:4px">${(d.channels||[]).map(x=>`${esc(x.channel)}: ${x.tickets}`).join(' · ')}</div></details>
        <div class="meta" style="margin-top:6px">Eventbrite tags every ticket with how the buyer got there. "The Gibby's own links" are the ones the app and you share; "Found on Eventbrite" means they were browsing or searching there.</div></div>`
     : '';
-  $('#tab').innerHTML = `<h2>What each class <em>made</em></h2>
-    ${(function(){ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='requested'), appr=rs.filter(r=>r.status==='approved');
-      const row=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">$${(+r.amount).toFixed(2)} \u00b7 ${esc(r.instructor_name)}</h3>
-          <div class="meta">${esc(r.class_title)} \u00b7 ${esc(r.slot_date||'')} \u00b7 ${esc(r.note||'')}</div>
-          ${r.receipt_link?`<a class="meta" href="${r.receipt_link}" target="_blank" rel="noopener">View receipt</a>`:'<div class="meta">No receipt photo</div>'}</div>
-          ${r.receipt_thumb?`<img src="${r.receipt_thumb}" alt="" style="width:56px;height:56px;object-fit:cover;border-radius:8px">`:''}</div>
-        <div class="two" style="margin-top:10px">
-          ${r.status==='requested'?`<button class="btn warn" onclick="reimbAct(${r.id},'decline')">Decline</button><button class="btn green" onclick="reimbAct(${r.id},'approve')">Approve</button>`
-            :`<span class="meta">Approved ${esc((r.decided_at||'').slice(0,10))}</span><button class="btn dark" onclick="reimbAct(${r.id},'paid')">Mark paid</button>`}</div></div>`;
-      return (open.length||appr.length)?`<label>Supply reimbursements (${open.length} waiting${appr.length?', '+appr.length+' approved, unpaid':''})</label>
-        ${open.map(row).join('')}${appr.map(row).join('')}`:''; })()}
+  $('#tab').innerHTML = `<h2>Money</h2>
+    ${(()=>{ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='submitted'); if(!rs.length) return '';
+      return `<label style="margin-top:0">Reimbursement requests (${open.length} not yet paid)</label>
+      <div class="meta" style="margin-top:0">Each one was emailed to the treasurer with the form and receipts, and filed on Drive. Tick paid here once the check goes out.</div>
+      ${rs.slice(0,30).map(r=>`<div class="card" style="padding:12px 16px"><div class="row"><div><b>${money(r.total)}</b> \u00b7 ${esc(r.name)}<div class="meta">${esc(r.class_title)} \u00b7 ${esc((r.created||'').slice(0,10))} \u00b7 ${esc(r.delivery||'')}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}${r.drive_folder?' \u00b7 <a href="'+esc(r.drive_folder)+'" target="_blank" rel="noopener">receipts</a>':''}</div></div>
+        ${r.status==='paid'?`<span class="pill appr" style="flex:none">paid</span> <a href="#" onclick="reimbPaid(${r.id},false);return false" style="font-size:12px">undo</a>`:`<button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px" onclick="reimbPaid(${r.id},true)">Paid</button>`}</div></div>`).join('')}`; })()}
     <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.
       ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>
     ${chanRow}
@@ -3068,7 +3073,7 @@ function cardCls(c){
       <button class="btn ghost" style="margin-top:8px" onclick="viewPhotos(${c.id})">\u{1F4F7} Class photos</button>
       <button class="btn ghost" style="margin-top:8px" onclick="orderForm(${c.id})">\u{1F9FA} Ask the Gibby to order supplies</button>
       <div id="sq${c.id}"></div>
-      <button class="btn ghost" style="margin-top:8px" onclick="reimburseForm(${c.id})">\u{1F9FE} Get paid back for supplies</button>
+
       <div id="rb${c.id}"></div>
       ${c.cal_start?`<div class="two" style="margin-top:8px">
         <a class="btn ghost" style="text-decoration:none;text-align:center" href="/class-ics/${c.id}.ics">\u{1F4C5} Add to calendar</a>
@@ -3537,7 +3542,7 @@ function applyTpl(){ const i=$('#f_tpl').value; if(i==='')return; const t=TPLS[+
 async function renderInstr(tab){
   buildBnav('instructor', tab);
   $('#view').innerHTML = `${helloHTML()}<div id="tab"></div>`;
-  const screens = {open:instrOpen, mine:instrMine, audit:instrAudit, wanted:instrWanted};
+  const screens = {open:instrOpen, mine:instrMine, audit:instrAudit, wanted:instrWanted, reimb:instrReimb};
   return boundary('instructor:'+tab, '#tab', screens[tab] || instrOpen);
 }
 const SLOTCOLS=['sc-y','sc-p','sc-b','sc-g','sc-v'], SLOTGLYPHS=['✦','❀','✷','✿','✧','✩'];
@@ -3697,6 +3702,72 @@ async function instrAudit(){
       : `<div class="muted">Nothing is open yet. When an instructor answers yes to &ldquo;can other resident teaching artists audit this class?&rdquo;, it shows up here.</div>`}`;
 }
 
+/* Reimburse: the Everett's Expense Reimbursement & Check Request, filled in the
+   app. One request per class, dated lines by category, receipts required; the
+   form becomes a PDF, everything is filed on Drive and emailed to the treasurer. */
+let RB_FILES=[], RB_DELIV='Hand delivered';
+async function instrReimb(){
+  const d=await api('/api/reimb'); if(!$('#tab')) return;
+  window.__rb=d; RB_FILES=[];
+  const cats=d.categories||[];
+  const line=(i)=>`<div class="rbline" style="display:grid;grid-template-columns:118px 1fr 84px 28px;gap:6px;align-items:center;margin-top:6px">
+      <input type="date" class="rb_date" max="${new Date().toISOString().slice(0,10)}" style="padding:10px 8px;font-size:13px">
+      <select class="rb_cat" style="padding:10px 8px;font-size:13px">${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
+      <input class="rb_amt" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$" oninput="rbCalc()" style="padding:10px 8px;font-size:13px;text-align:right">
+      <button type="button" class="btn ghost" style="padding:6px 0;font-size:16px" onclick="this.parentElement.remove();rbCalc()">\u00d7</button></div>`;
+  $('#tab').innerHTML=`<h2>Get <em>paid back</em></h2>
+    <p class="sub">The Everett's expense reimbursement form, filled in here. It goes to the treasurer with your receipts attached.</p>
+    <div class="card">
+      <label style="margin-top:0">Which class is this for?</label>
+      <select id="rb_class">${(d.classes||[]).length?'<option value="">Pick a class</option>'+d.classes.map(c=>`<option value="${c.id}">${esc(c.title)} \u00b7 ${esc(c.slot_date||'')}</option>`).join(''):'<option value="">You have no classes yet</option>'}</select>
+      <label>What you bought</label>
+      <div class="meta" style="margin-top:0">One line per receipt: the date on the receipt, the kind of expense, the amount.</div>
+      <div id="rb_lines">${line(0)}</div>
+      <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="document.getElementById('rb_lines').insertAdjacentHTML('beforeend', ${JSON.stringify(line(0)).replace(/"/g,'&quot;')})">+ Another receipt line</button>
+      <div class="two" style="margin-top:10px"><div><label style="margin-top:0">Less advance <span style="color:var(--ink-soft);font-weight:600">(if The Gibby gave you money up front)</span></label><input id="rb_adv" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" oninput="rbCalc()"></div>
+        <div><label style="margin-top:0">Total due</label><div id="rb_total" style="font-size:1.4rem;font-weight:900;padding:10px 0">$0.00</div></div></div>
+      <label>Details <span style="color:var(--ink-soft);font-weight:600">(what the items were; required for Misc)</span></label>
+      <textarea id="rb_details" rows="2" placeholder="e.g. Clay, glaze and brushes from Michaels for the Saturday session."></textarea>
+      <label>Receipts <span style="color:#B4442C;font-weight:800">(required)</span></label>
+      <input type="file" id="rb_files" accept="image/*,application/pdf" multiple onchange="rbPickFiles(event)">
+      <div id="rb_filelist" class="meta" style="margin-top:4px"></div>
+      <div class="hint">A photo of each receipt is fine, or a PDF. Up to six.</div>
+      <label>How should the check reach you?</label>
+      <div class="seg" id="rb_deliv">${(d.delivery||[]).map(x=>`<button type="button" class="${x===RB_DELIV?'on':''}" data-v="${esc(x)}" onclick="rbDelivery('${esc(x)}')">${esc(x)}</button>`).join('')}</div>
+      <div id="rb_addrwrap" class="${RB_DELIV==='Mailed'?'':'hidden'}"><label>Mail it to</label><input id="rb_addr" value="${esc(d.address||'')}" placeholder="Street, town, ZIP"></div>
+      <div class="err" id="rb_err"></div>
+      <button class="btn dark" style="margin-top:12px" onclick="sendReimb()">Send my request</button>
+      <div class="hint">Goes to ${esc(d.to||'the treasurer')}, with a copy to you. The form and receipts are also saved in The Gibby's Drive.</div>
+    </div>
+    ${(d.requests||[]).length?`<label>Your requests (${d.requests.length})</label>
+      ${d.requests.map(r=>`<div class="card" style="padding:12px 16px"><div class="row"><div><b>${money(r.total)}</b> \u00b7 ${esc(r.class_title)}<div class="meta">${esc((r.created||'').slice(0,10))} \u00b7 ${esc(r.delivery||'')}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}${r.drive_folder?' \u00b7 <a href="'+esc(r.drive_folder)+'" target="_blank" rel="noopener">receipts</a>':''}</div></div>
+        <span class="pill ${r.status==='paid'?'appr':'pend'}" style="flex:none">${r.status==='paid'?'paid':'sent'}</span></div></div>`).join('')}`:''}`;
+}
+function rbDelivery(v){ RB_DELIV=v; document.querySelectorAll('#rb_deliv button').forEach(b=>b.classList.toggle('on', b.dataset.v===v)); const a=$('#rb_addrwrap'); if(a) a.classList.toggle('hidden', v!=='Mailed'); }
+function rbLines(){ return [...document.querySelectorAll('#rb_lines .rbline')].map(r=>({date:r.querySelector('.rb_date').value, category:r.querySelector('.rb_cat').value, amount:+r.querySelector('.rb_amt').value||0})); }
+function rbCalc(){ const sub=rbLines().reduce((s,x)=>s+x.amount,0); const adv=+($('#rb_adv')&&$('#rb_adv').value)||0; const t=$('#rb_total'); if(t) t.textContent='$'+Math.max(0,sub-adv).toFixed(2); }
+function rbDrawFiles(){ const l=$('#rb_filelist'); if(l) l.innerHTML=RB_FILES.map((f,i)=>`\u{1F4CE} ${esc(f.name)} <a href="#" onclick="RB_FILES.splice(${i},1);rbDrawFiles();return false">remove</a>`).join(' \u00b7 ')||''; }
+async function rbPickFiles(ev){
+  for(const f of [...ev.target.files].slice(0, 6-RB_FILES.length)){
+    try{
+      if(f.type==='application/pdf'){ if(f.size>4*1024*1024){ alert(f.name+' is over 4 MB.'); continue; } RB_FILES.push({name:f.name, mime:'application/pdf', b64:await fileToB64(f)}); }
+      else RB_FILES.push({name:(f.name||'receipt').replace(/\.[^.]+$/,'')+'.jpg', mime:'image/jpeg', b64:await shrinkImage(f,1800,0.86)});
+    }catch(e){ alert(e.message); }
+  }
+  ev.target.value=''; rbDrawFiles();
+}
+async function sendReimb(){
+  const err=$('#rb_err'); err.classList.remove('show');
+  const items=rbLines().filter(x=>x.amount>0||x.date);
+  const body={class_id:+$('#rb_class').value||0, items, details:$('#rb_details').value.trim(), advance:+$('#rb_adv').value||0, delivery:RB_DELIV, address:($('#rb_addr')?$('#rb_addr').value.trim():''), files:RB_FILES};
+  if(!body.class_id){ err.textContent='Pick which class this is for.'; err.classList.add('show'); return; }
+  if(!items.length || items.some(x=>!x.date||!(x.amount>0))){ err.textContent='Each line needs the receipt date and an amount.'; err.classList.add('show'); return; }
+  if(!RB_FILES.length){ err.textContent='Attach the receipt: a photo or a PDF.'; err.classList.add('show'); return; }
+  const btn=document.querySelector('#tab .btn.dark'); if(btn){ btn.disabled=true; btn.textContent='Sending\u2026'; }
+  let r; try{ r=await api('/api/reimb','POST',body); }catch(e){ err.textContent=e.message; err.classList.add('show'); if(btn){ btn.disabled=false; btn.textContent='Send my request'; } return; }
+  alert(`Sent. Your request for $${(+r.total).toFixed(2)} went to Tina Johnson and Michelle Truban with the form and receipts attached, and a copy is in your inbox.`);
+  instrReimb();
+}
 async function instrOpen(){
   // When moving an existing class, ask for its own times as well: without them a
   // 30-minute shift is unpickable, because the window you already hold is missing.
@@ -4877,7 +4948,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
