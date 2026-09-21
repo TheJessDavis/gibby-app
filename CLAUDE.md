@@ -147,7 +147,7 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - **Thank-yous** go to everyone who registered; check-in scans never narrow the list.
 - **Meet Our Teaching Artists** (approved by Marketing, Lou Booker, Sep 20 2026): `users.headshot`
   (square, min 600px; `headshot_by` artist|gibby, admins can upload Marketing's standardized one),
-  `users.bio` built from three fixed prompts in `bio_parts` (25 to 60 words in all). Public feed
+  `users.bio` built from three fixed prompts in `bio_parts` (40 to 80 words in all). Public feed
   `/embed/instructors.json` includes each artist's upcoming approved classes (Eventbrite links tagged
   `aff=site-artists`), images at `/headshot/{id}.jpg`, preview at `/embed/instructors`.
   `site-embed.js` fills a Squarespace Code block containing `<div id="gibby-instructors"></div>`.

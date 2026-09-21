@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.96.2-artist-class-buttons"
+VERSION = "10.96.3-bio-40-80"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1489,7 +1489,7 @@ Any items being released (borrowed) by parties for use outside of The Everett, I
 
 My typed signature states that I will be a responsible key code holder and will abide by all policies set forth in the Lockbox Key Code Holder Contract and Asset Release Protocol."""
 
-BIO_MIN_WORDS, BIO_MAX_WORDS = 25, 60     # the website bio: short, in their own words
+BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own words
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
 
 LOCKBOX_TO_DEFAULT = "mtruban@theeverett.org, mtruban@theeverett.com"   # Michelle Truban (both her addresses) sends the code herself once someone has signed

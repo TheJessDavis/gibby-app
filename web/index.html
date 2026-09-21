@@ -987,7 +987,7 @@ function pfCustomSkill(){
   renderProfile();
 }
 function pfClearPhoto(){ PF_PHOTO=''; PF_HEADSHOT=''; PF_HEADSHOT_PX=0; renderProfile(); }
-const BIO_MIN=25, BIO_MAX=60, HEADSHOT_MIN=600, HEADSHOT_MAX=1400;
+const BIO_MIN=40, BIO_MAX=80, HEADSHOT_MIN=600, HEADSHOT_MAX=1400;
 let PF_HEADSHOT=null, PF_HEADSHOT_PX=0;
 function bioParts(){ return [1,2,3].map(i=>($('#pf_bio'+i)?$('#pf_bio'+i).value.trim():'')); }
 function bioCount(){ const o=$('#pf_biocount'); if(!o) return; const t={value:bioParts().filter(Boolean).join(' ')}; const n=t.value.trim()?t.value.trim().split(/\s+/).length:0;
