@@ -131,6 +131,18 @@ function renderInstructors(){
     rep('artists='+list.length);
   }).catch(function(e){rep('artists fetch failed: '+e)});
 }
+/* One line under the Art Workshops intro pointing at the teaching artists page.
+   Placed by this script so the busy workshops page never needs hand editing. */
+function artistsLink(){
+  if(document.querySelector('.gibby-artists-link'))return;
+  var ps=[].slice.call(document.querySelectorAll('main p, #page p, p'));
+  var intro=null;
+  for(var i=0;i<ps.length;i++){ if(/registration required/i.test(ps[i].textContent)){intro=ps[i];break} }
+  if(!intro)return;
+  var p=document.createElement('p'); p.className='gibby-artists-link';
+  p.innerHTML='<a href="/meet-our-teaching-artists">Meet the artists who teach here</a>';
+  intro.parentNode.insertBefore(p, intro.nextSibling);
+}
 function renderList(list,classes){
   classes.forEach(function(c){
     var li=document.createElement('li');li.className='list-item gibby-item';
@@ -302,6 +314,7 @@ function ginit(){
       var classes=applyOverrides(d.classes||[],rules);
       var msg='v4';
       if(onWorkshops){
+        artistsLink();
         var list=document.querySelector('.user-items-list-simple');
         if(list){
           list.querySelectorAll('.gibby-item').forEach(function(x){x.remove()});
