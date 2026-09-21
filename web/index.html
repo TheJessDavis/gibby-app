@@ -726,6 +726,25 @@ async function checkVersion(){
 setInterval(checkVersion, 5*60*1000);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkVersion(); });
 setTimeout(checkVersion, 4000);
+/* Explanations under a screen title or a section header show the first time
+   a person sees that screen, then fold behind a small "?" beside the heading. */
+function foldHints(){
+  if(!ME) return;
+  document.querySelectorAll('#tab > h2 + p.sub, #view > h2 + p.sub, #tab > label + p.sub').forEach(p=>{
+    if(p.dataset.folded) return;
+    const head=p.previousElementSibling; const text=(p.textContent||'').trim();
+    if(!head || text.length<40 || /^\d/.test(text) || p.querySelector('input,button,select,a.btn')) return;
+    p.dataset.folded='1';
+    const key='hint:'+head.textContent.trim().replace(/\s*\?$/,'').slice(0,60);
+    let seen=false; try{ seen=!!localStorage.getItem(key); }catch(_){}
+    const q=document.createElement('button'); q.type='button'; q.className='qhint'; q.textContent='?'; q.setAttribute('aria-label','What is this?');
+    q.style.cssText='margin-left:8px;width:22px;height:22px;border-radius:50%;border:1.5px solid var(--line);background:var(--white);color:var(--ink-soft);font-weight:800;font-size:12px;line-height:1;font-family:var(--disp);cursor:pointer;vertical-align:middle;padding:0';
+    q.onclick=()=>{ p.style.display = p.style.display==='none' ? '' : 'none'; };
+    head.appendChild(q);
+    if(seen){ p.style.display='none'; } else { try{ localStorage.setItem(key,'1'); }catch(_){} }
+  });
+}
+new MutationObserver(()=>foldHints()).observe(document.documentElement,{childList:true,subtree:true});
 /* Quiet messages instead of browser pop-ups. Confirmations that can't be
    undone still use confirm(). */
 let TOAST_T=null;
@@ -2480,16 +2499,18 @@ async function adminMoney(){
        <details style="margin-top:10px"><summary class="meta" style="cursor:pointer">The raw Eventbrite codes</summary><div class="meta" style="margin-top:4px">${(d.channels||[]).map(x=>`${esc(x.channel)}: ${x.tickets}`).join(' · ')}</div></details>
        <div class="meta" style="margin-top:6px">Eventbrite tags every ticket with how the buyer got there. "The Gibby's own links" are the ones the app and you share; "Found on Eventbrite" means they were browsing or searching there.</div></div>`
     : '';
-  $('#tab').innerHTML = `<h2>Money</h2>
-    ${(()=>{ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='submitted'); if(!rs.length) return '';
+  const MT=MONEY_TAB||'summary';
+  const mtab=`<div class="seg" style="margin-bottom:12px"><button class="${MT==='summary'?'on':''}" onclick="MONEY_TAB='summary';renderAdmin('money')">Summary</button><button class="${MT==='classes'?'on':''}" onclick="MONEY_TAB='classes';renderAdmin('money')">By class</button><button class="${MT==='tickets'?'on':''}" onclick="MONEY_TAB='tickets';renderAdmin('money')">Where tickets came from</button></div>`;
+  $('#tab').innerHTML = `<h2>Money</h2>${mtab}
+    ${MT!=='summary'?'':(()=>{ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='submitted'); if(!rs.length) return '';
       return `<label style="margin-top:0">Reimbursement requests (${open.length} not yet paid)</label>
       <div class="meta" style="margin-top:0">Each one was emailed to the treasurer with the form and receipts, and filed on Drive. Tick paid here once the check goes out.</div>
       ${rs.slice(0,30).map(r=>`<div class="card" style="padding:12px 16px"><div class="row"><div><b>${money(r.total)}</b> \u00b7 ${esc(r.name)}<div class="meta">${esc(r.class_title)} \u00b7 ${esc((r.created||'').slice(0,10))} \u00b7 ${esc(r.delivery||'')}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}${r.drive_folder?' \u00b7 <a href="'+esc(r.drive_folder)+'" target="_blank" rel="noopener">receipts</a>':''}</div></div>
         ${r.status==='paid'?`<span class="pill appr" style="flex:none">paid</span> <a href="#" onclick="reimbPaid(${r.id},false);return false" style="font-size:12px">undo</a>`:`<button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px" onclick="reimbPaid(${r.id},true)">Paid</button>`}</div></div>`).join('')}`; })()}
-    <p class="sub">Classes that have already run. Upcoming ones are listed below but left out of the averages.
-      ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>
-    ${chanRow}
-    ${(t.eb_gross||t.eb_fees)?`<div class="card"><h3 style="font-size:1rem">Actual money (from Eventbrite orders)</h3>
+    ${MT==='tickets'?(chanRow||'<div class="muted">No ticket source data yet.</div>'):''}
+    ${MT!=='summary'?'':`<p class="sub">Classes that have already run; upcoming ones are left out of the averages.
+      ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>`}
+    ${MT!=='summary'?'':`${(t.eb_gross||t.eb_fees)?`<div class="card"><h3 style="font-size:1rem">Actual money (from Eventbrite orders)</h3>
       <div class="meta" style="margin-top:6px">What buyers really paid and what lands in the bank, refreshed hourly. This is the number to reconcile deposits against.</div>
       <div class="stotals" style="margin:10px 0 0">
         <div><b>${money0(t.eb_gross)}</b><span>buyers paid</span></div>
@@ -2521,8 +2542,8 @@ async function adminMoney(){
         <td>${c.paid_at
           ? `<label class="chk" style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" checked onchange="markPaid(${c.id},false)"> <span>paid ${money(c.paid_amount!=null?c.paid_amount:c.instructor_pay)} on ${esc(c.paid_at)}</span></label>`
           : `<label class="chk" style="margin:0;display:flex;gap:6px;align-items:center"><input type="checkbox" onchange="markPaid(${c.id},true)"> <span>mark paid</span></label>`}</td></tr>`).join('')}
-      </tbody></table></div>`; })()}
-    <label style="margin-top:18px">Best margin by class</label>
+      </tbody></table></div>`; })()}`}
+    ${MT!=='classes'?'':`<label style="margin-top:0">Best margin by class</label>
     <p class="sub" style="margin-top:2px">Which ideas are worth running again.</p>
     ${league(d.by_class,'run')}
 
@@ -2552,7 +2573,7 @@ async function adminMoney(){
     <div class="hint" style="margin-top:12px">Pay follows each class's own deal: flat fee classes pay the
       agreed amount whatever the turnout, and split classes pay 60% of actual ticket sales after materials.
       Where an instructor supplies their own materials the cost is reimbursed inside their pay, so it is
-      not charged to The Gibby a second time.</div>`;
+      not charged to The Gibby a second time.</div>`}`;
 }
 
 /* ---------------- audit log (read-only) ---------------- */
@@ -4195,7 +4216,7 @@ async function instrWanted(){
   open = WANT_SKILL==='__mine' ? open.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? open.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : open;
   const kinds=['teach','help','sell','design'];
   const card=r=>{ const m=KIND_META[r.kind]||KIND_META.teach; const raised=r.my_interest;
-    return `<div class="card" style="background:${m.bg}"><div class="row"><h3 style="font-size:1.05rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:#fff;color:var(--ink)">${m.icon} ${m.label}</span></div>
+    return `<div class="card" style="margin:0;border-radius:0 0 14px 14px"><div class="row"><h3 style="font-size:1.05rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:var(--cream);color:var(--ink)">${m.label}</span></div>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini ${my.has(k)?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
@@ -4210,14 +4231,20 @@ async function instrWanted(){
         : `<button class="btn dark" style="margin-top:10px" onclick="raiseHand(${r.id},false)">${esc(r.button_label||m.btn)}</button>${r.interest_count?`<div class="meta" style="margin-top:4px">${r.interest_count} ${r.interest_count===1?'person has':'people have'} raised a hand so far.</div>`:''}`}
     </div>`; };
   $('#tab').innerHTML = `<h2>Opportunities</h2>
-    <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, chances to sell or show your work, and paid design work.</p>
+    <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, chances to sell or show your work, and paid design work. Tap one to read it.</p>
     <div class="seg" style="margin-bottom:8px;flex-wrap:wrap"><button class="${WANT_KIND==='all'?'on':''}" onclick="wantKind('all')">All</button>${kinds.map(k=>{ const n=openAll.filter(r=>r.kind===k).length; return `<button class="${WANT_KIND===k?'on':''}" onclick="wantKind('${k}')">${KIND_META[k].icon} ${k==='sell'?'Sell':k==='design'?'Design':KIND_META[k].label}${n?' <small>'+n+'</small>':''}</button>`; }).join('')}</div>
-    ${tags.length?`${tags.length>8?`<input id="want_q" placeholder="Search skills" value="${esc(SKILL_Q)}" oninput="skillSearch(this.value, ()=>{ instrWanted().then(()=>{ const el=document.getElementById('want_q'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); })" style="margin-bottom:6px">`:''}<div class="skillcloud" style="margin:0 0 10px">${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" onclick="wantFilter('__mine')">✨ My skills</button>`:''}${tags.filter(k=>WANT_SKILL===k||skillMatch(k)).map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}
-    ${open.length?open.map(card).join('')
+    ${tags.length?`<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="want_q" placeholder="Search by skill (${tags.length})" value="${esc(SKILL_Q)}" oninput="skillSearch(this.value, ()=>{ instrWanted().then(()=>{ const el=document.getElementById('want_q'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); })" style="margin:0;flex:1">
+        ${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" style="flex:none" onclick="wantFilter('__mine')">My skills</button>`:''}</div>
+      ${(SKILL_Q||WANT_SKILL)?`<div class="skillcloud" style="margin:0 0 10px">${tags.filter(k=>WANT_SKILL===k||(SKILL_Q&&skillMatch(k))).map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}`:''}
+    ${open.length?open.map(r=>{ const m=KIND_META[r.kind]||KIND_META.teach; const raised=r.my_interest;
+        return `<details class="clsrow ${raised==='confirmed'?'cls-approved':raised?'cls-pending':''}" ${WANT_OPEN===r.id?'open':''} ontoggle="if(this.open) WANT_OPEN=${r.id}">
+          <summary><span class="clspic clspic-i">${m.icon}</span><div class="rowt"><b>${esc(r.title)}</b><span>${[m.label, r.when_text].filter(Boolean).map(esc).join(' \u00b7 ')}${(r.skills||[]).some(k=>my.has(k))?' \u00b7 your skills':''}</span></div>
+          ${raised==='confirmed'?'<span class="pill appr" style="flex:none">confirmed</span>':raised?'<span class="pill pend" style="flex:none">hand raised</span>':''}<span class="rowchev">\u203A</span></summary>${card(r)}</details>`; }).join('')
       :((WANT_SKILL||WANT_KIND!=='all')?'<div class="muted">Nothing like that right now. Tap All or Show all.</div>':'<div class="muted">Nothing is open right now. Check back after the next planning meeting.</div>')}
     ${mine.length?`<label style="margin-top:16px">Yours (${mine.length})</label>${mine.map(r=>`<div class="card"><div class="row"><h3 style="font-size:1rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:var(--cream)">${(KIND_META[r.kind]||KIND_META.teach).label}</span></div>
         <div class="meta">${r.kind==='teach'?(r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'):r.my_interest==='confirmed'?'Confirmed by The Gibby'+(r.when_text?' · '+esc(r.when_text):''):r.my_interest==='declined'?'Not this time':'Hand raised, waiting on The Gibby'}</div></div>`).join('')}`:''}`;
 }
+let MONEY_TAB='summary', WANT_OPEN=null;
 let PROP_FILES=[];
 function proposalForm(id, existing){
   const r=(window.__opps||[]).find(x=>x.id===id)||{};

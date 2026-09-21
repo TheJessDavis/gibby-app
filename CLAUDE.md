@@ -100,6 +100,20 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - No "Final numbers" headcount email at the registration cutoff, and no "A week out and not
   full" promote nudge (both removed Sep 21, 2026). The under-minimum decision email stays.
 
+## Interface conventions (Sep 2026 calm-down pass)
+
+- Colour means status only: `.card.needs` / `cls-back` / `cls-review` pink (needs you), `cls-pending` /
+  `.waiting` yellow (waiting on someone), `cls-approved` / `.done` green, `cls-off` / `.past` grey;
+  every other card is white. No rotating pastels.
+- `alert()` is a toast (`toast()`); `confirm()` stays for irreversible actions. No emoji on `.btn`
+  buttons; emoji live on the tab bar, section headers and list rows only.
+- Section headers are `#tab > label` in Summer Fresh. Explainer paragraphs (`h2 + p.sub`,
+  `label + p.sub`) show once per screen then fold behind a "?" (`foldHints`, localStorage `hint:*`).
+- Long lists are `details.clsrow` rows that open to the full card (My classes, Requests, People,
+  Learn, Opportunities). Instructor extras live in the "Ask The Gibby" menu on My classes. Admin
+  More is grouped: Classes, Money, Reach, Records. Money has three tabs (`MONEY_TAB`).
+- Six tabs is the phone limit for instructors; put new things inside existing screens.
+
 ## How the main flows work
 
 - **Booking**: `slots` table from the Gibby calendar. Fall months are open; later months unlock at
