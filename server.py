@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.94.2-help-review"
+VERSION = "10.94.3-no-headcount"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2710,29 +2710,9 @@ def run_scheduler(asof=None):
                         f"and tap Promote if you want a \"spots still open\" post on the Gibby's "
                         f"Facebook Page.")
                     actions.append(f"week-out promote nudge: {cls['title']}")
-            close_days = int(cls.get("close_days") or 0)
-            if close_days and days == close_days:
-                # Registration has just closed. This number will not move now, which
-                # is the whole point of the cutoff: shop for materials against it.
-                instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
-                if instr_row:
-                    first = (instr_row["name"] or "").split(" ")[0] or "there"
-                    mat_line = (f"At {money_str(cls.get('material_cost'))} a head that is "
-                                f"{money_str((cls.get('material_cost') or 0) * enrolled)} of materials.\n\n"
-                                if cls.get("material_cost") else "")
-                    if (cls.get("pay_model") or "flat") == "split":
-                        mat_line += (f"At the 60% split, your pay for this class comes to "
-                                     f"{money_str(class_finance(cls, enrolled)['instructor_pay'])}.\n\n")
-                    sent, why = send_class_email(c, cls, "headcount", [instr_row["email"]],
-                        f"Final numbers for {cls['title']}: {enrolled} booked",
-                        f"Hi {first},\n\nRegistration for \"{cls['title']}\" has closed.\n\n"
-                        f"You have {enrolled} student{'' if enrolled==1 else 's'} booked "
-                        f"(room for {cls.get('max_p')}).\n\n{mat_line}"
-                        f"That number is settled now, so you can shop with confidence.\n\n"
-                        f"See you on {cls.get('slot_date','')}.\nThe Gibby", today, cfg)
-                    if sent:
-                        c.execute("UPDATE classes SET headcount_sent=1 WHERE id=?",(cls["id"],))
-                        actions.append(f"final headcount to {instr_row['name']} ({enrolled}): {cls['title']}")
+            # No "final numbers" email at the registration cutoff: the owner asked for
+            # it to stop (Sep 21, 2026). Eventbrite still closes sales on its own and
+            # the roster email the day before carries the count.
             if days == 2:
                 # The student reminder is sent by a PERSON: this nudges the
                 # instructor and admins, and the app's Send reminder button (with
