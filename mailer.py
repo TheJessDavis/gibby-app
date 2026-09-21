@@ -451,13 +451,21 @@ def _send_now(to, subject, body, cfg=None, attachments=None, reply_to=None, from
     return False
 
 # ------------------------------------------------------------- templates ----
+def _money(v):
+    try: v = float(v or 0)
+    except (TypeError, ValueError): return "$0"
+    return f"${v:,.0f}" if v == int(v) else f"${v:,.2f}"
+
 def tmpl_approved(cls, instr):
     return (f"Your class is approved: {cls['title']}",
         f"Hi {instr['name'].split()[0]},\n\n"
         f"Your class \"{cls['title']}\" is approved and going live.\n\n"
         f"When: {cls.get('slot_date','')} {cls.get('class_time') or cls.get('slot_time','')}\n"
         f"Where: The Gibby, {cls.get('room','')}\n"
-        f"Ticket: ${cls.get('ticket_price','')}  |  Your pay: ${cls.get('instructor_pay','')}\n\n"
+        f"Ticket: {_money(cls.get('ticket_price'))}  |  Estimated pay: {_money(cls.get('instructor_pay'))}\n\n"
+        f"Your pay is an ESTIMATE. It is worked out from the number of students you planned for and the supply "
+        f"costs you listed. The final amount depends on how many students actually register and what the "
+        f"supplies actually cost, and it is settled after the class.\n\n"
         f"It is now posted for registration. You will see enrollment as students sign up.\n\n"
         f"Thanks,\nThe Gibby")
 
