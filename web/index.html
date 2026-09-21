@@ -1230,22 +1230,34 @@ async function adminDashboard(){
   if(!d0 || !Array.isArray(d0.pending)) throw Object.assign(new Error('The server gave an incomplete answer'), {status:502});
   const rr = rerunCandidates(all.classes||[]);
   window.__rrc = rr;
+  // One line per thing that needs an admin, each going straight to where it is done.
+  const todo=[];
+  const n=(k,one,many)=>k===1?one:many.replace('N',k);
+  if(d.email_error) todo.push({k:'⚠', t:'Email is not going out', go:"renderAdmin('email')", warn:true});
+  if((d.publish_failures||[]).length) todo.push({k:'⚠', t:n(d.publish_failures.length,'1 publishing step failed','N publishing steps failed'), go:"jumpTo('#pubfail')", warn:true});
+  if(d.pending.length) todo.push({k:'\u{1F4DD}', t:n(d.pending.length,'1 class waiting for approval','N classes waiting for approval'), go:"renderAdmin('approvals')"});
+  if((d.graphic||[]).length) todo.push({k:'\u{1F5BC}️', t:n(d.graphic.length,'1 poster to review','N posters to review'), go:"renderAdmin('approvals')"});
+  d.low.forEach(c=>todo.push({k:'\u{1F4C9}', t:`${c.title} is under minimum (${c.enrolled}/${c.min_p})`, go:`jumpTo('#low${c.id}')`}));
+  if(d.hands_raised) todo.push({k:'\u{1F64B}', t:n(d.hands_raised,'1 raised hand or proposal to confirm','N raised hands or proposals to confirm'), go:"HUB_MODE='wanted';renderAdmin('requests')"});
+  if(d.supplies_waiting) todo.push({k:'\u{1F9FA}', t:n(d.supplies_waiting,'1 supply order to place','N supply orders to place'), go:"HUB_MODE='orders';renderAdmin('requests')"});
+  if(d.photo_drafts) todo.push({k:'\u{1F4F7}', t:n(d.photo_drafts,'1 photo post to approve','N photo posts to approve'), go:"renderAdmin('marketing')"});
+  if(d.reimbursements) todo.push({k:'\u{1F4B5}', t:n(d.reimbursements,'1 reimbursement to pay','N reimbursements to pay'), go:"renderAdmin('money')"});
+  const waiting=[d.returned.length?n(d.returned.length,'1 class sent back','N classes sent back'):'', d.contracts_unsigned?n(d.contracts_unsigned,'1 contract unsigned','N contracts unsigned'):''].filter(Boolean);
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
-    ${d.channel_summary?`<div class="card" style="background:#DCE8F5"><div class="meta"><b>\u{1F4C8} Where tickets came from.</b> ${esc(d.channel_summary)} <a href="#" onclick="renderAdmin('money');return false">Details</a></div></div>`:''}
-    <p class="sub">${d.pending.length} pending · ${(d.graphic||[]).length} poster review · ${d.low.length} low enrollment · ${d.returned.length} sent back</p>
-    ${d.email_error?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
-      <div class="row"><div><h3>\u26a0 Email is not going out</h3>
+    ${todo.length?`<div class="card" style="padding:6px 8px">${todo.map(x=>`<button class="todoline" onclick="${x.go}"><span>${x.k}</span><b${x.warn?' style="color:#B4442C"':''}>${esc(x.t)}</b><span class="rowchev">›</span></button>`).join('')}</div>`
+      :'<div class="card" style="text-align:center"><b>Nothing needs you right now.</b><div class="meta">Approvals, posters, orders and proposals all show up here.</div></div>'}
+    ${waiting.length?`<div class="meta" style="margin:6px 2px 0">Waiting on instructors: ${waiting.join(' · ')}.</div>`:''}
+    ${d.channel_summary?`<div class="meta" style="margin:6px 2px 0">\u{1F4C8} ${esc(d.channel_summary)} <a href="#" onclick="renderAdmin('money');return false">Details</a></div>`:''}
+    <div class="two" style="margin:14px 0 4px">
+      <button class="btn ghost" onclick="HUB_MODE='wanted';renderAdmin('requests')">\u{1F4CC} Post an opportunity</button>
+      <button class="btn ghost" onclick="runScheduler()">⚙️ Run scheduler now</button></div>
+    ${d.email_error?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0;margin-top:12px">
+      <div class="row"><div><h3>⚠ Email is not going out</h3>
         <div class="meta">The last email the app tried to send was rejected, so instructors and admins are not getting notifications, invitations or contracts.</div></div></div>
       <div class="meta" style="margin-top:8px;color:#B4442C">${esc(d.email_error)}</div>
       <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('email')">Open Email settings to send a test</button></div>`:''}
-    <div class="card"><div class="row"><div><h3>Need a class taught?</h3>
-        <div class="meta">Post a title and description; every instructor is emailed and the first to claim gets a pre-filled proposal.</div></div></div>
-      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('requests')">\u{1F4CC} Post a class request \u2192</button></div>
-    ${d.supplies_waiting?`<div class="card"><div class="row"><div><h3>Supplies requested</h3>
-        <div class="meta">${d.supplies_waiting} request${d.supplies_waiting===1?'':'s'} from instructors waiting to be ordered.</div></div></div>
-      <button class="btn dark" style="margin-top:10px" onclick="HUB_MODE='orders';renderAdmin('requests')">Open orders \u2192</button></div>`:''}
-    ${(d.publish_failures||[]).length?`<div class="card" style="border:2px solid #E8B4A8;background:#FDF3F0">
+    ${(d.publish_failures||[]).length?`<div class="card" id="pubfail" style="border:2px solid #E8B4A8;background:#FDF3F0;margin-top:12px">
       <div class="row"><div><h3>⚠ Publishing needs attention</h3>
         <div class="meta">${d.publish_failures.length} step${d.publish_failures.length===1?'':'s'} could not be posted after ${5} tries. The class itself is still approved.</div></div></div>
       ${d.publish_failures.map(f=>`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
@@ -1254,27 +1266,13 @@ async function adminDashboard(){
         <div class="meta" style="margin-top:3px">${f.attempts} attempts · last tried ${esc(f.updated||'')}</div>
         <button class="btn ghost" style="margin-top:8px" onclick="retryJob(${f.id})">Try ${esc(f.platform_label)} again</button>
       </div>`).join('')}</div>`:''}
-    ${(d.graphic||[]).length?`<div class="card"><div class="row"><div><h3>Posters waiting on you</h3>
-      <div class="meta">${d.graphic.map(c=>esc(c.title)).join(', ')} · approved but not yet published</div></div></div>
-      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review posters →</button></div>`:''}
-    <div class="card"><div class="row"><div><h3>Automations</h3><div class="meta">Reminders, low-enroll alerts, auto-cancel &amp; follow-ups run daily on their own.</div></div></div>
-      <button class="btn ghost" style="margin-top:10px" onclick="runScheduler()">Run scheduler now</button></div>
-    ${rr.length?`<div class="card"><div class="row"><div><h3>Worth running again</h3>
-      <div class="meta">Past classes that filled their seats. One tap copies everything into a fresh booking.</div></div></div>
-      ${rr.map((c,i)=>`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+    ${d.low.length?`<label style="margin-top:16px">Low enrollment (${d.low.length})</label>${d.low.map(lowCard).join('')}`:''}
+    ${rr.length?`<label style="margin-top:16px">Worth running again</label>
+      <div class="card">${rr.map((c,i)=>`<div style="${i?'margin-top:10px;padding-top:10px;border-top:1px solid var(--line)':''}">
         <div style="font-weight:800;font-size:13.5px">${esc(c.title)}</div>
-        <div class="meta" style="margin-top:2px">${esc(c.instructor_name)} · filled ${c.enrolled} of ${c.max_p} seats${c.rating_n?` · \u2605 ${c.rating_avg} (${c.rating_n})`:''} · last ran ${esc(c.slot_date||'')}</div>
-        <button class="btn dark" style="margin-top:8px" onclick="rerunClass(${i})">Run it again</button></div>`).join('')}</div>`:''}
-    <label>Pending approval (${d.pending.length})</label>
-    ${d.pending.map(c=>`<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill pend">pending</span></div>
-      <div class="meta">${esc(c.instructor_name)}</div>
-      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('approvals')">Review →</button></div>`).join('') || '<div class="muted">Nothing pending.</div>'}
-    <label style="margin-top:16px">Low enrollment (${d.low.length})</label>
-    ${d.low.map(lowCard).join('') || '<div class="muted">No low-enrollment classes.</div>'}
-    <label style="margin-top:16px">Setup</label>
-    <div class="card"><div class="row"><h3>Platform connections</h3></div>
-      <div class="meta">Eventbrite, Website, Facebook, Descene, Canva</div>
-      <button class="btn dark" style="margin-top:10px" onclick="renderAdmin('connections')">Manage →</button></div>`;
+        <div class="meta" style="margin-top:2px">${esc(c.instructor_name)} · filled ${c.enrolled} of ${c.max_p} seats${c.rating_n?` · ★ ${c.rating_avg} (${c.rating_n})`:''} · last ran ${esc(c.slot_date||'')}</div>
+        <button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="rerunClass(${i})">Run it again</button></div>`).join('')}</div>`:''}
+    <div class="meta" style="margin:16px 2px 0"><a href="#" onclick="renderAdmin('connections');return false">Platform connections</a> · Eventbrite, Website, Facebook, Descene, Canva</div>`;
 }
 function classLastDate(c){
   const lbl=(c.sessions&&c.sessions.length)?c.sessions[c.sessions.length-1].date:c.slot_date;
@@ -1310,7 +1308,7 @@ function rerunClass(i){
   setTimeout(()=>tryBanner(8),400);
 }
 function lowCard(c){
-  return `<div class="card"><div class="row"><h3>${esc(c.title)}</h3><span class="pill inc">${c.enrolled}/${c.min_p}</span></div>
+  return `<div class="card" id="low${c.id}"><div class="row"><h3>${esc(c.title)}</h3><span class="pill inc">${c.enrolled}/${c.min_p}</span></div>
     <div class="meta">${esc(c.instructor_name)} · below the minimum of ${c.min_p}</div>
     <div class="two" style="margin-top:12px">
       <button class="btn ghost" onclick="promote(${c.id})">Promote</button>
@@ -1907,6 +1905,7 @@ function rqSetKind(k){ RQ_KIND=k; const seg=$('#rq_kind'); if(seg) seg.querySele
   const bw=$('#rq_btnwrap'); if(bw) bw.style.display = k==='teach'?'none':'';
   const bi=$('#rq_btn'); if(bi) bi.placeholder = k==='help'?'e.g. I can help':k==='sell'?'e.g. I want a table':'e.g. Submit a Craft Kit Proposal';
 }
+let RQ_SHOW_ALL={}, RQ_OPEN=null;
 function hubBar(){
   return `<div class="seg" style="margin-bottom:12px"><button class="${HUB_MODE==='wanted'?'on':''}" onclick="HUB_MODE='wanted';adminRequestsHub()">\u{1F4CC} Opportunities</button><button class="${HUB_MODE==='orders'?'on':''}" onclick="HUB_MODE='orders';adminRequestsHub()">\u{1F9FA} Orders</button></div>`;
 }
@@ -1924,10 +1923,11 @@ function rqDrawSkills(){
 }
 function rqEdit(id){
   const r=(window.__reqs||[]).find(x=>x.id===id); if(!r) return;
-  RQ_EDIT=id; RQ_SKILLS=(r.skills||[]).slice(); rqSetKind(r.kind||'teach');
+  RQ_EDIT=id; RQ_OPEN=id; RQ_SKILLS=(r.skills||[]).slice(); rqSetKind(r.kind||'teach');
+  const f=$('#rq_form'); if(f) f.open=true;
   $('#rq_title').value=r.title||''; $('#rq_when').value=r.when_text||''; $('#rq_room').value=r.room||''; $('#rq_ages').value=r.ages||'';
   $('#rq_desc').value=r.description||''; $('#rq_notes').value=r.notes||''; if($('#rq_btn')) $('#rq_btn').value=r.button_label||'';
-  rqDrawSkills(); $('#rq_formtitle').textContent='Editing: '+(r.title||''); $('#rq_btns').innerHTML=`<button class="btn ghost" onclick="rqCancelEdit()">Cancel</button><button class="btn dark" onclick="postRequest(false)">Save changes</button>`;
+  rqDrawSkills(); $('#rq_formtitle').textContent='\u270F\uFE0F Editing: '+(r.title||''); $('#rq_btns').innerHTML=`<button class="btn ghost" onclick="rqCancelEdit()">Cancel</button><button class="btn dark" onclick="postRequest(false)">Save changes</button>`;
   $('#rq_title').scrollIntoView({behavior:'smooth',block:'center'});
 }
 function rqCancelEdit(){ RQ_EDIT=null; RQ_SKILLS=[]; adminRequests(); }
@@ -1957,9 +1957,22 @@ async function adminRequests(){
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
     <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="rqEdit(${r.id})">\u270F\uFE0F Edit</button>${r.status==='open'?`<button class="btn ghost" onclick="rqNotify(${r.id})">\u2709\uFE0F Email everyone</button>`:'<span></span>'}</div>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
+  const KIND_ORDER=['teach','help','sell','design'];
+  const row=r=>`<details class="clsrow ${r.status==='open'?'cls-approved':r.status==='claimed'?'cls-review':'cls-off'}" ${RQ_OPEN===r.id?'open':''}>
+    <summary><span class="clspic clspic-i">${(KM[r.kind]||KM.teach).split(' ')[0]}</span>
+      <div class="rowt"><b>${esc(r.title)}</b><span>${[r.when_text, (r.interest||[]).filter(i=>i.status==='raised').length?`${(r.interest||[]).filter(i=>i.status==='raised').length} waiting on you`:'', r.status==='claimed'?'claimed by '+(r.claimed_by_name||'?'):''].filter(Boolean).map(esc).join(' \u00b7 ')||'no details'}</span></div>
+      ${(r.interest||[]).some(i=>i.status==='raised')?'<span class="pill pend" style="flex:none">reply</span>':''}<span class="rowchev">\u203A</span></summary>${card(r)}</details>`;
+  const group=(label, list, key)=>{
+    if(!list.length) return '';
+    const more=list.length>5 && !RQ_SHOW_ALL[key];
+    const shown=more?list.slice(0,5):list;
+    return `<label style="margin-top:16px">${label} (${list.length})</label>${shown.map(row).join('')}
+      ${more?`<button class="btn ghost" style="margin-top:6px;padding:8px 14px" onclick="RQ_SHOW_ALL['${key}']=true;adminRequests()">Show all ${list.length}</button>`:''}`;
+  };
+  const openByKind=KIND_ORDER.map(k=>group(KM[k], open.filter(r=>(r.kind||'teach')===k), 'open-'+k)).join('');
   $('#tab').innerHTML=`<h2>Requests</h2>${hubBar()}
-    <p class="sub">Post what The Gibby needs: a class to teach, a helping hand, or a chance to sell or show. Instructors see it on their Opportunities tab. Email everyone only when you choose to.</p>
-    <div class="card"><h3 id="rq_formtitle" style="font-size:1rem;margin:0 0 4px">Post an opportunity</h3>
+    <details class="card" id="rq_form" ${RQ_EDIT?'open':''} style="margin-bottom:4px"><summary style="cursor:pointer;font-weight:800;font-size:1rem" id="rq_formtitle">\u{1F4CC} Post an opportunity</summary>
+      <div class="hint" style="margin-top:6px">A class to teach, a helping hand, a chance to sell or show, or paid design work. Instructors see it on their Opportunities tab; email everyone only when you choose to.</div>
       <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell</button><button data-v="design" onclick="rqSetKind('design')">\u{1F9E9} Design</button></div>
       <div class="hint">Teach: a class someone claims. Help: a volunteer spot, an assistant, a mentor. Sell: a market, a wall, a pop-up. Design: paid work like a craft kit or a commission, with a deadline. People raise a hand and you confirm.</div>
       <label>Title</label><input id="rq_title" placeholder="e.g. Kids pottery">
@@ -1978,10 +1991,10 @@ async function adminRequests(){
       <div class="skillcloud" id="rq_skills"></div>
       <div class="two" style="margin-top:6px"><input id="rq_custom" placeholder="Another skill? Type it"><button class="btn ghost" onclick="rqCustomSkill()">Add</button></div>
       <div class="two" id="rq_btns" style="margin-top:10px"><button class="btn ghost" onclick="postRequest(false)">Post it</button><button class="btn dark" onclick="postRequest(true)">Post it and email everyone</button></div>
-      <div class="hint">Post it: it appears on the instructors' Opportunities tab only. Post and email: every instructor also gets a message about it.</div></div>
-    <label style="margin-top:16px">Open (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing open.</div>'}
-    <label style="margin-top:16px">Claimed (${claimed.length})</label>${claimed.map(card).join('')||'<div class="muted">None claimed yet.</div>'}
-    ${closed.length?`<label style="margin-top:16px">Closed recently (${closed.length})</label>${closed.map(card).join('')}`:''}`;
+      <div class="hint">Post it: it appears on the instructors' Opportunities tab only. Post and email: every instructor also gets a message about it.</div></details>
+    ${open.length?openByKind:'<div class="muted" style="margin-top:12px">Nothing open.</div>'}
+    ${group('Claimed', claimed, 'claimed')}
+    ${group('Closed recently', closed, 'closed')}`;
   rqDrawSkills(); rqSetKind(RQ_EDIT?RQ_KIND:'teach');
 }
 async function postRequest(notify){

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.96.3-bio-40-80"
+VERSION = "10.97.0-home-requests"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4331,6 +4331,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 "publish_failures": self._publish_failures(),
                 "email_error": mailer.LAST_ERROR,
                 "supplies_waiting": db().execute("SELECT COUNT(*) FROM supply_requests WHERE status='requested'").fetchone()[0],
+                "hands_raised": db().execute("""SELECT COUNT(*) FROM request_interest i JOIN class_requests r ON r.id=i.request_id
+                                                WHERE i.status='raised' AND r.status='open'""").fetchone()[0],
+                "photo_drafts": db().execute("SELECT COUNT(*) FROM social_posts WHERE status='draft'").fetchone()[0],
+                "reimbursements": db().execute("SELECT COUNT(*) FROM reimbursements WHERE status='requested'").fetchone()[0],
+                "contracts_unsigned": db().execute("SELECT COUNT(*) FROM classes WHERE contract_status='sent' AND deleted_at IS NULL").fetchone()[0],
                 "pending": self._classes("WHERE c.status='pending' "),
                 "graphic": self._classes("WHERE c.status='graphic_review' "),
                 "returned": self._classes("WHERE c.status='incomplete' "),
