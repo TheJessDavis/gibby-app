@@ -2833,7 +2833,7 @@ function shrinkImage(file, maxDim, quality){
     fr.readAsDataURL(file);
   });
 }
-function attachPoster(id, ev, kind){
+function attachPoster(id, ev, kind, stay){
   const f = ev.target.files[0]; if(!f) return;
   if(f.size > 40*1024*1024){ alert('That image is '+Math.round(f.size/1048576)+'MB, which is too big even to open. Please export a smaller one.'); return; }
   (async () => {
@@ -2841,6 +2841,7 @@ function attachPoster(id, ev, kind){
       const image = await shrinkImage(f, 1600, 0.82);
       const r = await api('/api/classes/'+id+'/poster','POST',{image, kind:kind||'landscape'});
       if(r.eventbrite) alert('Poster saved. Eventbrite listing: '+r.eventbrite+'.');
+      if(stay){ const c=(window.__classes||[]).find(x=>x.id===id); if(c){ c[{landscape:'poster',portrait:'poster_portrait',photo:'photo'}[kind]]=image; } openLiveEdit(id); return; }
       adminApprovals();
     }
     catch(err){ alert('Could not attach that poster.\n\n'+err.message); }
@@ -3216,7 +3217,23 @@ function openLiveEdit(id){
     <div class="two"><div><label>Ticket ($)</label><input id="e_ticket" type="number" value="${c.ticket_price}"></div><div><label>Instructor pay ($)</label><input id="e_pay" type="number" value="${c.instructor_pay}"></div></div>
     <label>Pay model</label><select id="e_paym"><option value="flat" ${c.pay_model!=='split'?'selected':''}>Flat fee</option><option value="split" ${c.pay_model==='split'?'selected':''}>60% of ticket sales</option></select>
     <label class="chk" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="e_donate" ${c.donation_based?'checked':''}> Donation-based (students pay what they want)</label>
-    <label>Registration closes</label><select id="e_close">${[0,1,2,3,5,7,14].map(d=>`<option value="${d}" ${d===(c.close_days||0)?'selected':''}>${d===0?'Never (sell until start)':d+' day'+(d===1?'':'s')+' before'}</option>`).join('')}</select>
+    ${(()=>{ const win=(c.slot_time||'').split(/\s*[–-]\s*/); const cur=(c.class_time||c.slot_time||'').split(/\s*[–-]\s*/);
+      if(win.length<2) return '';
+      const opts=(sel)=>{ let o=''; for(let m=tmin(win[0]); m<=tmin(win[1]); m+=30){ o+=`<option${fmtT(m)===sel?' selected':''}>${fmtT(m)}</option>`; } return o; };
+      return `<label style="margin-top:14px">When the class itself runs</label>
+      <div class="meta">Booked: ${esc(c.slot_date||'')} · ${esc(c.slot_time||'')} in the ${esc(c.room||'')}${c.is_series?' · '+(c.sessions||[]).length+' weekly sessions':''}. The class time must sit inside that window.</div>
+      <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Starts</label><select id="e_cstart">${opts(cur[0])}</select></div><div><label style="margin-top:0">Ends</label><select id="e_cend">${opts(cur[1])}</select></div></div>
+      <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. Need a different day or a longer window? <a href="#" onclick="startReschedule(${c.id});return false">Change date or booked window</a>.</div>`; })()}
+    <label style="margin-top:14px">Images</label>
+    <div class="meta">Replacing an image updates it everywhere at once: the Eventbrite listing (landscape poster), the website (portrait poster, or the class photo if there is none), and the app. Facebook posts already made keep their old picture.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
+      ${[['landscape','Eventbrite poster',c.poster],['portrait','Website poster',c.poster_portrait],['photo','Class photo',c.photo]].map(([k,l,img])=>`<div style="text-align:center">
+        ${img?`<img src="${img}" alt="" style="width:100%;aspect-ratio:${k==='landscape'?'2/1':k==='portrait'?'3/4':'1/1'};object-fit:cover;border-radius:10px;border:1px solid var(--line)">`:`<div style="width:100%;aspect-ratio:${k==='landscape'?'2/1':k==='portrait'?'3/4':'1/1'};border-radius:10px;background:var(--paper);border:1px dashed var(--line)"></div>`}
+        <div class="meta" style="margin-top:4px">${l}</div>
+        <input id="ei_${k}" type="file" accept="image/png,image/jpeg" class="hidden" onchange="attachPoster(${c.id}, event, '${k}', true)">
+        <button type="button" class="btn ghost" style="padding:6px 10px;font-size:12px;margin-top:4px" onclick="document.getElementById('ei_${k}').click()">${img?'Replace':'Add'}</button></div>`).join('')}
+    </div>
+    <label style="margin-top:14px">Registration closes</label><select id="e_close">${[0,1,2,3,5,7,14].map(d=>`<option value="${d}" ${d===(c.close_days||0)?'selected':''}>${d===0?'Never (sell until start)':d+' day'+(d===1?'':'s')+' before'}</option>`).join('')}</select>
     <label>Graphic headline</label><input id="e_head" value="${esc(c.headline||'')}">
     <label>Script subtitle</label><input id="e_sub" value="${esc(c.subtitle||'')}">
     <div class="hint" style="margin-top:8px">Need a different date or time? Use <b>Change date or time</b> on the class card.</div>
@@ -3235,9 +3252,10 @@ async function submitLiveEdit(id){
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
     close_days:+$('#e_close').value, headline:$('#e_head').value, subtitle:$('#e_sub').value,
     donation_based: !!($('#e_donate')&&$('#e_donate').checked)};
+  if($('#e_cstart')&&$('#e_cend')) body.class_time=$('#e_cstart').value+' – '+$('#e_cend').value;
   try{
     const r=await api('/api/classes/'+id+'/update-live','POST',body);
-    alert(`Saved.\n\nEventbrite: ${r.eventbrite}\nCalendar: ${r.calendar}\nWebsite: updates itself.`);
+    alert(`Saved.\n\nEventbrite: ${r.eventbrite}${r.eventbrite_times?' · time '+r.eventbrite_times:''}\nCalendar: ${r.calendar}\nWebsite: updates itself.`);
     renderAdmin('approvals');
   }catch(e){ showErr('eerr',(e.data&&e.data.error)||e.message); }
 }

@@ -109,6 +109,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - **Pricing**: instructor enters what they hope to make per student; ticket = materials + that / 0.6.
   Supply links (url, price, qty, name) are required unless they buy their own. Donation-based makes
   an Eventbrite donation ticket.
+- **Admin "Edit this class"** (`openLiveEdit` / `update-live`): every field, plus the class's own
+  start and end inside the booked window (pushed to Eventbrite via `update_eventbrite_times`, the
+  calendar is recreated, the website reads the DB) and all three images (landscape poster to
+  Eventbrite, portrait poster and class photo to the website via `/class-photo/`). Moving the date
+  or the booked window is the reschedule flow.
 - **Approval**: pending -> graphic_review -> approved (`publish_now`) which posts everywhere and
   sends the contract. Send back = incomplete. Admin "Save changes" on the edit form is a quiet
   save; "Send to instructor" needs their approval.

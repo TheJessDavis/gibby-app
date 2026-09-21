@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.94.6-bg-paused"
+VERSION = "10.95.0-edit-time-images"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6509,6 +6509,20 @@ class H(http.server.BaseHTTPRequestHandler):
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
+            time_changed = False
+            if b.get("class_time"):
+                # The class's own start and end, inside the booked window. The window
+                # itself (date, room, slots) moves through the reschedule flow.
+                parts = re.split(r"\s*[–-]\s*", str(b["class_time"]).strip())
+                win = re.split(r"\s*[–-]\s*", str(row["slot_time"] or "").strip())
+                if len(parts) != 2 or len(win) != 2:
+                    c.close(); return self.send_json({"error":"Could not read the class time."},400)
+                cs, ce = parts
+                if not (tmin(win[0]) <= tmin(cs) < tmin(ce) <= tmin(win[1])):
+                    c.close(); return self.send_json({"error":f"The end time must be after the start time, and both must sit inside the booked window ({row['slot_time']})."},400)
+                new_ct = f"{cs} – {ce}"
+                if new_ct != (row["class_time"] or ""):
+                    sets.append("class_time=?"); vals.append(new_ct); time_changed = True
             if not sets: c.close(); return self.send_json({"error":"Nothing to change."},400)
             vals.append(cid)
             c.execute(f"UPDATE classes SET {','.join(sets)} WHERE id=?", vals)
@@ -6519,6 +6533,10 @@ class H(http.server.BaseHTTPRequestHandler):
             cfg = integrations.load_config()
             try: eb_result = integrations.update_eventbrite_details(fresh, cfg)
             except Exception as e: eb_result = f"failed: {e}"
+            eb_times = ""
+            if time_changed:
+                try: eb_times = integrations.update_eventbrite_times(fresh, cfg)
+                except Exception as e: eb_times = f"failed: {e}"
             gcfg = gcal.load_gcal_config()
             gcal_result = "unchanged"
             try:
@@ -6531,7 +6549,7 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 gcal_result = f"failed: {e}"
             print(f"[live-edit] class #{cid} by {u['name']}: eventbrite {eb_result}; gcal {gcal_result}")
-            return self.send_json({"ok": True, "eventbrite": eb_result, "calendar": gcal_result})
+            return self.send_json({"ok": True, "eventbrite": eb_result, "eventbrite_times": eb_times, "calendar": gcal_result})
         if p.startswith("/api/classes/") and p.endswith("/reschedule"):
             # Move a published one-day class to a new time. Everything it was sent
             # to updates IN PLACE: the Eventbrite event moves (same listing, same
