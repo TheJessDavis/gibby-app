@@ -702,6 +702,23 @@ async function renderProfile(focus){
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
 const MORE_ITEMS=[['supplies','\u{1F9FA}','Orders'],['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['email','\u2709\uFE0F','Email'],['integrations','\u{1F50C}','Integrations'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
+/* A tab left open across a deploy keeps old code and can misread new answers.
+   Watch the version and reload quietly when nothing is half-typed. */
+let APP_VER=null, VER_BANNER=false;
+async function checkVersion(){
+  let v; try{ v=(await (await fetch('/api/version',{cache:'no-store'})).json()).version; }catch(_){ return; }
+  if(!v) return;
+  if(!APP_VER){ APP_VER=v; return; }
+  if(v===APP_VER) return;
+  const busy = document.querySelector('.fab, #ctmodal, #lbmodal, #propmodal, #pwmodal, #resmodal, #propmodal')
+    || (document.activeElement && ['TEXTAREA','INPUT'].includes(document.activeElement.tagName) && document.activeElement.value);
+  if(!busy){ location.reload(); return; }
+  if(!VER_BANNER){ VER_BANNER=true;
+    document.body.insertAdjacentHTML('beforeend', `<div id="verbanner" style="position:fixed;left:12px;right:12px;bottom:96px;z-index:80;background:var(--ink);color:#fff;border-radius:14px;padding:10px 14px;font-size:13px;font-weight:700;display:flex;gap:10px;align-items:center;max-width:440px;margin:0 auto">A newer version of the app is ready.<button onclick="location.reload()" style="margin-left:auto;border:none;border-radius:10px;padding:7px 12px;font-weight:800;cursor:pointer;font-family:inherit">Reload</button></div>`); }
+}
+setInterval(checkVersion, 5*60*1000);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkVersion(); });
+setTimeout(checkVersion, 4000);
 const WIDE = window.matchMedia ? window.matchMedia('(min-width:900px)') : null;
 let BNAV_LAST=null;
 if(WIDE && WIDE.addEventListener) WIDE.addEventListener('change', ()=>{ if(BNAV_LAST && $('#bnav') && $('#bnav').style.display!=='none') buildBnav(BNAV_LAST.role, BNAV_LAST.active); });
@@ -4060,7 +4077,7 @@ function filesHTML(r){
     ${docs.length?`<div class="meta" style="margin-top:6px">${docs.map(f=>`\u{1F4CE} <a href="/api/requests/${r.id}/files/${f.id}" target="_blank" rel="noopener">${esc(f.name)}</a>`).join(' · ')}</div>`:''}`;
 }
 async function instrWanted(){
-  let reqs=[]; try{ reqs=(await api('/api/requests')).requests||[]; }catch(_){}
+  const reqs=(await api('/api/requests')).requests||[];   // a failed load shows the reconnect card, not "nothing open"
   window.__opps=reqs;
   const openAll=reqs.filter(r=>r.status==='open');
   const mine=reqs.filter(r=>(r.status==='claimed' && ME && r.claimed_by===ME.id) || (r.my_interest && r.status!=='closed'));
