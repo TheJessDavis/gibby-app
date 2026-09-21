@@ -95,6 +95,8 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - Class requests post quietly unless the admin chooses "Post it and email everyone".
 - No em dashes anywhere in copy.
 - Never handle passwords or payment details for the owner.
+- Background checks are paused (meta `bg_paused`, default on) until The Gibby settles the process:
+  no requests, reminders or instructor cards for that kind. Untick "Paused" under People to resume.
 - No "Final numbers" headcount email at the registration cutoff, and no "A week out and not
   full" promote nudge (both removed Sep 21, 2026). The under-minimum decision email stays.
 

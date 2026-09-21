@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.94.5-no-week-nudge"
+VERSION = "10.94.6-bg-paused"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1520,6 +1520,11 @@ def paperwork_email(user, rows, reminder=False):
             f"\"The Gibby needs from you\".\n\nOpen the app: {mailer.APP_URL}\n\nThank you,\nThe Gibby")
     return subj, body
 
+def bg_paused():
+    """Background checks are paused until The Gibby settles how they are done:
+    no requests, no reminders, no card for instructors. Admins unpause under People."""
+    return (_meta_get("bg_paused") or "1") == "1"
+
 def sweep_paperwork_reminders():
     """Hourly: anything requested 3+ days ago, still open and never reminded."""
     cutoff = (datetime.datetime.now() - datetime.timedelta(days=CONTRACT_REMINDER_DAYS)).isoformat(timespec="seconds")
@@ -1527,6 +1532,7 @@ def sweep_paperwork_reminders():
     rows = [dict(r) for r in c.execute("""SELECT p.*, u.name, u.email FROM paperwork p JOIN users u ON u.id=p.user_id
         WHERE p.status='requested' AND p.requested_at<=? AND p.reminded_at IS NULL AND u.deleted_at IS NULL""", (cutoff,)).fetchall()]
     c.close()
+    if bg_paused(): rows = [r for r in rows if r["kind"] != "background"]
     by_user = {}
     for r in rows: by_user.setdefault(r["user_id"], []).append(r)
     n = 0
@@ -3521,7 +3527,7 @@ class H(http.server.BaseHTTPRequestHandler):
             cq = db()
             n_contracts = cq.execute("""SELECT COUNT(*) FROM classes WHERE instructor_id=?
                 AND contract_status='sent' AND deleted_at IS NULL""",(u["id"],)).fetchone()[0]
-            n_paper = cq.execute("SELECT COUNT(*) FROM paperwork WHERE user_id=? AND status='requested'",(u["id"],)).fetchone()[0]
+            n_paper = cq.execute("SELECT COUNT(*) FROM paperwork WHERE user_id=? AND status='requested'" + (" AND kind!='background'" if bg_paused() else ""),(u["id"],)).fetchone()[0]
             lb_signed = bool(lockbox_row(cq, u["id"]))
             cq.close()
             return self.send_json({"user": {"id":u["id"],"name":u["name"],"email":u["email"],
@@ -3561,7 +3567,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     by_id[l["user_id"]]["paperwork"]["lockbox"] = {"id": 0, "status": "done", "done_at": l["signed_at"], "value": "Signed in the app" if l["via"] == "app" else "Marked by an admin", "self_reported": 0}
             c.close(); return self.send_json({"users":rows, "paperwork_kinds": {k: v["label"] for k, v in PAPERWORK_KINDS.items()},
                                               "bg_instructions": _meta_get("bg_instructions") or (BG_FORM_DEFAULT if _meta_get("bg_form_name") else BG_INSTRUCTIONS_DEFAULT),
-                                              "bg_form_name": _meta_get("bg_form_name")})
+                                              "bg_form_name": _meta_get("bg_form_name"), "bg_paused": bg_paused()})
         if p == "/api/slots":
             u = self.require()
             if not u: return
@@ -4180,6 +4186,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                                   FROM paperwork WHERE user_id=? ORDER BY id""", (u["id"],)).fetchall()]
             c.close()
             kinds = paperwork_kinds()
+            if bg_paused(): rows = [r for r in rows if r["kind"] != "background"]
             for r in rows: r["label"] = kinds.get(r["kind"], {}).get("label", r["kind"]); r["what"] = kinds.get(r["kind"], {}).get("what", "")
             return self.send_json({"paperwork": rows, "phone": u.get("phone") or "", "bg_form_name": _meta_get("bg_form_name")})
         if p == "/api/lockbox":
@@ -5204,6 +5211,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 _meta_set("bg_form_name", re.sub(r"[^A-Za-z0-9._ -]+", "-", str(b.get("form_name") or "background-check-form.pdf"))[:80])
             if b.get("remove_form"):
                 for k in ("bg_form_b64","bg_form_mime","bg_form_name"): _meta_set(k, "")
+            if b.get("bg_paused") is not None:
+                _meta_set("bg_paused", "1" if b.get("bg_paused") else "0")
             return self.send_json({"ok":True, "bg_instructions": _meta_get("bg_instructions") or (BG_FORM_DEFAULT if _meta_get("bg_form_name") else BG_INSTRUCTIONS_DEFAULT),
                                    "bg_form_name": _meta_get("bg_form_name")})
         if p == "/api/admin/paperwork":
@@ -5213,6 +5222,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             b = self.read_json()
             kinds = [k for k in (b.get("kinds") or []) if k in PAPERWORK_KINDS]
+            if bg_paused(): kinds = [k for k in kinds if k != "background"]   # paused until the process is settled
             if not kinds: return self.send_json({"error":"Pick at least one thing to ask for."},400)
             note = (b.get("note") or "").strip()[:500]
             c = db()

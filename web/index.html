@@ -1612,8 +1612,10 @@ function peoplePick(kind, val){
   if(kind==='skill'){ PEOPLE_Q=''; PEOPLE_PICKED=false; peopleFilter(val); return; }
   PEOPLE_Q=val; PEOPLE_PICKED=true; adminPeople();
 }
+let BG_PAUSED=true;
 async function adminPeople(){
   const [d, lb]=await Promise.all([api('/api/users'), api('/api/admin/lockbox').catch(()=>null)]);
+  BG_PAUSED=!!d.bg_paused;
   const allSkills=[...new Set(d.users.flatMap(u=>u.skills||[]))].sort();
   let shown = PEOPLE_SKILL ? d.users.filter(u=>(u.skills||[]).includes(PEOPLE_SKILL)) : d.users;
   const ql=PEOPLE_Q.trim().toLowerCase();
@@ -1658,7 +1660,9 @@ async function adminPeople(){
         <div class="hint">What instructors read and sign. Names in it (Michelle Truban, Seth Cosans) can be changed here.</div>
         <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveLockboxText()">Save contract text</button></details>
     </details>`:''}
-    <details class="card" style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:800">Background check instructions (what instructors are told)</summary>
+    <details class="card" style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:800">Background checks${d.bg_paused?' (paused)':''}</summary>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="bg_paused" ${d.bg_paused?'checked':''} onchange="saveBgPaused(this.checked)"> Paused: no background check requests, reminders or instructor cards until the process is settled</label>
+      <label style="margin-top:10px">Instructions (what instructors are told)</label>
       <textarea id="bg_instr" rows="5" style="margin-top:8px">${esc(d.bg_instructions||'')}</textarea>
       <div class="hint">Shown on their card and in the request email. Put the exact steps or a screening-service link here once you decide how The Gibby runs checks.</div>
       <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveBgInstr()">Save</button>
@@ -1764,7 +1768,7 @@ async function paperRequest(userId, who){
     <h2 style="margin:0 0 2px">Request <em>paperwork</em></h2>
     <p class="sub" style="margin:0 0 10px">They get one email and a card at the top of My classes; a reminder follows in 3 days if it is still open. Anyone who already sent an item, or was already asked, is skipped.</p>
     <label class="chk"><input type="checkbox" id="pwk_w9" checked> W-9 tax form (they upload a photo or PDF)</label>
-    <label class="chk"><input type="checkbox" id="pwk_bg" checked> Background check (they mark it done, attach confirmation if any)</label>
+    <label class="chk"><input type="checkbox" id="pwk_bg" ${BG_PAUSED?'disabled':'checked'}> Background check${BG_PAUSED?' <span class="meta">(paused until the process is settled; untick Paused under People to resume)</span>':' (they mark it done, attach confirmation if any)'}</label>
     <label class="chk"><input type="checkbox" id="pwk_ph" checked> Phone number (skipped for anyone who already has one on file)</label>
     <label class="chk"><input type="checkbox" id="pwk_lb" checked> Lockbox key code contract (they sign it in the app; skipped for anyone who already signed)</label>
     <label style="margin-top:10px">Who</label>
@@ -1801,6 +1805,10 @@ async function interestAct(rid, iid, action){
   if(!confirm(action==='confirm'?'Confirm this person? They are emailed the details.':'Decline this person? They get a kind note.')) return;
   try{ await api('/api/requests/'+rid+'/interest/'+iid+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
   adminRequests();
+}
+async function saveBgPaused(on){
+  try{ await api('/api/admin/paperwork-settings','POST',{bg_paused:on}); }catch(e){ alert(e.message); }
+  adminPeople();
 }
 async function paperAdmin(id, action){
   try{ await api('/api/paperwork/'+id+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
@@ -4795,7 +4803,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
