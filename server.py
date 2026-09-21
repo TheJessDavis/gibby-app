@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.100.1-calm-done"
+VERSION = "10.101.0-trim"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3138,7 +3138,6 @@ class H(http.server.BaseHTTPRequestHandler):
     # -- routing --
     def do_GET(self):
         p = urllib.parse.urlparse(self.path).path
-        if p == "/embed": return self.embed_page()
         if p == "/embed.json": return self.embed_json()
         if p == "/embed/instructors.json": return self.embed_instructors_json()
         if p == "/embed/instructors": return self.embed_instructors_page()
@@ -3572,21 +3571,6 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body); return
 
-    def embed_page(self):
-        """RETIRED. The website no longer iframes this: theeverett.org/artworkshops
-        reads /embed.json and renders the cards natively in its own theme. The route
-        survives only because a stale iframe still sits in that page's saved content
-        (the injected script hides it on load); serving a blank page means the stale
-        frame shows nothing instead of a 404. Safe to delete once that old code block
-        is removed from the Squarespace page."""
-        data = b"<!doctype html><title>Moved</title>"
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers(); self.wfile.write(data); return
-
-    # -- GET api --
     def api_get(self, p):
         if p == "/api/version":
             # open_slots is deliberately public: it says nothing beyond what the
@@ -4004,17 +3988,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 out["to"] = _meta_get("supply_to") or SUPPLY_TO_DEFAULT
                 out["materials_sheet_link"] = _meta_get("materials_sheet_link")
             return self.send_json(out)
-        if p == "/api/reimbursements":
-            u = self.current_user()
-            if not u: return self.send_json({"error":"not signed in"},401)
-            c = db()
-            where = "" if u["role"] == "admin" else "WHERE r.user_id=?"
-            rows = [dict(x) for x in c.execute(f"""SELECT r.*, cl.title AS class_title, cl.slot_date, us.name AS instructor_name,
-                 ad.name AS decided_by_name FROM reimbursements r JOIN classes cl ON cl.id=r.class_id
-                 JOIN users us ON us.id=r.user_id LEFT JOIN users ad ON ad.id=r.decided_by
-                 {where} ORDER BY r.status='requested' DESC, r.id DESC LIMIT 300""", (() if not where else (u["id"],))).fetchall()]
-            c.close()
-            return self.send_json({"reimbursements": rows})
         if p == "/api/requests":
             # The class requests board: what The Gibby would like taught. Open
             # requests are visible to every instructor; admins also see who claimed.
@@ -5723,74 +5696,6 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             ok = send_admin_digest(force=True)
             return self.send_json({"ok":bool(ok), "error": ("" if ok else mailer.LAST_ERROR)})
-        mrb = re.match(r"^/api/classes/(\d+)/reimburse$", p)
-        if mrb:
-            return self.send_json({"error":"Reimbursements moved: use the Reimburse tab."},410)
-        if False:
-            u = self.current_user()
-            if not u: return self.send_json({"error":"not signed in"},401)
-            cid = int(mrb.group(1)); b = self.read_json(); c = db()
-            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL",(cid,)).fetchone()
-            if not row: c.close(); return self.send_json({"error":"not found"},404)
-            if u["role"] != "admin" and row["instructor_id"] != u["id"]:
-                c.close(); return self.send_json({"error":"That is not your class."},403)
-            cls = dict(row); c.close()
-            try: amount = round(float(b.get("amount") or 0), 2)
-            except (TypeError, ValueError): amount = 0
-            if not (0 < amount <= 2000): return self.send_json({"error":"Enter the amount you spent (up to $2,000)."},400)
-            note = (b.get("note") or "").strip()[:500]
-            if len(note) < 3: return self.send_json({"error":"Say what the receipt is for."},400)
-            link, thumb = None, (b.get("thumb") or "")[:60000]
-            b64 = (b.get("b64") or "")
-            if "," in b64[:40]: b64 = b64.split(",",1)[1]
-            if b64:
-                if len(b64) > 3_000_000: return self.send_json({"error":"That receipt photo is too large."},400)
-                try:
-                    res = push_photo_to_drive(cls, f"RECEIPT-{amount:.2f}-{re.sub(r'[^A-Za-z0-9]+','-',(u.get('name') or 'instructor'))[:30]}.jpg", b64, "image/jpeg")
-                    link = res.get("link")
-                except Exception as e:
-                    return self.send_json({"error": f"The receipt could not be filed on Drive: {e}"},502)
-            c = db()
-            c.execute("""INSERT INTO reimbursements(class_id,user_id,amount,note,receipt_link,receipt_thumb,status,created)
-                         VALUES(?,?,?,?,?,?,'requested',?)""", (cid, u["id"], amount, note, link, thumb, now()))
-            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-            admins = [a for a in emails_for(c, "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()]
-            c.commit(); c.close()
-            if admins:
-                mailer.send(admins, f"Reimbursement request: ${amount:.2f} from {u['name']} ({cls['title']})",
-                    f"{u['name']} asks to be paid back ${amount:.2f} for \"{cls['title']}\".\n\n  What for: {note}\n"
-                    + (f"  Receipt: {link}\n" if link else "  (no receipt photo attached)\n")
-                    + f"\nApprove or decline it under Money in the app: {mailer.APP_URL}")
-            return self.send_json({"ok":True, "id":rid, "receipt": link})
-        mrd = re.match(r"^/api/reimbursements/(\d+)/(approve|decline|paid)$", p)
-        if mrd:
-            u = self.require("admin")
-            if not u: return
-            rid, action = int(mrd.group(1)), mrd.group(2); b = self.read_json(); c = db()
-            row = c.execute("""SELECT r.*, cl.title AS class_title, us.email AS instr_email, us.name AS instr_name
-                               FROM reimbursements r JOIN classes cl ON cl.id=r.class_id JOIN users us ON us.id=r.user_id
-                               WHERE r.id=?""",(rid,)).fetchone()
-            if not row: c.close(); return self.send_json({"error":"not found"},404)
-            row = dict(row); anote = (b.get("note") or "").strip()[:300]
-            if action == "paid":
-                c.execute("UPDATE reimbursements SET status='paid', paid_at=?, paid_by=? WHERE id=?", (now(), u["id"], rid))
-            else:
-                c.execute("UPDATE reimbursements SET status=?, decided_by=?, decided_at=?, admin_note=? WHERE id=?",
-                          ("approved" if action == "approve" else "declined", u["id"], now(), anote, rid))
-            c.commit(); c.close()
-            first = (row["instr_name"] or "").split(" ")[0] or "there"
-            if action == "approve":
-                mailer.send(row["instr_email"], f"Approved: ${row['amount']:.2f} back for {row['class_title']}",
-                    f"Hi {first},\n\nYour ${row['amount']:.2f} reimbursement for \"{row['class_title']}\" ({row['note']}) is approved. "
-                    f"It goes out with your next payment.\n\n{('Note from the Gibby: ' + anote) if anote else ''}\n\nThanks,\nThe Gibby")
-            elif action == "decline":
-                mailer.send(row["instr_email"], f"About your reimbursement for {row['class_title']}",
-                    f"Hi {first},\n\nWe could not approve the ${row['amount']:.2f} reimbursement for \"{row['class_title']}\" ({row['note']}).\n\n"
-                    f"{('Reason: ' + anote) if anote else 'Reply to this email if you have a question.'}\n\nThanks,\nThe Gibby")
-            else:
-                mailer.send(row["instr_email"], f"Paid: ${row['amount']:.2f} for {row['class_title']}",
-                    f"Hi {first},\n\nYour ${row['amount']:.2f} reimbursement for \"{row['class_title']}\" has been paid.\n\nThanks,\nThe Gibby")
-            return self.send_json({"ok":True, "status": ("paid" if action == "paid" else ("approved" if action == "approve" else "declined"))})
         if p == "/api/requests":
             u = self.require("admin")
             if not u: return

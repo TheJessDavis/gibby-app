@@ -113,6 +113,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   Learn, Opportunities). Instructor extras live in the "Ask The Gibby" menu on My classes. Admin
   More is grouped: Classes, Money, Reach, Records. Money has three tabs (`MONEY_TAB`).
 - Six tabs is the phone limit for instructors; put new things inside existing screens.
+- Retired screens (Sep 22, 2026), code kept but unlinked: Slots (`adminSlots`, the manual slot
+  fallback if the calendar bridge dies), Calendar view, Templates (`adminTemplates`; the class form's
+  template picker is gone, "copy a past class" stays), Calendar vs app (`calreview`) and Eventbrite
+  import (`ebimport`), both still reachable by `renderAdmin('...')`. Deleted: the old per-class
+  reimbursement endpoints and the `/embed` iframe page. "Worth running again" flags now show on All
+  classes and the class card instead of a Templates queue.
 
 ## How the main flows work
 

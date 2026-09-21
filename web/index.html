@@ -704,7 +704,7 @@ async function renderProfile(focus){
   if(focus){ const el=$('#pf_'+focus); if(el){ setTimeout(()=>{ el.scrollIntoView({behavior:'smooth',block:'center'}); if(el.tagName==='TEXTAREA'||el.tagName==='INPUT') el.focus(); }, 80); } }
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['all','\u{1F4CB}','All classes','Classes'],['calendar','\u{1F5D3}\uFE0F','Calendar','Classes'],['slots','\u{1F39F}\uFE0F','Slots','Classes'],['templates','\u{1F4A1}','Templates','Classes'],
+const MORE_ITEMS=[['all','\u{1F4CB}','All classes','Classes'],
   ['money','\u{1F4B0}','Money','Money'],['supplies','\u{1F9FA}','Orders','Money'],
   ['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
   ['incidents','\u{1F6A8}','Incidents','Records'],['audit','\u{1F50D}','Audit','Records'],['archive','\u{1F5C3}\uFE0F','Archive','Records']];
@@ -2166,13 +2166,13 @@ async function adminIntegrations(){
         onclick="toggleInteg('${it.id}','${it.status==='connected'?'disconnect':'connect'}')">
         ${it.status==='connected'?'Disconnect':'Connect'}</button>`}
       ${it.id==='eventbrite'?`<button class="btn ghost" style="margin-top:8px" onclick="testEventbrite()">Verify token &amp; get Org ID</button>
-        <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('ebimport')">Bring in classes already on Eventbrite</button>
+
         <div class="hint">Classes posted straight on Eventbrite show up here so you can attach them to their instructor. They are not re-posted anywhere.</div>`:''}
       ${it.id==='facebook'?`<button class="btn ghost" style="margin-top:8px" onclick="testFacebook()">Verify Page token</button>
         <div class="meta" style="margin-top:8px">Facebook no longer lets apps create real Events, so publishing makes a Page post instead: the landscape poster, date and time, description, and the Eventbrite link. Needs FB_PAGE_ID and FB_PAGE_TOKEN set on Render.</div>`:''}</div></div></details>`).join('')}
     <div class="card"><div class="row"><div><h3>Google Calendar</h3><div class="meta">Open times become bookable slots · approved classes post back to the calendar</div></div></div>
       <button class="btn ghost" style="margin-top:10px" onclick="syncCalendar()">Sync open times now</button>
-      <button class="btn ghost" style="margin-top:8px" onclick="renderAdmin('calreview')">Review the calendar against the app</button>
+
       <div class="hint">Lists every calendar event and whether it belongs to a class in the app. Remove the leftovers with a tick; nothing is deleted on its own.</div></div>
     <details class="card" style="padding:0"><summary style="cursor:pointer;padding:14px 16px;list-style:none"><div class="row"><div><h3 style="margin:0">Backups</h3><div class="meta">${d.backup&&d.backup.ok
         ? 'Last backup '+esc((d.backup.at||'').replace('T',' at ').slice(0,19))+' · '+Math.round((d.backup.bytes||0)/1024)+' KB · kept 30 days'
@@ -2322,13 +2322,6 @@ async function adminIncidents(){
 async function reimbPaid(id, paid){
   try{ await api('/api/admin/reimb/'+id+'/'+(paid?'paid':'unpaid'),'POST',{}); }catch(e){ alert(e.message); return; }
   renderAdmin('money');
-}
-async function reimbAct(id, action){
-  let note='';
-  if(action==='decline'){ note=prompt('Why? (the instructor sees this)'); if(note===null) return; }
-  const r=await api('/api/reimbursements/'+id+'/'+action,'POST',{note});
-  if(r.error){ alert(r.error); return; }
-  adminMoney();
 }
 async function saveDeadline(){
   try{ await api('/api/admin/deadline-settings','POST',{what:$('#dl_what').value, date:$('#dl_date').value, start:$('#dl_start').value, every:$('#dl_every').value, open_through:$('#dl_open').value}); alert('Saved.'); }
@@ -2999,6 +2992,7 @@ async function adminAll(){
     <div><label style="margin-top:0">Status</label>
       <select id="q_st" onchange="filterAll()"><option value="">Everything</option>
       ${Object.entries(ST_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('')}</select></div></div>
+    ${(()=>{ const rq=classes.filter(c=>c.template_requested); return rq.length?`<div class="meta" style="margin:0 0 10px">\u2b50 Flagged as worth running again: ${rq.map(c=>esc(c.title)+' ('+esc(c.instructor_name||'')+')').join(', ')}.</div>`:''; })()}
     <p class="sub" id="allcount"></p><div id="alllist"></div>`;
   filterAll();
 }
@@ -3134,12 +3128,11 @@ function cardCls(c){
     ${(()=>{ let fq=c.faq; try{ if(typeof fq==='string') fq=JSON.parse(fq||'[]'); }catch(_){ fq=[]; }
       return (fq&&fq.length)?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">FAQ (${fq.length})</summary>
         ${fq.map(x=>`<div class="meta" style="margin-top:5px"><b>${esc(x.q)}</b><br>${esc(x.a)}</div>`).join('')}</details>`:''; })()}
-    ${actingRole()==='instructor' && c.status!=='cancelled' ? (c.template_requested
-      ? `<div class="meta" style="margin-top:8px">\u2b50 Requested as a template. The Gibby is considering it.</div>`
-      : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">Request this to be a template</button>`) : ''}
+    ${actingRole()==='instructor' && c.status==='approved' ? (c.template_requested
+      ? `<div class="meta" style="margin-top:8px">\u2b50 You flagged this as worth running again.</div>`
+      : `<button class="btn ghost" style="margin-top:8px" onclick="reqTemplate(${c.id})">Flag as worth running again</button>`) : ''}
     ${c.is_kids?`<div class="meta" style="margin-top:8px">\u{1F9D2} Kids' class: liability waiver, photo release and a <b>required</b> emergency contact are collected at Eventbrite checkout.</div>`:''}
-    ${actingRole()==='admin' && c.status!=='cancelled'
-      ? `<button class="btn ghost" style="margin-top:8px" onclick="saveAsTemplate(${c.id})">Save as template${c.template_requested?' (instructor asked!)':''}</button>` : ''}
+    ${actingRole()==='admin' && c.template_requested ? `<div class="meta" style="margin-top:8px">\u2b50 The instructor flagged this as worth running again. <a href="#" onclick="tplReqAct(${c.id},'dismiss');return false">Clear</a></div>` : ''}
     ${c.contract_status==='sent' && actingRole()==='instructor'?`<div class="tip" style="margin-top:10px">\u{1F4DD} <span><b>Your contract is ready.</b> One quick signature and this class can go live.</span></div>
       <button class="btn dark" onclick="openContract(${c.id})">Read and sign</button>`:''}
     ${(c.status==='approved'||c.status==='cancelled') && c.enrolled!==undefined ? `
@@ -3470,26 +3463,6 @@ async function sendOrder(){
   try{ await api('/api/supplies','POST',body); }
   catch(e){ err.textContent=e.message; err.classList.add('show'); return; }
   closeOrder(); alert('Sent. The Gibby has your order request.');
-}
-function reimburseForm(id){
-  const box=$('#rb'+id); if(!box) return;
-  if(box.innerHTML){ box.innerHTML=''; return; }
-  box.innerHTML=`<div class="card" style="margin-top:8px">
-    <div class="two"><div><label>Amount you spent</label><input id="rba${id}" inputmode="decimal" placeholder="24.50"></div>
-      <div><label>Receipt photo</label><input type="file" id="rbf${id}" accept="image/*"></div></div>
-    <label>What was it for?</label><input id="rbn${id}" placeholder="e.g. clay and glaze from Michaels">
-    <button class="btn dark" style="margin-top:8px" onclick="sendReimburse(${id})">Send to the Gibby</button>
-    <div class="hint">The receipt is filed with your class photos on Drive. An admin approves it and it goes out with your next payment.</div>
-    <div id="rbs${id}" class="meta"></div></div>`;
-}
-async function sendReimburse(id){
-  const st=$('#rbs'+id); const f=$('#rbf'+id).files[0];
-  const body={amount:$('#rba'+id).value, note:$('#rbn'+id).value};
-  if(f){ st.textContent='Preparing the receipt…'; try{ body.b64=await shrinkImage(f,1600,0.85); body.thumb=await shrinkImage(f,320,0.7); }catch(e){ st.textContent=e.message; return; } }
-  st.textContent='Sending…';
-  const r=await api('/api/classes/'+id+'/reimburse','POST',body);
-  if(r.error){ st.textContent=r.error; return; }
-  alert('Sent. The Gibby will review it.'); $('#rb'+id).innerHTML='';
 }
 function viewPhotos(id, sfx){ sfx=sfx||''; return boundary('photos', '#photos'+id+sfx, ()=>photosInner(id, sfx), false); }
 async function photosInner(id, sfx){
@@ -4531,7 +4504,7 @@ function openForm(slot, draftPayload){
     ${slot.series?`<div class="card" style="margin-bottom:14px" id="fsessions">${sessionCardHTML(slot)}</div>`:''}
     <div class="err" id="ferr"></div>
     <div class="two">
-      <div><label>Start from a template</label><select id="f_tpl" onchange="applyTpl()"><option value="">None, start blank</option></select></div>
+
       <div><label>Or copy a past class</label><select id="f_prev" onchange="applyPrev()"><option value="">Pick one&hellip;</option></select></div>
     </div>
     <details class="qhint"><summary aria-label="Help">?</summary><div>Copying brings over everything except the date and times, so a repeat class is a
