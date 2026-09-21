@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.101.0-trim"
+VERSION = "10.101.1-artists-three"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3529,7 +3529,7 @@ class H(http.server.BaseHTTPRequestHandler):
         out = []
         for r in rows:
             if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
-            out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:6],
+            out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:3],
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
                         "img": (f"/headshot/{r['id']}.jpg?v=" + hashlib.sha1((r.get("photo") or "")[-64:].encode()).hexdigest()[:8]) if (r.get("photo") or "").startswith("data:image/") else "",
                         "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or ""})
