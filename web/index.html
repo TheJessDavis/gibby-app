@@ -700,7 +700,7 @@ async function renderProfile(focus){
   if(focus){ const el=$('#pf_'+focus); if(el){ setTimeout(()=>{ el.scrollIntoView({behavior:'smooth',block:'center'}); if(el.tagName==='TEXTAREA'||el.tagName==='INPUT') el.focus(); }, 80); } }
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
-const MORE_ITEMS=[['supplies','\u{1F9FA}','Orders'],['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
+const MORE_ITEMS=[['supplies','\u{1F9FA}','Orders'],['incidents','\u{1F6A8}','Incidents'],['calendar','\u{1F5D3}\uFE0F','Calendar'],['slots','\u{1F39F}\uFE0F','Slots'],['templates','\u{1F4A1}','Templates'],['all','\u{1F4CB}','All classes'],
   ['money','\u{1F4B0}','Money'],['marketing','\u{1F4E3}','Marketing'],['email','\u2709\uFE0F','Email'],['integrations','\u{1F50C}','Integrations'],['audit','\u{1F50D}','Audit'],['archive','\u{1F5C3}\uFE0F','Archive']];
 /* A tab left open across a deploy keeps old code and can misread new answers.
    Watch the version and reload quietly when nothing is half-typed. */
@@ -1228,7 +1228,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies, incidents:adminIncidents,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1857,6 +1857,7 @@ async function adminHeadshot(uid, ev){
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
 }
+async function saveIncidentTo(){ try{ await api('/api/admin/incident-settings','POST',{to:$('#incident_to').value}); alert('Saved.'); }catch(e){ alert(e.message); } }
 async function saveReimbTo(){ try{ await api('/api/admin/reimb-settings','POST',{to:$('#reimb_to').value}); alert('Saved.'); }catch(e){ alert(e.message); } }
 async function saveBgPaused(on){
   try{ await api('/api/admin/paperwork-settings','POST',{bg_paused:on}); }catch(e){ alert(e.message); }
@@ -2166,6 +2167,10 @@ async function adminEmail(){
       <div class="meta">Every request an instructor submits on the Reimburse tab is emailed here with the form and receipts, and filed under Gibby Reimbursements on Drive.</div>
       <input id="reimb_to" value="${esc(d.reimb_to||'')}" placeholder="tjohnson@theeverett.org, mtruban@theeverett.org" style="margin-top:8px">
       <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveReimbTo()">Save</button></div>
+    <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Incident reports</h3>
+      <div class="meta">Every incident report an instructor files is emailed here with the form attached, and filed under Gibby Incident Reports on Drive.</div>
+      <input id="incident_to" value="${esc(d.incident_to||'')}" placeholder="mtruban@theeverett.org, scosans@everetttheatre.com" style="margin-top:8px">
+      <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveIncidentTo()">Save</button></div>
     <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Thank-you emails</h3><div class="meta">Sent two mornings after every class, with the instructor\u2019s note and photos, review links and a personal code.</div>ith Gmail SMTP as the fallback.</div></div></div>
 
       <input id="th_google" placeholder="Google review link" value="${esc((d.thanks||{}).google_url||'')}" style="margin-top:6px">
@@ -2260,6 +2265,21 @@ async function socialAct(id, action){
   if(r.error){ alert(r.error); return; }
   if(action==='post') alert(r.facebook&&r.facebook.status?('Done: '+r.facebook.status):'Posted.');
   adminMarketing();
+}
+async function adminIncidents(){
+  const d=await api('/api/incidents');
+  $('#tab').innerHTML=`<h2>Incident <em>reports</em></h2>
+    <p class="sub">Filed by instructors in the app. Each one went to ${esc(d.to||'')} with the form attached and is saved under Gibby Incident Reports on Drive. Instructors file one from My classes.</p>
+    ${(d.reports||[]).length?d.reports.map(r=>`<details class="clsrow" style="background:var(--white)"><summary><span class="clspic clspic-i">\u{1F6A8}</span>
+        <div class="rowt"><b>${esc(r.injured)} \u00b7 ${esc(r.location)}</b><span>${esc(r.incident_date)} ${esc(r.incident_time||'')} \u00b7 by ${esc(r.reporter||'')}</span></div>
+        ${r.police?'<span class="pill inc" style="flex:none">police</span>':''}<span class="rowchev">\u203A</span></summary>
+      <div class="card" style="margin:0;border-radius:0 0 14px 14px">
+        <div class="meta"><b>Injured:</b> ${esc(r.injured)} (${esc(r.role)}${r.role_other?', '+esc(r.role_other):''})</div>
+        <div class="meta" style="margin-top:6px;white-space:pre-wrap"><b>What happened:</b> ${esc(r.description)}</div>
+        ${r.cause?`<div class="meta" style="margin-top:6px;white-space:pre-wrap"><b>Cause:</b> ${esc(r.cause)}</div>`:''}
+        <div class="meta" style="margin-top:6px">Police notified: ${r.police?'yes':'no'} \u00b7 Outside medical treatment: ${r.medical?'yes':'no'}${r.cosigner?' \u00b7 Cosigner: '+esc(r.cosigner):''}</div>
+        <div class="meta" style="margin-top:6px">Reported by ${esc(r.reporter)}, ${esc(r.association||'')} \u00b7 sent ${esc((r.created||'').slice(0,16).replace('T',' '))}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form (PDF)</a>':''}</div>
+      </div></details>`).join(''):'<div class="muted">No incident reports have been filed.</div>'}`;
 }
 async function reimbPaid(id, paid){
   try{ await api('/api/admin/reimb/'+id+'/'+(paid?'paid':'unpaid'),'POST',{}); }catch(e){ alert(e.message); return; }
@@ -3719,6 +3739,48 @@ async function instrAudit(){
       : `<div class="muted">Nothing is open yet. When an instructor answers yes to &ldquo;can other resident teaching artists audit this class?&rdquo;, it shows up here.</div>`}`;
 }
 
+/* The Everett Incident Report, filled in the app. PDF to its own Drive folder,
+   emailed to Michelle and Seth the moment it is sent. */
+async function incidentForm(){
+  let d; try{ d=await api('/api/incidents'); }catch(e){ return alert(e.message); }
+  hideBnav();
+  const seg=(id,opts,val)=>`<div class="seg" id="${id}">${opts.map(o=>`<button type="button" class="${o===val?'on':''}" data-v="${esc(o)}" onclick="segPick(this);if('${id}'==='in_role') document.getElementById('in_otherwrap').classList.toggle('hidden', this.dataset.v!=='Other')">${esc(o)}</button>`).join('')}</div>`;
+  $('#view').innerHTML=`<button class="btn ghost" style="padding:8px 14px;margin-bottom:10px" onclick="renderInstr('mine')">\u2190 Back</button>
+    <h2>Incident <em>report</em></h2>
+    <p class="sub">The Everett's incident report. Fill it in as soon as you can after anything happens. It goes straight to Michelle Truban and Seth Cosans.</p>
+    <div class="card">
+      <label style="margin-top:0">Name of injured individual</label><input id="in_injured" placeholder="Full name">
+      <div class="two"><div><label>Incident date</label><input id="in_date" type="date" max="${new Date().toISOString().slice(0,10)}" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div><label>Incident time</label><input id="in_time" type="time"></div></div>
+      <label>Location of incident</label>${seg('in_loc', d.locations||[], '')}
+      <label>The injured individual is a</label>${seg('in_role', d.roles||[], '')}
+      <div id="in_otherwrap" class="hidden"><label>Other: who are they?</label><input id="in_other" placeholder="e.g. parent picking up a camper"></div>
+      <label>Description of incident</label><textarea id="in_desc" rows="5" placeholder="What happened, in order. Who was there, what you saw, what was done right away."></textarea>
+      <label>Incident cause</label><textarea id="in_cause" rows="2" placeholder="What led to it, as best you can tell."></textarea>
+      <label>Were the police notified?</label>${seg('in_police', ['Yes','No'], '')}
+      <label>Did the injured individual seek outside medical treatment after the incident?</label>${seg('in_medical', ['Yes','No'], '')}
+      <label>Reported by (your name)</label><input id="in_reporter" value="${esc((ME&&ME.name)||'')}">
+      <label>Your association with The Everett</label><input id="in_assoc" value="Teaching artist at The Gibby">
+      <label>Cosigner if the reporter is under 18 <span style="color:var(--ink-soft);font-weight:600">(an adult over 18)</span></label><input id="in_cosigner" placeholder="Leave blank if you are over 18">
+      <div class="err" id="in_err"></div>
+      <button class="btn dark" style="margin-top:12px;background:#B4442C" onclick="sendIncident()">Send the report</button>
+      <div class="hint">Goes to ${esc(d.to||'')} with the completed form attached, and a copy to you. The form is also saved in The Gibby's Drive.</div>
+    </div>
+    ${(d.reports||[]).length?`<label>Your reports (${d.reports.length})</label>${d.reports.map(r=>`<div class="card" style="padding:12px 16px"><b>${esc(r.injured)}</b> \u00b7 ${esc(r.incident_date)} \u00b7 ${esc(r.location)}<div class="meta">Sent ${esc((r.created||'').slice(0,10))}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}</div></div>`).join('')}`:''}`;
+  window.scrollTo(0,0);
+}
+async function sendIncident(){
+  const err=$('#in_err'); err.classList.remove('show');
+  const sv=id=>{ const b=document.querySelector('#'+id+' .on'); return b?b.dataset.v:''; };
+  const body={injured:$('#in_injured').value, incident_date:$('#in_date').value, incident_time:$('#in_time').value, location:sv('in_loc'), role:sv('in_role'), role_other:$('#in_other').value,
+    description:$('#in_desc').value, cause:$('#in_cause').value, police: sv('in_police')?sv('in_police')==='Yes':null, medical: sv('in_medical')?sv('in_medical')==='Yes':null,
+    reporter:$('#in_reporter').value, association:$('#in_assoc').value, cosigner:$('#in_cosigner').value};
+  if(body.incident_time){ const [h,m]=body.incident_time.split(':').map(Number); body.incident_time=`${((h+11)%12)+1}:${String(m).padStart(2,'0')} ${h>=12?'PM':'AM'}`; }
+  const btn=document.querySelector('#view .btn.dark'); if(btn){ btn.disabled=true; btn.textContent='Sending\u2026'; }
+  let r; try{ r=await api('/api/incidents','POST',body); }catch(e){ err.textContent=e.message; err.classList.add('show'); if(btn){ btn.disabled=false; btn.textContent='Send the report'; } return; }
+  alert('Sent. Michelle Truban and Seth Cosans have the report with the completed form attached, and a copy is in your inbox.');
+  renderInstr('mine');
+}
 /* Reimburse: the Everett's Expense Reimbursement & Check Request, filled in the
    app. One request per class, dated lines by category, receipts required; the
    form becomes a PDF, everything is filed on Drive and emailed to the treasurer. */
@@ -3990,6 +4052,7 @@ async function instrMine(){
     <div class="two" style="margin-bottom:12px">
       ${classes.some(c=>c.status==='approved')?`<button class="btn dark" onclick="instrEmail()">\u2709\uFE0F Email my students</button>`:'<span></span>'}
       <button class="btn ghost" onclick="orderForm(0)">\u{1F9FA} Ask the Gibby to order</button></div>
+    <button class="btn ghost" style="margin-bottom:12px;background:#FDF3F0;color:#B4442C" onclick="incidentForm()">\u{1F6A8} Report an incident</button>
 
     ${paperOpen.length?`<label>The Gibby needs from you (${paperOpen.length})</label>
       <p class="sub" style="margin-top:2px">Quick paperwork so we can pay you and keep everyone safe. Nothing here is shared with students.</p>
@@ -4965,7 +5028,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

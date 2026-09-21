@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.98.1-auto-reload"
+VERSION = "10.99.0-incidents"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -235,6 +235,10 @@ def init_db():
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN button_label TEXT")   # what instructors tap, e.g. "Submit a Craft Kit Proposal"
     except Exception: pass
+    c.execute("""CREATE TABLE IF NOT EXISTS incident_reports(
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, reporter TEXT, association TEXT, injured TEXT, incident_date TEXT,
+        incident_time TEXT, location TEXT, role TEXT, role_other TEXT, description TEXT, cause TEXT, police INTEGER,
+        medical INTEGER, cosigner TEXT, created TEXT, pdf_link TEXT, drive_folder TEXT, emailed_to TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS reimb_requests(
         id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, class_id INTEGER, class_title TEXT, name TEXT,
         items TEXT, details TEXT, advance REAL DEFAULT 0, subtotal REAL, total REAL, delivery TEXT, address TEXT,
@@ -1499,6 +1503,28 @@ My typed signature states that I will be a responsible key code holder and will 
 
 BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own words
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
+
+INCIDENT_TO_DEFAULT = "mtruban@theeverett.org, scosans@everetttheatre.com"   # Michelle Truban and Seth Cosans
+INCIDENT_LOCATIONS = ["Theatre", "Annex", "Gibby"]
+INCIDENT_ROLES = ["Cast member", "Board member", "Patron", "Volunteer", "Production crew", "Camper", "Other"]
+
+def incident_to():
+    return [e.strip() for e in (_meta_get("incident_to") or INCIDENT_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
+
+def incident_pdf_text(r):
+    yn = lambda v: "YES" if v else "NO"
+    return "\n".join(["THE EVERETT 2026 INCIDENT REPORT", "",
+        f"Name of injured individual: {r['injured']}",
+        f"Incident date: {r['incident_date']}     Incident time: {r['incident_time']}",
+        f"Location of incident: {r['location']}",
+        f"The injured individual is a: {r['role']}" + (f" ({r['role_other']})" if r.get('role_other') else ""), "",
+        "Description of incident:", r['description'], "",
+        "Incident cause:", r['cause'] or "(not given)", "",
+        f"Were the police notified: {yn(r['police'])}",
+        f"Did the injured individual seek outside medical treatment after the incident: {yn(r['medical'])}", "",
+        f"Reported by (name and association with The Everett): {r['reporter']}, {r['association']}",
+        f"Cosigner if under 18: {r['cosigner'] or '(not applicable)'}", "",
+        f"Submitted through the Gibby Class Manager on {r['created'][:16].replace('T',' ')}."])
 
 REIMB_TO_DEFAULT = "tjohnson@theeverett.org, mtruban@theeverett.org"   # Tina Johnson (treasurer) and Michelle Truban
 REIMB_CATEGORIES = ["Set materials", "Set/show paint", "Props", "Costumes", "Misc (show)",
@@ -4246,6 +4272,14 @@ class H(http.server.BaseHTTPRequestHandler):
             if bg_paused(): rows = [r for r in rows if r["kind"] != "background"]
             for r in rows: r["label"] = kinds.get(r["kind"], {}).get("label", r["kind"]); r["what"] = kinds.get(r["kind"], {}).get("what", "")
             return self.send_json({"paperwork": rows, "phone": u.get("phone") or "", "bg_form_name": _meta_get("bg_form_name")})
+        if p == "/api/incidents":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            q = "SELECT * FROM incident_reports" + ("" if u["role"] == "admin" else " WHERE user_id=?") + " ORDER BY id DESC LIMIT 200"
+            rows = [dict(r) for r in c.execute(q, () if u["role"] == "admin" else (u["id"],)).fetchall()]
+            c.close()
+            return self.send_json({"reports": rows, "locations": INCIDENT_LOCATIONS, "roles": INCIDENT_ROLES, "to": ", ".join(incident_to())})
         if p == "/api/reimb":
             # The instructor's own requests, and the classes they may claim against.
             u = self.current_user()
@@ -4420,6 +4454,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "backup": backup_status(),
                                    "email_limits": mailer.limit_stats(),
                                    "reimb_to": ", ".join(reimb_to()),
+                                   "incident_to": ", ".join(incident_to()),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
@@ -5235,6 +5270,62 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=? WHERE id=? AND deleted_at IS NULL", (hs, px, b.get("photo") or hs, int(mhp.group(1))))
             c.commit(); c.close()
             return self.send_json({"ok":True})
+        if p == "/api/incidents":
+            # The Everett Incident Report, filled in the app. PDF to Drive, emailed to Michelle and Seth.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            if self.rate_limited("reimb", u["id"]): return
+            b = self.read_json()
+            g = lambda k, n=200: re.sub(r"\s+", " ", str(b.get(k) or "")).strip()[:n]
+            r = {"injured": g("injured", 120), "incident_date": g("incident_date", 10), "incident_time": g("incident_time", 20),
+                 "location": g("location", 20), "role": g("role", 30), "role_other": g("role_other", 80),
+                 "description": str(b.get("description") or "").strip()[:4000], "cause": str(b.get("cause") or "").strip()[:2000],
+                 "police": 1 if b.get("police") else 0, "medical": 1 if b.get("medical") else 0,
+                 "reporter": g("reporter", 120) or (u["name"] or u["email"]), "association": g("association", 120) or "Teaching artist at The Gibby",
+                 "cosigner": g("cosigner", 120), "created": now()}
+            if len(r["injured"]) < 2: return self.send_json({"error":"Who was injured? Their name is required."},400)
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", r["incident_date"]) or not r["incident_time"]: return self.send_json({"error":"Add the date and time of the incident."},400)
+            if r["location"] not in INCIDENT_LOCATIONS: return self.send_json({"error":"Pick where it happened: Theatre, Annex or Gibby."},400)
+            if r["role"] not in INCIDENT_ROLES: return self.send_json({"error":"Pick who the injured person is (cast member, patron, camper...)."},400)
+            if r["role"] == "Other" and len(r["role_other"]) < 2: return self.send_json({"error":"Say what kind of person 'Other' is."},400)
+            if len(r["description"]) < 20: return self.send_json({"error":"Describe what happened (a few sentences)."},400)
+            if b.get("police") is None or b.get("medical") is None: return self.send_json({"error":"Answer both yes or no questions."},400)
+            c = db()
+            c.execute("""INSERT INTO incident_reports(user_id,reporter,association,injured,incident_date,incident_time,location,role,role_other,
+                         description,cause,police,medical,cosigner,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (u["id"], r["reporter"], r["association"], r["injured"], r["incident_date"], r["incident_time"], r["location"], r["role"],
+                       r["role_other"], r["description"], r["cause"], r["police"], r["medical"], r["cosigner"], r["created"]))
+            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]; c.commit(); c.close()
+            pdf_bytes = pdfgen.contract_pdf(incident_pdf_text(r), None, [f"Incident report #{rid}", f"Submitted by {r['reporter']} ({u['email']})"])
+            pdf_link = folder_link = None
+            try:
+                res = push_photo_to_drive({"title": f"{r['incident_date']} - {r['injured']} - {r['location']}"}, f"Incident report #{rid}.pdf",
+                                          base64.b64encode(pdf_bytes).decode(), "application/pdf", root="Gibby Incident Reports")
+                pdf_link = res.get("link"); folder_link = res.get("folder")
+            except Exception as e:
+                print(f"[incident] drive filing failed for #{rid}: {e}")
+            c = db(); c.execute("UPDATE incident_reports SET pdf_link=?, drive_folder=?, emailed_to=? WHERE id=?", (pdf_link, folder_link, ", ".join(incident_to()), rid)); c.commit(); c.close()
+            yn = lambda v: "YES" if v else "NO"
+            mailer.send(incident_to(), f"Incident report: {r['injured']} at the {r['location']}, {r['incident_date']}",
+                f"{r['reporter']} ({r['association']}) filed an incident report through the Gibby Class Manager.\n\n"
+                f"Injured: {r['injured']} ({r['role']}{', ' + r['role_other'] if r['role_other'] else ''})\nWhen: {r['incident_date']} {r['incident_time']}\nWhere: {r['location']}\n\n"
+                f"What happened:\n{r['description']}\n\nCause: {r['cause'] or '(not given)'}\n\nPolice notified: {yn(r['police'])}\n"
+                f"Outside medical treatment: {yn(r['medical'])}\nCosigner if under 18: {r['cosigner'] or '(not applicable)'}\n\n"
+                + ("The completed form (PDF) is attached and filed on Drive: " + (folder_link or "") + "\n\n" if folder_link else "The completed form (PDF) is attached.\n\n")
+                + f"Reply to this email to reach {r['reporter']} directly ({u['email']}).",
+                attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")], reply_to=u["email"])
+            mailer.send(u["email"], f"Your incident report was sent ({r['injured']}, {r['incident_date']})",
+                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour incident report went to Michelle Truban and Seth Cosans with the completed form attached. "
+                f"Thank you for filing it promptly.\n\nThe Gibby", attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")])
+            return self.send_json({"ok":True, "id": rid, "folder": folder_link})
+        if p == "/api/admin/incident-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            to = [e.strip().lower() for e in str(b.get("to") or "").replace(";", ",").split(",") if e.strip()]
+            if not to or any(not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e) for e in to):
+                return self.send_json({"error":"That does not look like an email address."},400)
+            _meta_set("incident_to", ", ".join(to)); return self.send_json({"ok":True})
         if p == "/api/reimb":
             # A reimbursement request: the Everett form, filled in the app, with
             # receipts. Filed on Drive, emailed to the treasurer and Michelle.

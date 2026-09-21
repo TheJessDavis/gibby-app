@@ -159,6 +159,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   tjohnson@theeverett.org and Michelle Truban; editable under More > Email), copy to the
   instructor. Admins see the list under Money and tick Paid. The old per-class "Get paid back for
   supplies" flow (`reimbursements` table) is retired; its route answers 410.
+- **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
+  "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
+  Reports", emailed with the PDF to `incident_to()` (default Michelle Truban mtruban@theeverett.org and
+  Seth Cosans scosans@everetttheatre.com; editable under More > Email), copy to the reporter. Admins
+  read them under More > Incidents.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 
