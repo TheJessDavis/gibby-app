@@ -145,9 +145,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   add-ons, and a donation ticket type counts toward capacity (it inflated every event to +500 and
   was removed on Sep 19). Only Eventbrite's own UI can add a true add-on; do not retry via tickets.
 - **Thank-yous** go to everyone who registered; check-in scans never narrow the list.
-- **Teaching artists on the website**: profile headshot (`users.photo`) and `users.bio`. Public feed
-  `/embed/instructors.json`, images at `/headshot/{id}.jpg`, preview page `/embed/instructors`.
-  `site-embed.js` fills any Squarespace Code block containing `<div id="gibby-instructors"></div>`.
+- **Meet Our Teaching Artists** (approved by Marketing, Lou Booker, Sep 20 2026): `users.headshot`
+  (square, min 600px; `headshot_by` artist|gibby, admins can upload Marketing's standardized one),
+  `users.bio` built from three fixed prompts in `bio_parts` (25 to 60 words in all). Public feed
+  `/embed/instructors.json` includes each artist's upcoming approved classes (Eventbrite links tagged
+  `aff=site-artists`), images at `/headshot/{id}.jpg`, preview at `/embed/instructors`.
+  `site-embed.js` fills a Squarespace Code block containing `<div id="gibby-instructors"></div>`.
 - **Ticket sources**: Eventbrite `aff=` codes are translated by `channel_meaning`. "Share a tracked
   link" on a class card tags links by channel (`gibby-fb`, `gibby-ig`, ...).
 

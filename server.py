@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.95.0-edit-time-images"
+VERSION = "10.96.0-teaching-artists"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -281,6 +281,9 @@ def init_db():
         except Exception: pass
     try: c.execute("ALTER TABLE users ADD COLUMN headshot_px INTEGER")   # the square side of the website headshot
     except Exception: pass
+    for col in ("bio_parts", "headshot_by"):     # the three bio prompts as JSON; who supplied the headshot (artist | gibby)
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
         id INTEGER PRIMARY KEY, user_id INTEGER, class_id INTEGER, template TEXT, audience TEXT,
         subject TEXT, body TEXT, feature_ids TEXT, add_links INTEGER DEFAULT 1, status TEXT DEFAULT 'scheduled',
@@ -3449,10 +3452,29 @@ class H(http.server.BaseHTTPRequestHandler):
                     FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin')
                     AND (COALESCE(bio,'')!='' OR COALESCE(headshot,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
         c.close()
+        today = datetime.date.today()
+        upcoming = {}
+        c2 = db()
+        for cl in c2.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL AND instructor_id IS NOT NULL""").fetchall():
+            cl = dict(cl)
+            try: ext = json.loads(cl.get("external_ids") or "{}")
+            except Exception: ext = {}
+            if not ext.get("eventbrite_id"): continue
+            d = _class_date(cl); end = _class_end_date(cl) or d
+            if not d or (end and end < today): continue
+            when = f"{_MON_FULL[d.month-1]} {d.day}"
+            if cl.get("is_series"):
+                try: n = len(json.loads(cl.get("session_dates") or "[]"))
+                except Exception: n = 0
+                if n > 1: when += f", {n}-week course"
+            upcoming.setdefault(cl["instructor_id"], []).append({"title": cl.get("title") or "", "when": when, "date": d.isoformat(),
+                "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=site-artists"})
+        c2.close()
+        for v in upcoming.values(): v.sort(key=lambda x: x["date"])
         out = []
         for r in rows:
             if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
-            out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(),
+            out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:6],
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
                         "img": f"/headshot/{r['id']}.jpg" if (r.get("photo") or "").startswith("data:image/") else "",
                         "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or ""})
@@ -3475,15 +3497,18 @@ class H(http.server.BaseHTTPRequestHandler):
             img = (f'<img src="{i["img"]}" alt="" style="width:120px;height:120px;border-radius:50%;object-fit:cover;flex:none">' if i["img"]
                    else '<div style="width:120px;height:120px;border-radius:50%;background:#EDE8DC;flex:none"></div>')
             bio = "".join(f"<p style='margin:0 0 8px'>{html.escape(x)}</p>" for x in i["bio"].split("\n\n") if x.strip())
+            if i.get("classes"):
+                bio += "<div style='font-size:.9rem;margin-top:6px'><b>Upcoming classes</b>" + "".join(
+                    f"<div><a href='{html.escape(cx['url'])}'>{html.escape(cx['title'])}</a> · {html.escape(cx['when'])}</div>" for cx in i["classes"]) + "</div>"
             sk = " · ".join(html.escape(s) for s in i["skills"])
             cards.append(f'<div style="display:flex;gap:18px;align-items:flex-start;padding:18px 0;border-bottom:1px solid #e6e1d6">{img}'
                          f'<div><h3 style="margin:0 0 4px;font-size:1.15rem">{html.escape(i["name"])}</h3>'
                          + (f'<div style="font-size:.85rem;color:#6b655a;margin-bottom:8px">{sk}</div>' if sk else "")
                          + bio + '</div></div>')
         page = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-                '<title>Teaching artists at The Gibby</title>'
+                '<title>Meet Our Teaching Artists</title>'
                 '<body style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#171512;line-height:1.5">'
-                '<h1 style="font-size:1.6rem">Teaching artists</h1>' + ("".join(cards) or "<p>No profiles yet.</p>") + '</body>')
+                '<h1 style="font-size:1.6rem">Meet Our Teaching Artists</h1>' + ("".join(cards) or "<p>No profiles yet.</p>") + '</body>')
         body = page.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -3540,6 +3565,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 "headshot_px":u.get("headshot_px") or 0,
                 "signoff":u.get("signoff") or "",
                 "bio":u.get("bio") or "",
+                "bio_parts":_loads_list(u.get("bio_parts")) or ["","",""],
+                "headshot_by":u.get("headshot_by") or "",
                 "paperwork_open":n_paper,
                 "lockbox_signed":lb_signed,
                 "contracts_to_sign":n_contracts},
@@ -3552,9 +3579,9 @@ class H(http.server.BaseHTTPRequestHandler):
             rows = [{"id":r["id"],"name":r["name"],"email":r["email"],"role":r["role"],
                      "pending":bool(r["must_change_pw"]), "photo":r["photo"] or "",
                      "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or "", "paperwork":{},
-                     "headshot_px": r["headshot_px"] or 0, "bio_words": len((r["bio"] or "").split()),
+                     "headshot_px": r["headshot_px"] or 0, "headshot_by": r["headshot_by"] or "", "bio_words": len((r["bio"] or "").split()),
                      "links": [k for k in ("facebook","instagram","website","etsy","tiktok") if r["social_" + k]]}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,bio,
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,
                                           social_facebook,social_instagram,social_website,social_etsy,social_tiktok FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             by_id = {r["id"]: r for r in rows}
@@ -4720,13 +4747,21 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.execute(f"UPDATE users SET social_{k}=? WHERE id=?", (v or None, u["id"]))
             if b.get("signoff") is not None:
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
-            if b.get("bio") is not None:
-                bio = re.sub(r"[ \t]+\n", "\n", str(b.get("bio") or "")).strip()[:1500]
+            if b.get("bio_parts") is not None or b.get("bio") is not None:
+                # Three prompts, same for everyone, so the page reads as one voice
+                # per artist but one shape overall (Marketing's ask).
+                parts = b.get("bio_parts")
+                if not isinstance(parts, list): parts = [str(b.get("bio") or ""), "", ""]
+                parts = [re.sub(r"\s+", " ", str(x or "")).strip()[:600] for x in (list(parts) + ["", "", ""])[:3]]
+                bio = " ".join(x if x.endswith((".", "!", "?")) else (x + ".") for x in parts if x)
                 nwords = len(bio.split())
-                if bio and not (BIO_MIN_WORDS <= nwords <= BIO_MAX_WORDS):
-                    c.close()
-                    return self.send_json({"error": f"Your bio is {nwords} word{'' if nwords == 1 else 's'}; it needs to be between {BIO_MIN_WORDS} and {BIO_MAX_WORDS} words for the website."},400)
-                c.execute("UPDATE users SET bio=? WHERE id=?", (bio or None, u["id"]))
+                if bio:
+                    if any(not x for x in parts):
+                        c.close(); return self.send_json({"error":"Please answer all three bio prompts; that keeps every artist's entry the same shape."},400)
+                    if not (BIO_MIN_WORDS <= nwords <= BIO_MAX_WORDS):
+                        c.close()
+                        return self.send_json({"error": f"Your bio is {nwords} word{'' if nwords == 1 else 's'} in all; it needs to be between {BIO_MIN_WORDS} and {BIO_MAX_WORDS} words for the website."},400)
+                c.execute("UPDATE users SET bio=?, bio_parts=? WHERE id=?", (bio or None, json.dumps(parts) if bio else None, u["id"]))
             if b.get("headshot") is not None:
                 hs = str(b.get("headshot") or "")
                 if hs and not hs.startswith("data:image/"):
@@ -4736,7 +4771,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 px = int(b.get("headshot_px") or 0)
                 if hs and px < HEADSHOT_MIN_PX:
                     c.close(); return self.send_json({"error": f"That photo is only {px}px across. The website needs at least {HEADSHOT_MIN_PX}px; please choose a larger, sharper photo."},400)
-                c.execute("UPDATE users SET headshot=?, headshot_px=? WHERE id=?", (hs or None, px if hs else None, u["id"]))
+                c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by=? WHERE id=?", (hs or None, px if hs else None, "artist" if hs else None, u["id"]))
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             c.commit(); c.close()
@@ -5119,6 +5154,20 @@ class H(http.server.BaseHTTPRequestHandler):
                        else "A Help card will appear on the Opportunities tab once the class is approved.")
                     + f"\n\nOpen the app: {mailer.APP_URL}")
             return self.send_json({"ok":True, "needs_volunteer": bool(need), "card": bool(made)})
+        mhp = re.match(r"^/api/admin/headshot/(\d+)$", p)
+        if mhp:
+            # Marketing's standardized headshot for an artist, replacing whatever they uploaded.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json(); hs = str(b.get("headshot") or ""); px = int(b.get("headshot_px") or 0)
+            if not hs.startswith("data:image/") or len(hs) > 2_000_000: return self.send_json({"error":"That does not look like a usable image."},400)
+            if px < HEADSHOT_MIN_PX: return self.send_json({"error": f"That photo is only {px}px across; the website needs at least {HEADSHOT_MIN_PX}px."},400)
+            c = db()
+            head, b64 = hs.split(",", 1)
+            # the small avatar comes from the same picture so the app matches the site
+            c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=? WHERE id=? AND deleted_at IS NULL", (hs, px, b.get("photo") or hs, int(mhp.group(1))))
+            c.commit(); c.close()
+            return self.send_json({"ok":True})
         if p == "/api/lockbox/sign":
             u = self.current_user()
             if not u: return self.send_json({"error":"not signed in"},401)

@@ -649,7 +649,7 @@ async function renderProfile(focus){
         <button class="btn ghost" style="padding:8px 14px" onclick="document.getElementById('pf_file').click()">${PF_PHOTO?'Change headshot':'Upload a headshot'}</button>
         ${PF_PHOTO?`<button class="btn ghost" style="margin-left:6px;padding:8px 14px" onclick="pfClearPhoto()">Remove</button>`:''}
         <div class="hint" style="margin-top:6px">${(PF_HEADSHOT_PX||(ME&&ME.headshot_px))
-          ? `Website-ready: ${PF_HEADSHOT_PX||ME.headshot_px}px square. Shown next to your name in the app and with your bio on The Everett's website.`
+          ? `Website-ready: ${PF_HEADSHOT_PX||ME.headshot_px}px square${(ME&&ME.headshot_by==='gibby'&&!PF_HEADSHOT)?', taken by The Gibby':''}. Shown next to your name in the app and with your bio on The Everett's website.`
           : `For the website. A clear photo of your face, at least ${HEADSHOT_MIN}px across (most phone photos are). It also shows next to your name in the app.`}</div>
         <div class="err" id="pf_photoerr"></div>
       </div>
@@ -667,10 +667,12 @@ async function renderProfile(focus){
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">Etsy shop</label><input id="pf_etsy" value="${esc((ME&&ME.socials&&ME.socials.etsy)||'')}" placeholder="etsy.com/shop/yourshop">
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">TikTok</label><input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="@yourhandle or link">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
-    <label style="margin-top:14px">Your bio (for the website)</label>
-    <textarea id="pf_bio" rows="5" maxlength="1500" oninput="bioCount()" placeholder="Two or three sentences about you and your art, written the way you would introduce yourself to a new class.">${esc((ME&&ME.bio)||'')}</textarea>
+    <label id="pf_bio" style="margin-top:14px">Your bio (for the website)</label>
+    <div class="hint" style="margin-top:0">Three short answers, in your own words. Every artist answers the same three, so the page reads as one set. ${BIO_MIN} to ${BIO_MAX} words in all.</div>
+    ${[['What you make and teach','e.g. I teach stained glass and mosaics, and I make garden art from salvaged glass.'],['How you came to it','e.g. I picked up a soldering iron at a friend\'s studio twelve years ago and never put it down.'],['What a class with you is like','e.g. Relaxed and hands-on; you leave with a finished piece and the confidence to make another.']].map(([l,ph],i)=>`
+    <label style="font-weight:700;font-size:12.5px;margin-top:8px">${l}</label><textarea id="pf_bio${i+1}" rows="2" maxlength="600" oninput="bioCount()" placeholder="${esc(ph)}">${esc(((ME&&ME.bio_parts)||[])[i]||'')}</textarea>`).join('')}
     <div class="hint" id="pf_biocount"></div>
-    <div class="hint">Between ${BIO_MIN} and ${BIO_MAX} words. Shown with your headshot on The Everett's teaching artists page.</div>
+    ${ME&&ME.bio?`<div class="hint" style="margin-top:6px">On the website it reads: "${esc(ME.bio)}"</div>`:''}
 
     <label style="margin-top:18px">Your skills</label>
     <div class="skillcloud">${PF_SKILLS.length
@@ -987,7 +989,8 @@ function pfCustomSkill(){
 function pfClearPhoto(){ PF_PHOTO=''; PF_HEADSHOT=''; PF_HEADSHOT_PX=0; renderProfile(); }
 const BIO_MIN=25, BIO_MAX=60, HEADSHOT_MIN=600, HEADSHOT_MAX=1400;
 let PF_HEADSHOT=null, PF_HEADSHOT_PX=0;
-function bioCount(){ const t=$('#pf_bio'), o=$('#pf_biocount'); if(!t||!o) return; const n=t.value.trim()?t.value.trim().split(/\s+/).length:0;
+function bioParts(){ return [1,2,3].map(i=>($('#pf_bio'+i)?$('#pf_bio'+i).value.trim():'')); }
+function bioCount(){ const o=$('#pf_biocount'); if(!o) return; const t={value:bioParts().filter(Boolean).join(' ')}; const n=t.value.trim()?t.value.trim().split(/\s+/).length:0;
   o.textContent = n===0 ? '' : n<BIO_MIN ? `${n} words so far, ${BIO_MIN-n} more to go` : n>BIO_MAX ? `${n} words, ${n-BIO_MAX} over the limit of ${BIO_MAX}` : `${n} words. Just right.`;
   o.style.color = (n && (n<BIO_MIN||n>BIO_MAX)) ? '#B4442C' : ''; }
 function pfPickPhoto(ev){
@@ -1085,11 +1088,12 @@ async function saveProfile(){
   const name=$('#pf_name').value.trim();
   if(!name) return showErr('perr','Name is required.');
   try{
-    const bio=$('#pf_bio')?$('#pf_bio').value.trim():'';
+    const parts=bioParts(); const bio=parts.filter(Boolean).join(' ');
     const nw=bio?bio.split(/\s+/).length:0;
-    if(bio && (nw<BIO_MIN || nw>BIO_MAX)) return showErr('perr',`Your bio is ${nw} word${nw===1?'':'s'}; it needs to be between ${BIO_MIN} and ${BIO_MAX} words.`);
+    if(bio && parts.some(x=>!x)) return showErr('perr','Please answer all three bio prompts, or leave all three empty for now.');
+    if(bio && (nw<BIO_MIN || nw>BIO_MAX)) return showErr('perr',`Your bio is ${nw} word${nw===1?'':'s'} in all; it needs to be between ${BIO_MIN} and ${BIO_MAX} words.`);
     const body={name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value, etsy:$('#pf_etsy')?$('#pf_etsy').value:''}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio};
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value, etsy:$('#pf_etsy')?$('#pf_etsy').value:''}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio, bio_parts:parts};
     if(PF_HEADSHOT!==null){ body.headshot=PF_HEADSHOT; body.headshot_px=PF_HEADSHOT_PX; }
     await api('/api/profile','POST',body);
     await api('/api/me').then(r=>ME=r.user);
@@ -1627,7 +1631,7 @@ async function adminPeople(){
       <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.phone?' · <a href="tel:'+esc(u.phone)+'">'+esc(u.phone)+'</a>':''}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       </div>
-      ${u.role==='instructor'?`<div class="meta" style="margin-top:8px">Website: ${u.headshot_px?`<span class="pill appr">headshot ${u.headshot_px}px</span> <a href="/api/admin/headshot/${u.id}" style="font-size:12px">download</a>`:'<span class="pill pend">no headshot</span>'} ${u.bio_words?`<span class="pill appr">bio ${u.bio_words} words</span>`:'<span class="pill pend">no bio</span>'} ${(u.links||[]).length?`<span class="pill appr">links: ${u.links.join(', ')}</span>`:'<span class="pill pend">no links</span>'}</div>`:''}
+      ${u.role==='instructor'?`<div class="meta" style="margin-top:8px">Website: ${u.headshot_px?`<span class="pill appr">headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':''}</span> <a href="/api/admin/headshot/${u.id}" style="font-size:12px">download</a>`:'<span class="pill pend">no headshot</span>'} <input type="file" id="ah${u.id}" accept="image/*" class="hidden" onchange="adminHeadshot(${u.id}, event)"><a href="#" onclick="document.getElementById('ah${u.id}').click();return false" style="font-size:12px">upload ours</a> ${u.bio_words?`<span class="pill appr">bio ${u.bio_words} words</span>`:'<span class="pill pend">no bio</span>'} ${(u.links||[]).length?`<span class="pill appr">links: ${u.links.join(', ')}</span>`:'<span class="pill pend">no links</span>'}</div>`:''}
       ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone','lockbox'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
           if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
           if(q.status==='done') return `<span class="pill ${q.self_reported?'pend':'appr'}">${esc(lab)} \u2713${q.self_reported?' (their word, '+esc((q.done_at||'').slice(0,4))+')':''}${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} ${q.id?`<a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`:''}`;
@@ -1805,6 +1809,21 @@ async function interestAct(rid, iid, action){
   if(!confirm(action==='confirm'?'Confirm this person? They are emailed the details.':'Decline this person? They get a kind note.')) return;
   try{ await api('/api/requests/'+rid+'/interest/'+iid+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
   adminRequests();
+}
+async function adminHeadshot(uid, ev){
+  const f=ev.target.files[0]; if(!f) return;
+  const img=new Image(); const r=new FileReader();
+  r.onload=e=>{ img.onload=async()=>{
+    const side=Math.min(img.width,img.height);
+    if(side<HEADSHOT_MIN){ alert(`That photo is only ${side}px across; the website needs at least ${HEADSHOT_MIN}px.`); return; }
+    const big=Math.min(side,HEADSHOT_MAX), c2=document.createElement('canvas'); c2.width=c2.height=big; let g=c2.getContext('2d');
+    g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,big,big);
+    const c1=document.createElement('canvas'); c1.width=c1.height=240; g=c1.getContext('2d');
+    g.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,240,240);
+    try{ await api('/api/admin/headshot/'+uid,'POST',{headshot:c2.toDataURL('image/jpeg',.88), headshot_px:big, photo:c1.toDataURL('image/jpeg',.82)}); }catch(e){ alert(e.message); return; }
+    adminPeople();
+  }; img.src=e.target.result; };
+  r.readAsDataURL(f);
 }
 async function saveBgPaused(on){
   try{ await api('/api/admin/paperwork-settings','POST',{bg_paused:on}); }catch(e){ alert(e.message); }
@@ -4821,7 +4840,7 @@ async function submitClassNow(){
  'testEventbrite','testFacebook','refileContracts','backupNow','compactDb','markPaid','runScheduler','retryJob','startPublishPolling','restoreRecord','archiveRecord','previewGraphic','openEditForm','confirmSel',
  'submitChangePw','submitForgot','submitReset','doLogin','logout','togglePw',
  'saveDraft','resumeDraft','deleteDraft','leaveForm','syncRegistrations',
- 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
+ 'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
  'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
