@@ -171,6 +171,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   `/embed/instructors.json` includes each artist's upcoming approved classes (Eventbrite links tagged
   `aff=site-artists`), images at `/headshot/{id}.jpg`, preview at `/embed/instructors`.
   `site-embed.js` fills a Squarespace Code block containing `<div id="gibby-instructors"></div>`.
+  Marketing review (Sep 22): the site shows only `pub_bio` / `pub_headshot_web`; any bio or headshot
+  change sets `web_review='pending'` and emails `web_review_to()` (default Lou Booker,
+  lbooker@theeverett.org) once; admins approve or ask for a change under More > Reach > Website
+  reviews (`/api/admin/web-review/{id}/approve|changes`). Marketing's own upload publishes at once.
+  `users.pronouns` show with the name. The page intro is meta `artists_intro` (Email settings).
 - **Reimbursements** (Reimburse tab, `reimb_requests` + `reimb_files`): the Everett's Expense
   Reimbursement & Check Request filled in the app. Class picker limited to the instructor's own
   classes, dated lines by category (`REIMB_CATEGORIES`), receipts required (photo or PDF), delivery

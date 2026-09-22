@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.102.1-eventbrite-watch"
+VERSION = "10.103.0-marketing-review"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -298,6 +298,17 @@ def init_db():
     for col in ("eb_state", "eb_start"):     # what Eventbrite says about the event: status and local start, read back hourly
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} TEXT")
         except Exception: pass
+    # The website shows only what Marketing approved: pub_* is the published copy,
+    # bio/headshot* is what the artist last saved, web_review says whether the
+    # two differ ('pending'), or what Marketing said ('changes').
+    for col in ("pub_bio", "pub_headshot_web", "pub_headshot_by", "pub_at", "web_review", "web_review_note", "web_pending_at", "pronouns"):
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        except Exception: pass
+    if not c.execute("SELECT 1 FROM meta WHERE k='web_review_seeded'").fetchone():
+        # Everything already on the page counts as approved, so the page does not go blank.
+        c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by, pub_at=?
+                     WHERE deleted_at IS NULL AND (COALESCE(bio,'')!='' OR COALESCE(headshot,'') LIKE 'data:image/%')""", (now(),))
+        c.execute("INSERT INTO meta(k,v) VALUES('web_review_seeded','1')")
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
@@ -1543,6 +1554,25 @@ My typed signature states that I will be a responsible key code holder and will 
 
 BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own words
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
+
+ARTISTS_INTRO_DEFAULT = ("Meet the artists and instructors who bring The Gibby's creative workshops and classes to life. "
+                         "Explore their work, learn a little about the people behind our programs, and discover upcoming opportunities to create with them.")
+
+WEB_REVIEW_TO_DEFAULT = "lbooker@theeverett.org"   # Marketing (Lou Booker) hears when a profile is waiting
+
+def web_review_to():
+    return [e.strip() for e in (_meta_get("web_review_to") or WEB_REVIEW_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
+
+def mark_web_pending(c, uid, what):
+    """The artist changed something the website shows: hold it for Marketing and
+    tell them once (not again while it is already waiting)."""
+    row = c.execute("SELECT name, web_review FROM users WHERE id=?", (uid,)).fetchone()
+    already = row and row["web_review"] == "pending"
+    c.execute("UPDATE users SET web_review='pending', web_pending_at=?, web_review_note=NULL WHERE id=?", (now(), uid))
+    if not already:
+        mailer.send(web_review_to(), f"Website profile waiting for review: {row['name'] if row else 'an artist'}",
+            f"{row['name'] if row else 'An artist'} updated their {what} in the Gibby app. Nothing changes on theeverett.org until it is approved.\n\n"
+            f"An admin approves it under People in the app: {mailer.APP_URL}\n\n(Every change an artist makes to their bio or headshot waits here first.)")
 
 INCIDENT_TO_DEFAULT = "mtruban@theeverett.org, scosans@everetttheatre.com"   # Michelle Truban and Seth Cosans
 INCIDENT_LOCATIONS = ["Theatre", "Annex", "Gibby"]
@@ -3197,7 +3227,7 @@ class H(http.server.BaseHTTPRequestHandler):
         mhs = re.match(r"^/headshot/(\d+)\.jpg$", p)
         if mhs:
             # Public headshot for the website's teaching artists list.
-            c = db(); r = c.execute("SELECT COALESCE(headshot_web, headshot) AS photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
+            c = db(); r = c.execute("SELECT pub_headshot_web AS photo FROM users WHERE id=? AND deleted_at IS NULL AND must_change_pw=0", (int(mhs.group(1)),)).fetchone(); c.close()
             if not r or not (r["photo"] or "").startswith("data:image/"): return self.send_error(404)
             head, b64 = r["photo"].split(",", 1)
             mime = head[5:].split(";")[0] or "image/jpeg"
@@ -3558,10 +3588,10 @@ class H(http.server.BaseHTTPRequestHandler):
     def _public_instructors(self):
         """Teaching artists with a headshot or bio on their profile: the website's list."""
         c = db()
-        rows = [dict(r) for r in c.execute("""SELECT id, name, substr(COALESCE(headshot_web, headshot), 1, 12) || substr(COALESCE(headshot_web, headshot), -64) AS photo,
-                    bio, skills, social_website, social_instagram, social_etsy, role
+        rows = [dict(r) for r in c.execute("""SELECT id, name, substr(pub_headshot_web, 1, 12) || substr(pub_headshot_web, -64) AS photo,
+                    pub_bio AS bio, skills, social_website, social_instagram, social_etsy, role, pronouns
                     FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin')
-                    AND (COALESCE(bio,'')!='' OR COALESCE(headshot,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
+                    AND (COALESCE(pub_bio,'')!='' OR COALESCE(pub_headshot_web,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
         c.close()
         today = datetime.date.today()
         upcoming = {}
@@ -3589,14 +3619,14 @@ class H(http.server.BaseHTTPRequestHandler):
         out = []
         for r in rows:
             if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
-            out.append({"id": r["id"], "name": r["name"] or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:3],
+            out.append({"id": r["id"], "name": r["name"] or "", "pronouns": r.get("pronouns") or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:3],
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
                         "img": (f"/headshot/{r['id']}.jpg?v=" + hashlib.sha1((r.get("photo") or "")[-64:].encode()).hexdigest()[:8]) if (r.get("photo") or "").startswith("data:image/") else "",
                         "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or ""})
         return out
 
     def embed_instructors_json(self):
-        body = json.dumps({"instructors": self._public_instructors()}).encode()
+        body = json.dumps({"intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT).strip(), "instructors": self._public_instructors()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -3617,13 +3647,13 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"<div><a href='{html.escape(cx['url'])}'>{html.escape(cx['title'])}</a> · {html.escape(cx['when'])}</div>" for cx in i["classes"]) + "</div>"
             sk = " · ".join(html.escape(s) for s in i["skills"])
             cards.append(f'<div style="display:flex;gap:18px;align-items:flex-start;padding:18px 0;border-bottom:1px solid #e6e1d6">{img}'
-                         f'<div><h3 style="margin:0 0 4px;font-size:1.15rem">{html.escape(i["name"])}</h3>'
+                         f'<div><h3 style="margin:0 0 4px;font-size:1.15rem">{html.escape(i["name"])}' + (f' <span style="font-size:.8rem;font-weight:400;color:#6b655a">{html.escape(i["pronouns"])}</span>' if i.get("pronouns") else "") + '</h3>'
                          + (f'<div style="font-size:.85rem;color:#6b655a;margin-bottom:8px">{sk}</div>' if sk else "")
                          + bio + '</div></div>')
         page = ('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
                 '<title>Meet Our Teaching Artists</title>'
                 '<body style="font-family:-apple-system,Helvetica,Arial,sans-serif;max-width:760px;margin:0 auto;padding:16px;color:#171512;line-height:1.5">'
-                '<h1 style="font-size:1.6rem">Meet Our Teaching Artists</h1>' + ("".join(cards) or "<p>No profiles yet.</p>") + '</body>')
+                '<h1 style="font-size:1.6rem">Meet Our Teaching Artists</h1><p>' + html.escape((_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT).strip()) + '</p>' + ("".join(cards) or "<p>No profiles yet.</p>") + '</body>')
         body = page.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -3663,6 +3693,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 "phone":u.get("phone") or "",
                 "socials":{k:(u.get("social_"+k) or "") for k in ("instagram","facebook","tiktok","website","etsy")},
                 "headshot_px":u.get("headshot_px") or 0,
+                "web_review":u.get("web_review") or "", "web_review_note":u.get("web_review_note") or "",
+                "pronouns":u.get("pronouns") or "",
+                "web_published":bool(u.get("pub_bio") or u.get("pub_headshot_web")),
                 "signoff":u.get("signoff") or "",
                 "bio":u.get("bio") or "",
                 "bio_parts":_loads_list(u.get("bio_parts")) or ["","",""],
@@ -3680,8 +3713,10 @@ class H(http.server.BaseHTTPRequestHandler):
                      "pending":bool(r["must_change_pw"]), "photo":r["photo"] or "",
                      "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or "", "paperwork":{},
                      "headshot_px": r["headshot_px"] or 0, "headshot_by": r["headshot_by"] or "", "bio_words": len((r["bio"] or "").split()),
+                     "web_review": r["web_review"] or "", "web_review_note": r["web_review_note"] or "", "bio": r["bio"] or "", "pronouns": r["pronouns"] or "",
+                     "published": bool(r["pub_bio"] or r["pub_headshot_web"]), "pub_at": (r["pub_at"] or "")[:10],
                      "links": [k for k in ("facebook","instagram","website","etsy","tiktok") if r["social_" + k]]}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,web_review,web_review_note,pub_bio,pub_headshot_web,pub_at,pronouns,
                                           social_facebook,social_instagram,social_website,social_etsy,social_tiktok FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             by_id = {r["id"]: r for r in rows}
@@ -4360,6 +4395,14 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db(); r = lockbox_row(c, u["id"]); c.close()
             return self.send_json({"contract": lockbox_contract(), "signed": bool(r),
                    "signed_at": r["signed_at"] if r else None, "name": r["name"] if r else None})
+        mpv = re.match(r"^/api/admin/headshot/(\d+)/preview$", p)
+        if mpv:
+            u = self.require("admin")
+            if not u: return
+            c = db(); r = c.execute("SELECT COALESCE(headshot_web, headshot) AS photo FROM users WHERE id=?", (int(mpv.group(1)),)).fetchone(); c.close()
+            if not r or not (r["photo"] or "").startswith("data:image/"): return self.send_error(404)
+            head, b64 = r["photo"].split(",", 1)
+            self._send_b64(b64, head[5:].split(";")[0] or "image/jpeg", "headshot.jpg"); return
         mhd = re.match(r"^/api/admin/headshot/(\d+)$", p)
         if mhd or p == "/api/admin/headshots.zip":
             # Headshots for the website: one, or all of them zipped, named by person.
@@ -4473,6 +4516,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "photo_drafts": db().execute("SELECT COUNT(*) FROM social_posts WHERE status='draft'").fetchone()[0],
                 "reimbursements": db().execute("SELECT COUNT(*) FROM reimb_requests WHERE status='submitted'").fetchone()[0],
                 "contracts_unsigned": db().execute("SELECT COUNT(*) FROM classes WHERE contract_status='sent' AND deleted_at IS NULL").fetchone()[0],
+                "web_pending": db().execute("SELECT COUNT(*) FROM users WHERE web_review='pending' AND deleted_at IS NULL").fetchone()[0],
                 "pending": self._classes("WHERE c.status='pending' "),
                 "graphic": self._classes("WHERE c.status='graphic_review' "),
                 "returned": self._classes("WHERE c.status='incomplete' "),
@@ -4497,6 +4541,8 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "email_limits": mailer.limit_stats(),
                                    "reimb_to": ", ".join(reimb_to()),
                                    "incident_to": ", ".join(incident_to()),
+                                   "web_review_to": ", ".join(web_review_to()),
+                                   "artists_intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
@@ -4891,6 +4937,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.execute(f"UPDATE users SET social_{k}=? WHERE id=?", (v or None, u["id"]))
             if b.get("signoff") is not None:
                 c.execute("UPDATE users SET signoff=? WHERE id=?", (str(b.get("signoff") or "").strip()[:80] or None, u["id"]))
+            if b.get("pronouns") is not None:
+                c.execute("UPDATE users SET pronouns=? WHERE id=?", (re.sub(r"\s+", " ", str(b.get("pronouns") or "")).strip()[:40] or None, u["id"]))
             if b.get("bio_parts") is not None or b.get("bio") is not None:
                 # Three prompts, same for everyone, so the page reads as one voice
                 # per artist but one shape overall (Marketing's ask).
@@ -4905,7 +4953,9 @@ class H(http.server.BaseHTTPRequestHandler):
                     if not (BIO_MIN_WORDS <= nwords <= BIO_MAX_WORDS):
                         c.close()
                         return self.send_json({"error": f"Your bio is {nwords} word{'' if nwords == 1 else 's'} in all; it needs to be between {BIO_MIN_WORDS} and {BIO_MAX_WORDS} words for the website."},400)
-                c.execute("UPDATE users SET bio=?, bio_parts=? WHERE id=?", (bio or None, json.dumps(parts) if bio else None, u["id"]))
+                if bio != (u.get("bio") or ""):
+                    c.execute("UPDATE users SET bio=?, bio_parts=? WHERE id=?", (bio or None, json.dumps(parts) if bio else None, u["id"]))
+                    if bio: mark_web_pending(c, u["id"], "bio")
             if b.get("headshot") is not None:
                 hs = str(b.get("headshot") or "")
                 if hs and not hs.startswith("data:image/"):
@@ -4917,6 +4967,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.close(); return self.send_json({"error": f"That photo is only {px}px across. The website needs at least {HEADSHOT_MIN_PX}px; please choose a larger, sharper photo."},400)
                 hw = str(b.get("headshot_web") or "")
                 c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by=?, headshot_web=? WHERE id=?", (hs or None, px if hs else None, "artist" if hs else None, hw if (hs and hw.startswith("data:image/") and len(hw) < 400_000) else None, u["id"]))
+                if hs: mark_web_pending(c, u["id"], "headshot")
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             c.commit(); c.close()
@@ -5311,7 +5362,9 @@ class H(http.server.BaseHTTPRequestHandler):
             head, b64 = hs.split(",", 1)
             # the small avatar comes from the same picture so the app matches the site
             hw = str(b.get("headshot_web") or "")
-            c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=?, headshot_web=? WHERE id=? AND deleted_at IS NULL", (hs, px, b.get("photo") or hs, hw if (hw.startswith("data:image/") and len(hw) < 400_000) else None, int(mhp.group(1))))
+            hw_ok = hw if (hw.startswith("data:image/") and len(hw) < 400_000) else None
+            c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by='gibby', photo=?, headshot_web=?, pub_headshot_web=?, pub_headshot_by='gibby', pub_at=? WHERE id=? AND deleted_at IS NULL",
+                      (hs, px, b.get("photo") or hs, hw_ok, hw_ok or hs, now(), int(mhp.group(1))))
             c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/incidents":
@@ -5362,6 +5415,39 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour incident report went to Michelle Truban and Seth Cosans with the completed form attached. "
                 f"Thank you for filing it promptly.\n\nThe Gibby", attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")])
             return self.send_json({"ok":True, "id": rid, "folder": folder_link})
+        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes)$", p)
+        if mwr:
+            u = self.require("admin")
+            if not u: return
+            uid = int(mwr.group(1)); b = self.read_json(); c = db()
+            who = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL", (uid,)).fetchone()
+            if not who: c.close(); return self.send_json({"error":"not found"},404)
+            if mwr.group(2) == "approve":
+                c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by,
+                             pub_at=?, web_review=NULL, web_review_note=NULL WHERE id=?""", (now(), uid))
+                c.commit(); c.close()
+                mailer.send(who["email"], "Your website profile is live",
+                    f"Hi {(who['name'] or '').split(' ')[0] or 'there'},\n\nMarketing approved your bio and headshot. They are now on The Everett's website: "
+                    f"https://www.theeverett.org/meet-our-teaching-artists\n\nThe Gibby")
+                return self.send_json({"ok":True})
+            note = str(b.get("note") or "").strip()[:600]
+            c.execute("UPDATE users SET web_review='changes', web_review_note=? WHERE id=?", (note or "Please take another look.", uid))
+            c.commit(); c.close()
+            mailer.send(who["email"], "A small change to your website profile",
+                f"Hi {(who['name'] or '').split(' ')[0] or 'there'},\n\nMarketing looked at your bio and headshot for the website and asked for a change:\n\n  {note or 'Please take another look.'}\n\n"
+                f"Update it on your profile in the app and it goes back to them for a look: {mailer.APP_URL}\n\nThe Gibby")
+            return self.send_json({"ok":True})
+        if p == "/api/admin/web-review-settings":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            if b.get("intro") is not None:
+                _meta_set("artists_intro", str(b.get("intro") or "").strip()[:600])
+                if b.get("to") is None: return self.send_json({"ok":True})
+            to = [e.strip().lower() for e in str(b.get("to") or "").replace(";", ",").split(",") if e.strip()]
+            if not to or any(not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e) for e in to):
+                return self.send_json({"error":"That does not look like an email address."},400)
+            _meta_set("web_review_to", ", ".join(to)); return self.send_json({"ok":True})
         mhw = re.match(r"^/api/admin/headshot/(\d+)/web$", p)
         if mhw:
             # A 600px copy of an existing headshot for the website (made in the browser).

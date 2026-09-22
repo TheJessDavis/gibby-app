@@ -663,6 +663,9 @@ async function renderProfile(focus){
     </div>
     <input type="file" id="pf_file" accept="image/*" style="display:none" onchange="pfPickPhoto(event)">
     <label>Your name</label><input id="pf_name" value="${esc(ME&&ME.name||'')}">
+    <label>Your pronouns <span style="color:var(--ink-soft);font-weight:600">(optional, shown with your name on the website)</span></label>
+    <input id="pf_pronouns" list="pronoun_list" value="${esc((ME&&ME.pronouns)||'')}" placeholder="e.g. she/her, he/him, they/them">
+    <datalist id="pronoun_list"><option value="she/her"><option value="he/him"><option value="they/them"><option value="she/they"><option value="he/they"></datalist>
     <label>Your phone</label><input id="pf_phone" type="tel" value="${esc(ME&&ME.phone||'')}" placeholder="So the Gibby can reach you on class day">
     <label>Your address</label><input id="pf_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
     <div class="hint">Only The Gibby's admins see this (for payments and paperwork).</div>
@@ -674,6 +677,9 @@ async function renderProfile(focus){
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">Etsy shop</label><input id="pf_etsy" value="${esc((ME&&ME.socials&&ME.socials.etsy)||'')}" placeholder="etsy.com/shop/yourshop">
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">TikTok</label><input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="@yourhandle or link">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
+    ${ME&&ME.web_review==='pending'?`<div class="card waiting" style="margin:10px 0 0;padding:10px 14px"><b>Waiting for Marketing.</b> <span class="meta">Your latest bio or headshot is with Marketing for a look before it goes on the website. You will get an email when it is up.</span></div>`
+      :ME&&ME.web_review==='changes'?`<div class="card needs" style="margin:10px 0 0;padding:10px 14px"><b>Marketing asked for a change:</b> <span class="meta">${esc(ME.web_review_note||'')}</span><div class="hint">Update it below and save; it goes back to them.</div></div>`
+      :ME&&ME.web_published?`<div class="meta" style="margin:10px 0 0">\u2713 Your bio and headshot are on The Everett's website. Changes you save here go to Marketing first.</div>`:''}
     <label id="pf_bio" style="margin-top:14px">Your bio (for the website)</label>
     <div class="hint" style="margin-top:0">Three short answers, in your own words. Every artist answers the same three, so the page reads as one set. ${BIO_MIN} to ${BIO_MAX} words in all.</div>
     ${[['What you make and teach','e.g. I teach stained glass and mosaics, and I make garden art from salvaged glass.'],['How you came to it','e.g. I picked up a soldering iron at a friend\'s studio twelve years ago and never put it down.'],['What a class with you is like','e.g. Relaxed and hands-on; you leave with a finished piece and the confidence to make another.']].map(([l,ph],i)=>`
@@ -706,7 +712,7 @@ async function renderProfile(focus){
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
 const MORE_ITEMS=[['all','\u{1F4CB}','All classes','Classes'],
   ['money','\u{1F4B0}','Money','Money'],['supplies','\u{1F9FA}','Orders','Money'],
-  ['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
+  ['reviews','\u{1F5BC}\uFE0F','Website reviews','Reach'],['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
   ['incidents','\u{1F6A8}','Incidents','Records'],['audit','\u{1F50D}','Audit','Records'],['archive','\u{1F5C3}\uFE0F','Archive','Records']];
 const MORE_GROUPS=['Classes','Money','Reach','Records'];
 /* A tab left open across a deploy keeps old code and can misread new answers.
@@ -1155,7 +1161,7 @@ async function saveProfile(){
     if(bio && parts.some(x=>!x)) return showErr('perr','Please answer all three bio prompts, or leave all three empty for now.');
     if(bio && (nw<BIO_MIN || nw>BIO_MAX)) return showErr('perr',`Your bio is ${nw} word${nw===1?'':'s'} in all; it needs to be between ${BIO_MIN} and ${BIO_MAX} words.`);
     const body={name, photo:PF_PHOTO, skills:PF_SKILLS, address:$('#pf_addr').value,
-      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value, etsy:$('#pf_etsy')?$('#pf_etsy').value:''}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio, bio_parts:parts};
+      socials:{instagram:$('#pf_ig').value, facebook:$('#pf_fb').value, tiktok:$('#pf_tt').value, website:$('#pf_web').value, etsy:$('#pf_etsy')?$('#pf_etsy').value:''}, signoff:$('#pf_sign').value, phone:$('#pf_phone').value, bio, bio_parts:parts, pronouns:$('#pf_pronouns')?$('#pf_pronouns').value:undefined};
     if(PF_HEADSHOT!==null){ body.headshot=PF_HEADSHOT; body.headshot_px=PF_HEADSHOT_PX; body.headshot_web=PF_HEADSHOT_WEB||''; }
     await api('/api/profile','POST',body);
     await api('/api/me').then(r=>ME=r.user);
@@ -1269,7 +1275,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies, incidents:adminIncidents,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies, incidents:adminIncidents, reviews:adminReviews,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1304,6 +1310,7 @@ async function adminDashboard(){
   if(d.supplies_waiting) todo.push({k:'\u{1F9FA}', t:n(d.supplies_waiting,'1 supply order to place','N supply orders to place'), go:"renderAdmin('supplies')"});
   if(d.photo_drafts) todo.push({k:'\u{1F4F7}', t:n(d.photo_drafts,'1 photo post to approve','N photo posts to approve'), go:"renderAdmin('marketing')"});
   if(d.reimbursements) todo.push({k:'\u{1F4B5}', t:n(d.reimbursements,'1 reimbursement to pay','N reimbursements to pay'), go:"renderAdmin('money')"});
+  if(d.web_pending) todo.push({k:'\u{1F5BC}\uFE0F', t:n(d.web_pending,'1 website profile waiting for Marketing review','N website profiles waiting for Marketing review'), go:"renderAdmin('reviews')"});
   const waiting=[d.returned.length?n(d.returned.length,'1 class sent back','N classes sent back'):'', d.contracts_unsigned?n(d.contracts_unsigned,'1 contract unsigned','N contracts unsigned'):''].filter(Boolean);
   $('#tab').innerHTML = `
     <h2>Needs <em>you</em></h2>
@@ -1680,6 +1687,7 @@ let BG_PAUSED=true, PEOPLE_OPEN=null;
 async function adminPeople(){
   const [d, lb]=await Promise.all([api('/api/users'), api('/api/admin/lockbox').catch(()=>null)]);
   BG_PAUSED=!!d.bg_paused; window.__people=d.users;
+  if(PEOPLE_REVIEW){ PEOPLE_REVIEW=false; const first=d.users.find(u=>u.web_review==='pending'); if(first) PEOPLE_OPEN=first.id; }
   const allSkills=[...new Set(d.users.flatMap(u=>u.skills||[]))].sort();
   let shown = PEOPLE_SKILL ? d.users.filter(u=>(u.skills||[]).includes(PEOPLE_SKILL)) : d.users;
   const ql=PEOPLE_Q.trim().toLowerCase();
@@ -1691,6 +1699,11 @@ async function adminPeople(){
       <div><h3>${avaHTML(u)}${esc(u.name||u.email)}</h3><div class="meta">${esc(u.email)}${u.phone?' · <a href="tel:'+esc(u.phone)+'">'+esc(u.phone)+'</a>':''}${u.address?' · '+esc(u.address):''}</div>
         ${(u.skills||[]).length?`<div class="skillcloud" style="margin:8px 0 0">${u.skills.map(k=>`<span class="skill mini ${k===PEOPLE_SKILL?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       </div>
+      ${u.web_review==='pending'?`<div class="card needs" style="margin:8px 0 0;padding:12px 14px"><b>Waiting for Marketing review</b>
+        <div style="display:flex;gap:12px;align-items:flex-start;margin-top:8px">${u.headshot_px?`<img src="/api/admin/headshot/${u.id}/preview?t=${Date.now()}" alt="" style="width:72px;height:72px;border-radius:50%;object-fit:cover;flex:none">`:''}<div class="meta" style="white-space:pre-wrap">${esc(u.bio||'(no bio yet)')}</div></div>
+        <div class="two" style="margin-top:10px"><button class="btn ghost" onclick="webReview(${u.id},'changes')">Ask for a change</button><button class="btn dark" onclick="webReview(${u.id},'approve')">Approve for the website</button></div></div>`
+        :u.web_review==='changes'?`<div class="meta" style="margin-top:8px">Website: change requested, waiting on ${esc((u.name||'').split(' ')[0])}.</div>`
+        :u.published?`<div class="meta" style="margin-top:8px">Website: on the page${u.pub_at?' since '+esc(u.pub_at):''}.</div>`:''}
       ${u.role==='instructor'?`<div class="meta" style="margin-top:8px">Website: ${u.headshot_px?`<span class="pill appr">headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':''}</span> <a href="/api/admin/headshot/${u.id}" style="font-size:12px">download</a>`:'<span class="pill pend">no headshot</span>'} <input type="file" id="ah${u.id}" accept="image/*" class="hidden" onchange="adminHeadshot(${u.id}, event)"><a href="#" onclick="document.getElementById('ah${u.id}').click();return false" style="font-size:12px">upload ours</a> ${u.bio_words?`<span class="pill appr">bio ${u.bio_words} words</span>`:'<span class="pill pend">no bio</span>'} ${(u.links||[]).length?`<span class="pill appr">links: ${u.links.join(', ')}</span>`:'<span class="pill pend">no links</span>'}</div>`:''}
       ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone','lockbox'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
           if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
@@ -1883,6 +1896,29 @@ async function interestAct(rid, iid, action){
   try{ await api('/api/requests/'+rid+'/interest/'+iid+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
   adminRequests();
 }
+async function adminReviews(){
+  const d=await api('/api/users');
+  const pend=d.users.filter(u=>u.web_review==='pending'), back=d.users.filter(u=>u.web_review==='changes'), live=d.users.filter(u=>u.published&&!u.web_review);
+  const card=u=>`<div class="card ${u.web_review==='pending'?'needs':''}"><div style="display:flex;gap:12px;align-items:flex-start">
+      ${u.headshot_px?`<img src="/api/admin/headshot/${u.id}/preview?t=${Date.now()}" alt="" style="width:84px;height:84px;border-radius:50%;object-fit:cover;flex:none">`:`<div style="width:84px;height:84px;border-radius:50%;background:var(--paper);flex:none"></div>`}
+      <div style="min-width:0"><b>${esc(u.name||u.email)}</b>${u.pronouns?` <span class="meta">${esc(u.pronouns)}</span>`:''}${(u.skills||[]).length?`<div class="meta">${esc(u.skills.join(' \u00b7 '))}</div>`:''}
+        <div class="meta" style="margin-top:6px;white-space:pre-wrap">${esc(u.bio||'(no bio yet)')}</div>
+        <div class="meta" style="margin-top:6px">${u.headshot_px?`Headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':' (their own)'}`:'No headshot'}${u.bio_words?` \u00b7 bio ${u.bio_words} words`:''}${u.web_review==='changes'?` \u00b7 change requested: \u201C${esc(u.web_review_note||'')}\u201D`:''}</div></div></div>
+      ${u.web_review==='pending'?`<div class="two" style="margin-top:10px"><button class="btn ghost" onclick="webReview(${u.id},'changes')">Ask for a change</button><button class="btn dark" onclick="webReview(${u.id},'approve')">Approve for the website</button></div>`:''}</div>`;
+  $('#tab').innerHTML=`<h2>Website <em>reviews</em></h2>
+    <p class="sub">Bios and headshots artists have saved for theeverett.org/meet-our-teaching-artists. Nothing goes on the page until it is approved here. <a href="/embed/instructors" target="_blank" rel="noopener">See the page as it is now</a>.</p>
+    <label style="margin-top:0">Waiting for approval (${pend.length})</label>${pend.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
+    ${back.length?`<label>Change requested (${back.length})</label>${back.map(card).join('')}`:''}
+    ${live.length?`<label>On the website (${live.length})</label>${live.map(u=>`<div class="card" style="padding:10px 16px"><b>${esc(u.name)}</b>${u.pronouns?` <span class="meta">${esc(u.pronouns)}</span>`:''}<span class="meta"> \u00b7 since ${esc(u.pub_at||'')}</span></div>`).join('')}`:''}`;
+}
+async function webReview(uid, action){
+  let note='';
+  if(action==='changes'){ note=prompt('What should they change? (they get this by email)'); if(note===null) return; }
+  try{ await api('/api/admin/web-review/'+uid+'/'+action,'POST',{note}); }catch(e){ alert(e.message); return; }
+  alert(action==='approve'?'Approved. It is on the website now.':'Sent back with your note.');
+  if(ADMIN_TAB==='reviews') adminReviews(); else adminPeople();
+}
+let PEOPLE_REVIEW=false;
 async function adminHeadshot(uid, ev){
   const f=ev.target.files[0]; if(!f) return;
   const img=new Image(); const r=new FileReader();
@@ -1900,6 +1936,7 @@ async function adminHeadshot(uid, ev){
   }; img.src=e.target.result; };
   r.readAsDataURL(f);
 }
+async function saveWebReviewTo(){ try{ await api('/api/admin/web-review-settings','POST',{to:$('#webrev_to').value, intro:$('#artists_intro').value}); alert('Saved.'); }catch(e){ alert(e.message); } }
 async function saveIncidentTo(){ try{ await api('/api/admin/incident-settings','POST',{to:$('#incident_to').value}); alert('Saved.'); }catch(e){ alert(e.message); } }
 async function saveReimbTo(){ try{ await api('/api/admin/reimb-settings','POST',{to:$('#reimb_to').value}); alert('Saved.'); }catch(e){ alert(e.message); } }
 async function saveBgPaused(on){
@@ -2210,6 +2247,11 @@ async function adminEmail(){
       <div class="meta">Every request an instructor submits on the Reimburse tab is emailed here with the form and receipts, and filed under Gibby Reimbursements on Drive.</div>
       <input id="reimb_to" value="${esc(d.reimb_to||'')}" placeholder="tjohnson@theeverett.org, mtruban@theeverett.org" style="margin-top:8px">
       <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveReimbTo()">Save</button></div>
+    <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Website profile reviews</h3>
+      <div class="meta">When an artist changes their bio or headshot, this address hears once. Nothing appears on theeverett.org until an admin approves it under People.</div>
+      <input id="webrev_to" value="${esc(d.web_review_to||'')}" placeholder="lbooker@theeverett.org" style="margin-top:8px">
+      <label>Intro at the top of the teaching artists page</label><textarea id="artists_intro" rows="3">${esc(d.artists_intro||'')}</textarea>
+      <button class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="saveWebReviewTo()">Save</button></div>
     <div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Incident reports</h3>
       <div class="meta">Every incident report an instructor files is emailed here with the form attached, and filed under Gibby Incident Reports on Drive.</div>
       <input id="incident_to" value="${esc(d.incident_to||'')}" placeholder="mtruban@theeverett.org, scosans@everetttheatre.com" style="margin-top:8px">
@@ -5080,7 +5122,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

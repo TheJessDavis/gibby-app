@@ -114,25 +114,25 @@ function renderInstructors(){
   host.setAttribute('data-done','1');
   // Paint the last list at once from this browser's memory, then refresh it.
   var cached=null; try{cached=JSON.parse(localStorage.getItem('gibby-artists')||'null')}catch(e){}
-  if(cached&&cached.instructors&&cached.instructors.length){paintArtists(host,cached.instructors)}
+  if(cached&&cached.instructors&&cached.instructors.length){paintArtists(host,cached.instructors,cached.intro)}
   else{host.innerHTML='<div style="opacity:.6;padding:24px 0">Loading our teaching artists\u2026</div>'}
   fetch(APP+'/embed/instructors.json').then(function(r){return r.json()}).then(function(d){
     try{localStorage.setItem('gibby-artists',JSON.stringify(d))}catch(e){}
     var list=d.instructors||[];
     if(!list.length){host.innerHTML='';return}
     if(cached&&JSON.stringify(cached)===JSON.stringify(d))return;
-    paintArtists(host,list);
+    paintArtists(host,list,d.intro);
     rep('artists='+list.length);
   }).catch(function(e){rep('artists fetch failed: '+e)});
 }
-function paintArtists(host,list){
+function paintArtists(host,list,intro){
   {
-    var h='<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
+    var h=(intro?'<p class="gibby-artists-intro" style="max-width:720px;margin:0 0 28px">'+esc(intro)+'</p>':'')+'<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
     list.forEach(function(i){
       h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
         +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:160px;height:160px;border-radius:50%;object-fit:cover;margin-bottom:12px">'
                :'<div style="width:160px;height:160px;border-radius:50%;background:#EDE8DC;margin-bottom:12px"></div>')
-        +'<h3 style="margin:0 0 4px">'+esc(i.name)+'</h3>'
+        +'<h3 style="margin:0 0 4px">'+esc(i.name)+(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
         +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
         +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
         +((i.classes||[]).length?'<div style="margin-top:12px;font-size:.9em"><b>Upcoming classes</b><div style="height:6px"></div>'+i.classes.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'')
