@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.102.0-closed-months"
+VERSION = "10.102.1-eventbrite-watch"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -295,6 +295,11 @@ def init_db():
     for col in ("bio_parts", "headshot_by", "headshot_web"):     # bio prompts JSON; who supplied the headshot; a 600px copy for the website
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
+    for col in ("eb_state", "eb_start"):     # what Eventbrite says about the event: status and local start, read back hourly
+        try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} TEXT")
+        except Exception: pass
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
+        except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
         id INTEGER PRIMARY KEY, user_id INTEGER, class_id INTEGER, template TEXT, audience TEXT,
         subject TEXT, body TEXT, feature_ids TEXT, add_links INTEGER DEFAULT 1, status TEXT DEFAULT 'scheduled',
@@ -426,6 +431,39 @@ def seed_registrations(c, cls):
         c.execute("INSERT INTO registrations(class_id,name,email,phone,created) VALUES(?,?,?,?,?)",
                   (cls["id"], name, email, phone, now()))
 
+def eb_paused(cls):
+    """True when Eventbrite says the event is not simply live: postponed, canceled,
+    draft, ended early, or moved to a different day than the app has. Automations
+    hold off until an admin fixes the class in the app."""
+    st = (cls.get("eb_state") or "")
+    if st and st not in ("live", "started", "completed", "ended"): return True
+    return bool(cls.get("eb_start")) and cls.get("eb_start") != "ok"
+
+def sync_event_state(cls):
+    """Read the Eventbrite event's status and start date back into the class, and
+    tell the admins once when something changed outside the app."""
+    eid = (cls.get("external_ids") or {}).get("eventbrite_id")
+    cfg = integrations.load_config()
+    if not (eid and cfg.get("eventbrite_token")): return
+    ev = integrations._req(f"https://www.eventbriteapi.com/v3/events/{eid}/", method="GET", token=cfg["eventbrite_token"]) or {}
+    st = (ev.get("status") or "")
+    eb_day = ((ev.get("start") or {}).get("local") or "")[:10]
+    app_day = _class_date(cls)
+    moved = "ok"
+    if eb_day and app_day and eb_day != app_day.isoformat(): moved = eb_day
+    c = db()
+    old = c.execute("SELECT eb_state, eb_start FROM classes WHERE id=?", (cls["id"],)).fetchone()
+    c.execute("UPDATE classes SET eb_state=?, eb_start=? WHERE id=?", (st, moved, cls["id"]))
+    c.commit(); c.close()
+    now_paused = eb_paused({"eb_state": st, "eb_start": moved})
+    was_paused = eb_paused({"eb_state": old["eb_state"] if old else "", "eb_start": old["eb_start"] if old else ""})
+    if now_paused and not was_paused and cls.get("status") == "approved":
+        why = (f"Eventbrite now lists it as {st}" if st not in ("live", "started") else f"Eventbrite has it on {eb_day}, the app has {app_day}")
+        mailer.send(emails_for(db(), "WHERE role='admin'"), f"Eventbrite changed: {cls['title']}",
+            f"\"{cls['title']}\" ({cls.get('slot_date','')}) was changed on Eventbrite outside the app: {why}.\n\n"
+            f"The app has paused its automatic emails for this class (reminders, roster, low-enrollment, thank-you) until it matches. "
+            f"Open the class under All classes and either move it with Change date or booked window, or cancel it: {mailer.APP_URL}")
+
 def sync_registrations(class_id, _req_fn=None):
     """Pull the real roster from Eventbrite (all pages) and reconcile it into the
     registrations table. Idempotent: attendees are keyed on their Eventbrite id, so
@@ -440,6 +478,8 @@ def sync_registrations(class_id, _req_fn=None):
 
     people = integrations.sync_attendees(cls, _req_fn=_req_fn)
     if people is None: return None
+    try: sync_event_state(cls)
+    except Exception as e: print(f"[eventbrite] state check failed for #{class_id}: {e}")
 
     c = db()
     added = updated = 0
@@ -2745,6 +2785,8 @@ def run_scheduler(asof=None):
         students = [x[0] for x in c.execute("SELECT email FROM registrations WHERE class_id=? AND refunded=0",(cls["id"],)).fetchall()]
         instr = c.execute("SELECT email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
         cfg = mailer.load_email_config()
+        if cls["status"] == "approved" and eb_paused(cls):
+            actions.append(f"paused (Eventbrite differs): {cls['title']}"); return
         if cls["status"] == "approved":
             if end_days >= 0 and ensure_help_card(c, cls):
                 actions.append(f"help card posted for {cls['title']}")
@@ -2772,7 +2814,7 @@ def run_scheduler(asof=None):
             # No "final numbers" email at the registration cutoff: the owner asked for
             # it to stop (Sep 21, 2026). Eventbrite still closes sales on its own and
             # the roster email the day before carries the count.
-            if days == 2:
+            if days == 2 and enrolled > 0:
                 # The student reminder is sent by a PERSON: this nudges the
                 # instructor and admins, and the app's Send reminder button (with
                 # its own once-only guard) is the approval.
@@ -2785,7 +2827,7 @@ def run_scheduler(asof=None):
                     f"their logistics. It only goes out when you press it.",
                     today, cfg)
                 if sent: actions.append(f"48h reminder nudge to staff: {cls['title']}")
-            if days == 1:
+            if days == 1 and enrolled > 0:
                 # The instructor gets tomorrow's roster: who is coming, with contact
                 # details. Instructor-facing, so the approval rule does not apply.
                 instr_row = c.execute("SELECT name,email FROM users WHERE id=?",(cls["instructor_id"],)).fetchone()
