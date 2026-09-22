@@ -1894,7 +1894,7 @@ async function rqNotify(rid){
 async function interestAct(rid, iid, action){
   if(!confirm(action==='confirm'?'Confirm this person? They are emailed the details.':'Decline this person? They get a kind note.')) return;
   try{ await api('/api/requests/'+rid+'/interest/'+iid+'/'+action,'POST',{}); }catch(e){ alert(e.message); return; }
-  adminRequests();
+  if(actingRole()==='admin') adminRequests(); else instrWanted();
 }
 async function adminReviews(){
   const d=await api('/api/users');
@@ -2052,7 +2052,7 @@ async function adminRequests(){
   if(!ALL_SKILLS) await loadSkills();
   const d=await api('/api/requests'); const rs=d.requests||[]; window.__reqs=rs;
   const open=rs.filter(r=>r.status==='open'), claimed=rs.filter(r=>r.status==='claimed'), closed=rs.filter(r=>r.status==='closed');
-  const KM={teach:'\u{1F4CC} Teach',help:'\u{1F64B} Help',sell:'\u{1F3A8} Sell or show',design:'\u{1F9E9} Design, paid'};
+  const KM={teach:'\u{1F4CC} Teach',help:'\u{1F64B} Help',sell:'\u{1F3A8} Sell or show',design:'\u{1F9E9} Design, paid',collab:'\u{1F91D} Collab'};
   const card=r=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(r.title)} <span class="pill" style="background:var(--cream);color:var(--ink);font-weight:700">${KM[r.kind]||KM.teach}</span></h3>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')||'no details'}</div>
       ${(r.interest||[]).length?`<div style="margin-top:8px;padding:8px 10px;background:var(--cream);border-radius:10px">${r.interest.map(i=>`<div class="meta" style="margin:3px 0"><b>${esc(i.name)}</b>${i.phone?' · <a href="tel:'+esc(i.phone)+'">'+esc(i.phone)+'</a>':''} · ${esc(i.email)}${i.note?`<div>\u201C${esc(i.note)}\u201D</div>`:''}
@@ -2074,7 +2074,7 @@ async function adminRequests(){
       ${r.status==='open'?'<span class="pill pend">open</span>':r.status==='claimed'?'<span class="pill appr">claimed</span>':'<span class="pill inc">closed</span>'}</div>
     <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="rqEdit(${r.id})">Edit</button>${r.status==='open'?`<button class="btn ghost" onclick="rqNotify(${r.id})">Email everyone</button>`:'<span></span>'}</div>
     <div class="two" style="margin-top:10px">${r.status==='closed'?`<button class="btn ghost" onclick="reqAction(${r.id},'reopen')">Reopen</button>`:`<button class="btn ghost" onclick="reqAction(${r.id},'close')">Close</button>`}<span></span></div></div>`;
-  const KIND_ORDER=['teach','help','sell','design'];
+  const KIND_ORDER=['teach','help','sell','design','collab'];
   const row=r=>`<details class="clsrow ${(r.interest||[]).some(i=>i.status==='raised')?'cls-back':r.status==='open'?'cls-pending':r.status==='claimed'?'cls-approved':'cls-off'}" ${RQ_OPEN===r.id?'open':''}>
     <summary><span class="clspic clspic-i">${(KM[r.kind]||KM.teach).split(' ')[0]}</span>
       <div class="rowt"><b>${esc(r.title)}</b><span>${[r.when_text, (r.interest||[]).filter(i=>i.status==='raised').length?`${(r.interest||[]).filter(i=>i.status==='raised').length} waiting on you`:'', r.status==='claimed'?'claimed by '+(r.claimed_by_name||'?'):''].filter(Boolean).map(esc).join(' \u00b7 ')||'no details'}</span></div>
@@ -2090,7 +2090,7 @@ async function adminRequests(){
   $('#tab').innerHTML=`<h2>Requests</h2>
     <details class="card" id="rq_form" ${RQ_EDIT?'open':''} style="margin-bottom:4px"><summary style="cursor:pointer;font-weight:800;font-size:1rem" id="rq_formtitle">\u{1F4CC} Post an opportunity</summary>
       <div class="hint" style="margin-top:6px">A class to teach, a helping hand, a chance to sell or show, or paid design work. Instructors see it on their Opportunities tab; email everyone only when you choose to.</div>
-      <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell</button><button data-v="design" onclick="rqSetKind('design')">\u{1F9E9} Design</button></div>
+      <div class="seg" id="rq_kind"><button class="on" data-v="teach" onclick="rqSetKind('teach')">\u{1F4CC} Teach</button><button data-v="help" onclick="rqSetKind('help')">\u{1F64B} Help</button><button data-v="sell" onclick="rqSetKind('sell')">\u{1F3A8} Sell</button><button data-v="design" onclick="rqSetKind('design')">\u{1F9E9} Design</button><button data-v="collab" onclick="rqSetKind('collab')">\u{1F91D} Collab</button></div>
       <div class="hint">Teach: a class someone claims. Help: a volunteer spot, an assistant, a mentor. Sell: a market, a wall, a pop-up. Design: paid work like a craft kit or a commission, with a deadline. People raise a hand and you confirm.</div>
       <label>Title</label><input id="rq_title" placeholder="e.g. Kids pottery">
       <label>When</label><input id="rq_when" placeholder="e.g. a Saturday in November">
@@ -4220,7 +4220,7 @@ async function instrMine(){
 let WANT_SKILL=null, WANT_KIND='all';
 function wantFilter(k){ WANT_SKILL = (k===WANT_SKILL) ? null : k; instrWanted(); }
 function wantKind(k){ WANT_KIND=k; instrWanted(); }
-const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}, design:{label:'Design, paid',icon:'\u{1F9E9}',bg:'#EFE3F7',btn:'Submit a proposal'}};
+const KIND_META={teach:{label:'Teach',icon:'\u{1F4CC}',bg:'#DCE8F5',btn:'Claim this one'}, help:{label:'Help',icon:'\u{1F64B}',bg:'#EAF4E2',btn:'I can help'}, sell:{label:'Sell or show',icon:'\u{1F3A8}',bg:'#FBE3D6',btn:'I want to sell or show'}, design:{label:'Design, paid',icon:'\u{1F9E9}',bg:'#EFE3F7',btn:'Submit a proposal'}, collab:{label:'Collab',icon:'\u{1F91D}',bg:'#DCE8F5',btn:"I'd like to collab"}};
 function filesHTML(r){
   const fs=r.files||[]; if(!fs.length) return '';
   const imgs=fs.filter(f=>(f.mime||'').startsWith('image/')), docs=fs.filter(f=>!(f.mime||'').startsWith('image/'));
@@ -4234,19 +4234,22 @@ async function instrWanted(){
   const mine=reqs.filter(r=>(r.status==='claimed' && ME && r.claimed_by===ME.id) || (r.my_interest && r.status!=='closed'));
   const tags=[...new Set(openAll.flatMap(r=>r.skills||[]))].sort();
   const my=new Set((ME&&ME.skills)||[]);
-  const KORDER={teach:0,help:1,sell:2,design:3};
+  const KORDER={teach:0,help:1,sell:2,design:3,collab:4};
   let open = (WANT_KIND==='all' ? openAll : openAll.filter(r=>r.kind===WANT_KIND)).slice().sort((a,b)=>(KORDER[a.kind]??9)-(KORDER[b.kind]??9) || b.id-a.id);
   open = WANT_SKILL==='__mine' ? open.filter(r=>(r.skills||[]).some(k=>my.has(k))) : WANT_SKILL ? open.filter(r=>(r.skills||[]).includes(WANT_SKILL)) : open;
-  const kinds=['teach','help','sell','design'];
+  const kinds=['teach','help','sell','design','collab'];
   const card=r=>{ const m=KIND_META[r.kind]||KIND_META.teach; const raised=r.my_interest;
     return `<div class="card" style="margin:0;border-radius:0 0 14px 14px"><div class="row"><h3 style="font-size:1.05rem">${esc(r.title)}</h3><span class="pill" style="flex:none;background:var(--cream);color:var(--ink)">${m.label}</span></div>
       <div class="meta">${[r.when_text,r.room,r.ages].filter(Boolean).map(esc).join(' · ')}</div>
       ${(r.skills||[]).length?`<div class="skillcloud" style="margin:6px 0 0">${r.skills.map(k=>`<span class="skill mini ${my.has(k)?'hit':''}">${esc(k)}</span>`).join('')}</div>`:''}
       ${r.description?`<p style="font-size:13.5px;line-height:1.45;margin:8px 0 0">${esc(r.description)}</p>`:''}
       ${filesHTML(r)}
-      ${r.notes?`<div class="meta" style="margin-top:6px"><b>From The Gibby:</b> ${esc(r.notes)}</div>`:''}
+      ${r.kind==='collab'?`<div class="meta" style="margin-top:6px">Proposed by <b>${esc(r.created_by_name||'a teaching artist')}</b>${r.is_creator?' (you)':''}</div>`:''}
+      ${r.notes?`<div class="meta" style="margin-top:6px"><b>${r.kind==='collab'?'Their vision:':'From The Gibby:'}</b> ${esc(r.notes)}</div>`:''}
+      ${r.kind==='collab'&&r.is_creator?`<div style="margin-top:8px;padding:8px 10px;background:var(--paper);border-radius:10px">${(r.interest||[]).length?r.interest.map(i=>`<div class="meta" style="margin:3px 0"><b>${esc(i.name)}</b> \u00b7 ${esc(i.email)}${i.note?` \u201C${esc(i.note)}\u201D`:''} ${i.status==='confirmed'?'<span class="pill appr">collaborating</span>':i.status==='declined'?'<span class="pill inc">declined</span>':`<a href="#" onclick="interestAct(${r.id},${i.id},'confirm');return false">Yes, let's collab</a> \u00b7 <a href="#" onclick="interestAct(${r.id},${i.id},'decline');return false">Not this time</a>`}</div>`).join(''):'<div class="meta">Nobody has asked to collab yet. Other teaching artists see this on their Opportunities tab.</div>'}</div>`:''}
       ${r.kind==='design'&&!raised?'<div class="meta" style="margin-top:8px">Proposals go in right here: name, description, a photo or sketch, and a supply list.</div>':''}
-      ${r.kind==='teach'
+      ${r.kind==='collab'&&r.is_creator ? ''
+        : r.kind==='teach'
         ? `<button class="btn dark" style="margin-top:10px" onclick="reqAction(${r.id},'claim')">${m.btn}</button>`
         : raised==='confirmed' ? `<div class="meta" style="margin-top:10px;color:#3F7A32;font-weight:800">✅ You are confirmed for this. ${r.interest_count>1?`(${r.interest_count} raised a hand)`:''}</div>`
         : raised==='declined' ? `<div class="meta" style="margin-top:10px">The Gibby went another way this time. Thank you for offering.</div>`
@@ -4256,6 +4259,7 @@ async function instrWanted(){
   $('#tab').innerHTML = `<h2>Opportunities</h2>
     <p class="sub">Classes The Gibby wants taught, classes that need a helping hand, chances to sell or show your work, and paid design work. Tap one to read it.</p>
     <div class="seg" style="margin-bottom:8px;flex-wrap:wrap"><button class="${WANT_KIND==='all'?'on':''}" onclick="wantKind('all')">All</button>${kinds.map(k=>{ const n=openAll.filter(r=>r.kind===k).length; return `<button class="${WANT_KIND===k?'on':''}" onclick="wantKind('${k}')">${KIND_META[k].icon} ${k==='sell'?'Sell':k==='design'?'Design':KIND_META[k].label}${n?' <small>'+n+'</small>':''}</button>`; }).join('')}</div>
+    <button class="btn ghost" style="margin-bottom:10px" onclick="collabForm()">Propose an event and find a collaborator</button>
     ${tags.length?`<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="want_q" placeholder="Search by skill (${tags.length})" value="${esc(SKILL_Q)}" oninput="skillSearch(this.value, ()=>{ instrWanted().then(()=>{ const el=document.getElementById('want_q'); if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); })" style="margin:0;flex:1">
         ${my.size?`<button class="skill ${WANT_SKILL==='__mine'?'mine':''}" style="flex:none" onclick="wantFilter('__mine')">My skills</button>`:''}</div>
       ${(SKILL_Q||WANT_SKILL)?`<div class="skillcloud" style="margin:0 0 10px">${tags.filter(k=>WANT_SKILL===k||(SKILL_Q&&skillMatch(k))).map(k=>`<button class="skill ${WANT_SKILL===k?'mine':''}" onclick="wantFilter('${esc(k)}')">${esc(k)}</button>`).join('')}${WANT_SKILL?`<button class="skill" onclick="wantFilter(null)">Show all</button>`:''}</div>`:''}`:''}
@@ -4268,6 +4272,38 @@ async function instrWanted(){
         <div class="meta">${r.kind==='teach'?(r.class_title?'Submitted as a class':'Claimed; finish it from Drafts on My classes'):r.my_interest==='confirmed'?'Confirmed by The Gibby'+(r.when_text?' · '+esc(r.when_text):''):r.my_interest==='declined'?'Not this time':'Hand raised, waiting on The Gibby'}</div></div>`).join('')}`:''}`;
 }
 let MONEY_TAB='summary', WANT_OPEN=null;
+/* Collab: a teaching artist proposes an event, picks an open date from the
+   calendar, and other artists ask to join. The proposer confirms them. */
+async function collabForm(){
+  let slots=[]; try{ slots=(await api('/api/slots')).slots||[]; }catch(e){ return alert(e.message); }
+  const days={};
+  slots.forEach(s=>{ const k=s.date+'|'+(s.room||''); const d=days[k]||(days[k]={date:s.date, room:s.room||'', lo:tmin(s.start), hi:tmin(s.end)}); d.lo=Math.min(d.lo,tmin(s.start)); d.hi=Math.max(d.hi,tmin(s.end)); });
+  const opts=Object.values(days).sort((a,b)=>{ const pa=parseDate(a.date)||{m:0,d:0}, pb=parseDate(b.date)||{m:0,d:0}; return (mOrd(pa.m)-mOrd(pb.m))||(pa.d-pb.d)||a.room.localeCompare(b.room); });
+  const m=document.createElement('div'); m.id='collabmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow:auto';
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:460px;width:100%;padding:20px 22px;margin:auto 0">
+    <h2 style="margin:0 0 2px">Propose a <em>collab</em></h2>
+    <p class="sub" style="margin:0 0 10px">An event you would like to host with another teaching artist. It goes on everyone's Opportunities tab; people tap "I'd like to collab" and you choose.</p>
+    <label style="margin-top:0">Event name</label><input id="cb_title" placeholder="e.g. Holiday Maker Night">
+    <label>About the event</label><textarea id="cb_about" rows="3" placeholder="What it is, who it is for, what people make or see."></textarea>
+    <label>Your vision for it</label><textarea id="cb_vision" rows="3" placeholder="What you hope it becomes, and what a collaborator would bring."></textarea>
+    <label>Date and room (open dates on the Gibby calendar)</label>
+    <select id="cb_when">${opts.length?'<option value="">Pick a date</option>'+opts.map(o=>`<option value="${esc(o.date)}|${esc(o.room)}|${fmtT(o.lo)} \u2013 ${fmtT(o.hi)}">${esc(o.date)} \u00b7 ${esc(o.room||'either room')} \u00b7 open ${fmtT(o.lo)} to ${fmtT(o.hi)}</option>`).join(''):'<option value="">No open dates right now</option>'}</select>
+    <div class="hint">This is the date you have in mind. The room is booked the usual way once you two have a plan.</div>
+    <div class="err" id="cb_err"></div>
+    <div class="two" style="margin-top:14px"><button class="btn ghost" onclick="document.getElementById('collabmodal').remove()">Cancel</button><button class="btn dark" onclick="sendCollab()">Post it</button></div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) m.remove(); });
+  document.body.appendChild(m);
+}
+async function sendCollab(){
+  const err=$('#cb_err'); err.classList.remove('show');
+  const w=$('#cb_when').value.split('|');
+  const body={title:$('#cb_title').value, about:$('#cb_about').value, vision:$('#cb_vision').value, when_text:w[0]?`${w[0]} \u00b7 ${w[2]||''}`.trim():'', room:w[1]||''};
+  try{ await api('/api/requests/collab','POST',body); }catch(e){ err.textContent=e.message; err.classList.add('show'); return; }
+  const m=$('#collabmodal'); if(m) m.remove();
+  alert('Posted. Other teaching artists now see it under Opportunities; you will get an email when someone asks to collab.');
+  instrWanted();
+}
 let PROP_FILES=[];
 function proposalForm(id, existing){
   const r=(window.__opps||[]).find(x=>x.id===id)||{};
@@ -4339,7 +4375,7 @@ async function raiseHand(id, withdraw){
   if(!withdraw && r && r.kind==='design'){ return proposalForm(id, r.my_proposal||null); }
   if(!withdraw){ note=prompt('Anything The Gibby should know? (optional)'); if(note===null) return; }
   try{ await api('/api/requests/'+id+'/interest','POST',{note, withdraw:!!withdraw}); }catch(e){ alert(e.message); return; }
-  if(!withdraw) alert('Thank you! The Gibby will confirm with you by email.');
+  if(!withdraw) alert(r && r.kind==='collab' ? 'Sent. '+(r.created_by_name||'The proposer')+' will be in touch by email.' : 'Thank you! The Gibby will confirm with you by email.');
   instrWanted();
 }
 /* Which day the class is over: the last session for a course, the day itself
@@ -5122,7 +5158,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.103.0-marketing-review"
+VERSION = "10.104.0-collab"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -4132,7 +4132,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 mine = [x for x in by_req.get(r["id"], []) if x["user_id"] == u["id"]]
                 r["my_interest"] = mine[0]["status"] if mine else None
                 r["my_proposal"] = mine[0]["proposal_obj"] if mine else None
-                if u["role"] == "admin":
+                r["is_creator"] = (r.get("created_by") == u["id"])
+                if u["role"] == "admin" or (r["kind"] == "collab" and r["is_creator"]):
                     r["interest"] = [{"id": x["id"], "user_id": x["user_id"], "name": x["name"], "email": x["email"], "phone": x["phone"] or "",
                                       "skills": json.loads(x["user_skills"] or "[]"), "note": x["note"] or "", "status": x["status"], "created": x["created"],
                                       "proposal": x["proposal_obj"], "files": x["files_list"]}
@@ -5871,7 +5872,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c = db()
             desc = (b.get("description") or "").strip()[:6000]
             skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
-            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else "teach"
+            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design", "collab") else "teach"
             c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,button_label)
                          VALUES(?,?,?,?,?,'open',?,?,?,?,?,?)""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
@@ -5882,11 +5883,13 @@ class H(http.server.BaseHTTPRequestHandler):
             c.commit(); c.close()
             if b.get("notify") and instructors:      # only when the admin chose "Post it and email everyone"
                 lead = {"teach": "The Gibby would love someone to teach this:", "help": "The Gibby is looking for a helping hand:",
-                        "sell": "An opportunity to sell or show your work:", "design": "A paid design opportunity:"}[kind]
+                        "sell": "An opportunity to sell or show your work:", "design": "A paid design opportunity:",
+                        "collab": "A teaching artist is looking for a collaborator:"}[kind]
                 act = {"teach": "press Claim on it. It pre-fills a class proposal so you only pick the time and add your details",
                        "help": "press I can help on it and The Gibby will confirm with you",
                        "sell": "press I want to sell or show on it and The Gibby will be in touch",
-                       "design": "press I'd like to propose on it and The Gibby will be in touch"}[kind]
+                       "design": "press I'd like to propose on it and The Gibby will be in touch",
+                       "collab": "press I'd like to collab on it and they will be in touch"}[kind]
                 mailer.send(instructors, f"The Gibby is looking for: {title}",
                     f"Hello,\n\n{lead}\n\n  {title}\n"
                     + (f"  When: {b.get('when_text')}\n" if b.get("when_text") else "")
@@ -5896,6 +5899,34 @@ class H(http.server.BaseHTTPRequestHandler):
                     + (f"\n{b.get('notes').strip()}\n" if (b.get("notes") or "").strip() else "")
                     + f"\nIf that is you, open the Opportunities tab in the app and {act}: {mailer.APP_URL}\n\nThanks,\nThe Gibby")
             return self.send_json({"ok":True, "id":rid, "emailed":(len(instructors) if b.get("notify") else 0)})
+        if p == "/api/requests/collab":
+            # A teaching artist proposes an event and asks for collaborators.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            if self.rate_limited("reimb", u["id"]): return
+            b = self.read_json()
+            title = re.sub(r"\s+", " ", str(b.get("title") or "")).strip()[:120]
+            about = str(b.get("about") or "").strip()[:2000]
+            vision = str(b.get("vision") or "").strip()[:2000]
+            when = re.sub(r"\s+", " ", str(b.get("when_text") or "")).strip()[:120]
+            room = str(b.get("room") or "").strip()[:40]
+            if len(title) < 3: return self.send_json({"error":"Give the event a name."},400)
+            if len(about) < 20: return self.send_json({"error":"Say what the event is, in a few sentences."},400)
+            if len(vision) < 10: return self.send_json({"error":"Add your vision for it: what you hope it becomes and what a collaborator would bring."},400)
+            if not when: return self.send_json({"error":"Pick a date from the open calendar dates."},400)
+            c = db()
+            skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
+            c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,button_label)
+                         VALUES(?,?,?,?,?,'open',?,?,?,?,'collab',?)""",
+                      (title, vision, room, "", when, u["id"], now(), about, json.dumps(skills), "I'd like to collab"))
+            rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            admins = emails_for(c, "WHERE role='admin'")
+            c.commit(); c.close()
+            mailer.send(admins, f"{u['name']} proposed a collab event: {title}",
+                f"{u['name']} posted a collaboration request on the Opportunities tab.\n\n  {title}\n  When: {when}" + (f"\n  Room: {room}" if room else "")
+                + f"\n\nAbout: {about}\n\nTheir vision: {vision}\n\nOther teaching artists can tap \"I'd like to collab\"; {u['name'].split(' ')[0]} confirms them. "
+                f"You can email everyone about it or close it under Requests: {mailer.APP_URL}")
+            return self.send_json({"ok":True, "id": rid})
         mre = re.match(r"^/api/requests/(\d+)/edit$", p)
         if mre:
             u = self.require("admin")
@@ -5906,7 +5937,7 @@ class H(http.server.BaseHTTPRequestHandler):
             title = (b.get("title") or "").strip()[:120]
             if len(title) < 3: c.close(); return self.send_json({"error":"Give the request a short title."},400)
             skills = register_skills(c, [str(x).strip()[:40] for x in (b.get("skills") or []) if str(x).strip()][:12])
-            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design") else None
+            kind = b.get("kind") if b.get("kind") in ("teach", "help", "sell", "design", "collab") else None
             c.execute("""UPDATE class_requests SET title=?, notes=?, room=?, ages=?, when_text=?, description=?, skills=?, kind=COALESCE(?,kind), button_label=? WHERE id=?""",
                       (title, (b.get("notes") or "").strip()[:1000], (b.get("room") or "").strip()[:40],
                        (b.get("ages") or "").strip()[:60], (b.get("when_text") or "").strip()[:120],
@@ -5968,7 +5999,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c.close()
             kind = row["kind"] or "teach"
             lead = {"teach": "The Gibby would love someone to teach this.", "help": "The Gibby is looking for a helping hand.",
-                    "sell": "A chance to sell or show your work.", "design": "A paid design opportunity from The Gibby."}[kind]
+                    "sell": "A chance to sell or show your work.", "design": "A paid design opportunity from The Gibby.", "collab": "A teaching artist is looking for a collaborator."}[kind]
             lbl = row["button_label"] if ("button_label" in row.keys() and row["button_label"]) else None
             act = {"teach": "Tap Claim this one and the proposal is pre-filled; you only pick the time.",
                    "help": f"Tap {lbl or 'I can help'} and The Gibby will confirm with you.",
@@ -5982,10 +6013,10 @@ class H(http.server.BaseHTTPRequestHandler):
                     + (f"\nSkills: {', '.join(skills)}\n" if skills else "")
                     + "".join(f"\n{d['name']}: {d['url']}" for d in docs)
                     + f"\n\n{act}\n\nSee it in the app: {mailer.APP_URL}/#opportunities\n\nThank you,\nThe Gibby")
-            banner = {"teach": ("\U0001F4CC Teach", "#DCE8F5"), "help": ("\U0001F64B Help wanted", "#EAF4E2"), "sell": ("\U0001F3A8 Sell or show", "#FBE3D6"),
+            banner = {"teach": ("\U0001F4CC Teach", "#DCE8F5"), "help": ("\U0001F64B Help wanted", "#EAF4E2"), "sell": ("\U0001F3A8 Sell or show", "#FBE3D6"), "collab": ("\U0001F91D Collab", "#DCE8F5"),
                       "design": ("\U0001F9E9 Design, paid", "#EFE3F7")}[kind]
             subj = {"teach": f"Wanted: someone to teach {row['title']}", "help": f"Helping hand wanted: {row['title']}",
-                    "sell": f"Sell or show: {row['title']}", "design": f"Paid design opportunity: {row['title']}"}[kind]
+                    "sell": f"Sell or show: {row['title']}", "design": f"Paid design opportunity: {row['title']}", "collab": f"Looking for a collaborator: {row['title']}"}[kind]
             n = 0
             if instructors:
                 mailer.send(instructors, subj, body, images=[i["url"] for i in imgs], banner=banner); n = len(instructors)
@@ -6040,8 +6071,10 @@ class H(http.server.BaseHTTPRequestHandler):
                               (iid, re.sub(r"[^A-Za-z0-9._ -]+", "-", (f.get("name") or "file"))[:80], (f.get("mime") or "image/jpeg")[:80], b64, (f.get("thumb") or "")[:60000], now()))
             admins = emails_for(c, "WHERE role='admin'")
             owner = c.execute("SELECT name,email FROM users u JOIN classes cl ON cl.instructor_id=u.id WHERE cl.id=?", (row["class_id"],)).fetchone() if row["class_id"] else None
+            if row["kind"] == "collab" and row["created_by"]:
+                owner = c.execute("SELECT name,email FROM users WHERE id=?", (row["created_by"],)).fetchone()
             c.commit(); c.close()
-            verb = {"help": "can help with", "sell": "wants to sell or show at", "design": "sent a proposal for"}.get(row["kind"], "raised a hand for")
+            verb = {"help": "can help with", "sell": "wants to sell or show at", "design": "sent a proposal for", "collab": "wants to collaborate on"}.get(row["kind"], "raised a hand for")
             prop_txt = ""
             if prop:
                 prop_txt = (f"\n\nProposal: {prop['title']}" + (f" ({prop['tier']})" if prop["tier"] else "") + f"\n{prop['description']}"
@@ -6055,16 +6088,24 @@ class H(http.server.BaseHTTPRequestHandler):
                 + (f"\n\nTheir note: {note}" if note else "") + prop_txt + f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else "")
                 + f"\n\nSee it, with any photos, and confirm or decline under Requests: {mailer.APP_URL}")
             if owner and owner["email"] and owner["email"].lower() != (u.get("email") or "").lower():
-                mailer.send(owner["email"], f"{u['name']} offered to assist with {row['title']}",
-                    f"Hi {(owner['name'] or '').split(' ')[0] or 'there'},\n\n{u['name']} offered to assist with \"{row['title']}\". "
-                    f"The Gibby will confirm them and let you both know.\n\nThanks,\nThe Gibby")
+                if row["kind"] == "collab":
+                    mailer.send(owner["email"], f"{u['name']} wants to collab on {row['title']}",
+                        f"Hi {(owner['name'] or '').split(' ')[0] or 'there'},\n\n{u['name']} asked to collaborate on \"{row['title']}\"."
+                        + (f"\n\nTheir note: {note}" if note else "") + f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else "")
+                        + f"\n\nOpen the Opportunities tab, tap your post, and choose \"Yes, let's collab\" or \"Not this time\": {mailer.APP_URL}\n\nThe Gibby", reply_to=u.get("email"))
+                else:
+                    mailer.send(owner["email"], f"{u['name']} offered to assist with {row['title']}",
+                        f"Hi {(owner['name'] or '').split(' ')[0] or 'there'},\n\n{u['name']} offered to assist with \"{row['title']}\". "
+                        f"The Gibby will confirm them and let you both know.\n\nThanks,\nThe Gibby")
             return self.send_json({"ok":True, "status":"raised"})
         mrd = re.match(r"^/api/requests/(\d+)/interest/(\d+)/(confirm|decline)$", p)
         if mrd:
-            u = self.require("admin")
-            if not u: return
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
             rid, iid, action = int(mrd.group(1)), int(mrd.group(2)), mrd.group(3); c = db()
             row = c.execute("SELECT * FROM class_requests WHERE id=?", (rid,)).fetchone()
+            if row and u["role"] != "admin" and not (row["kind"] == "collab" and row["created_by"] == u["id"]):
+                c.close(); return self.send_json({"error":"forbidden"},403)
             it = c.execute("SELECT i.*, us.name, us.email FROM request_interest i JOIN users us ON us.id=i.user_id WHERE i.id=? AND i.request_id=?", (iid, rid)).fetchone()
             if not row or not it: c.close(); return self.send_json({"error":"not found"},404)
             c.execute("UPDATE request_interest SET status=?, decided_at=? WHERE id=?", ("confirmed" if action == "confirm" else "declined", now(), iid))

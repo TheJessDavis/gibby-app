@@ -146,6 +146,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   pre-fills a proposal; the others take a raised hand (`request_interest`), design takes a full
   proposal with photos and a supply list; admins confirm or decline. A Help card is created
   automatically when an approved class asked for a volunteer.
+- **Collab** (`class_requests.kind='collab'`, posted by instructors at `/api/requests/collab`): an event
+  idea with about (description), vision (notes), a date picked from open calendar dates (when_text,
+  room). Other artists raise a hand; the proposer (created_by) confirms or declines at the interest
+  endpoints, which allow the creator for this kind. Admins see it under Requests > Collab.
 - **Paperwork**: W-9, background check, phone, lockbox contract. Admins request per person; instructors
   complete in the app; files go to Drive under Gibby Paperwork; reminder after 3 days. The lockbox
   contract (`LOCKBOX_CONTRACT_DEFAULT`, editable in meta) is signed with a typed name into the
