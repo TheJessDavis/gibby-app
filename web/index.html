@@ -3393,11 +3393,11 @@ function openLiveEdit(id){
     <label class="chk" style="display:flex;gap:8px;align-items:center;margin-top:10px"><input type="checkbox" id="e_donate" ${c.donation_based?'checked':''}> Donation-based (students pay what they want)</label>
     ${(()=>{ const win=(c.slot_time||'').split(/\s*[–-]\s*/); const cur=(c.class_time||c.slot_time||'').split(/\s*[–-]\s*/);
       if(win.length<2) return '';
-      const opts=(sel)=>{ let o=''; for(let m=tmin(win[0]); m<=tmin(win[1]); m+=30){ o+=`<option${fmtT(m)===sel?' selected':''}>${fmtT(m)}</option>`; } return o; };
+      const opts=(sel)=>{ let o=''; for(let m=Math.max(0,tmin(win[0])-120); m<=Math.min(23*60+30,tmin(win[1])+180); m+=30){ const inWin=m>=tmin(win[0])&&m<=tmin(win[1]); o+=`<option${fmtT(m)===sel?' selected':''}>${fmtT(m)}${inWin?'':' (outside booking)'}</option>`; } return o; };
       return `<label style="margin-top:14px">When the class itself runs</label>
       <div class="meta">Booked: ${esc(c.slot_date||'')} · ${esc(c.slot_time||'')} in the ${esc(c.room||'')}${c.is_series?' · '+(c.sessions||[]).length+' weekly sessions':''}. The class time must sit inside that window.</div>
       <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Starts</label><select id="e_cstart">${opts(cur[0])}</select></div><div><label style="margin-top:0">Ends</label><select id="e_cend">${opts(cur[1])}</select></div></div>
-      <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. Need a different day or a longer window? <a href="#" onclick="startReschedule(${c.id});return false">Change date or booked window</a>.</div>`; })()}
+      <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. A time marked "outside booking" grows the booking to fit when you save. Need a different day? <a href="#" onclick="startReschedule(${c.id});return false">Change the date</a>.</div>`; })()}
     <label style="margin-top:14px">Images</label>
     <div class="meta">Replacing an image updates it everywhere at once: the Eventbrite listing (landscape poster), the website (portrait poster, or the class photo if there is none), and the app. Facebook posts already made keep their old picture.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
@@ -3428,7 +3428,13 @@ async function submitLiveEdit(id){
     donation_based: !!($('#e_donate')&&$('#e_donate').checked)};
   if($('#e_cstart')&&$('#e_cend')) body.class_time=$('#e_cstart').value+' – '+$('#e_cend').value;
   try{
-    const r=await api('/api/classes/'+id+'/update-live','POST',body);
+    let r;
+    try{ r=await api('/api/classes/'+id+'/update-live','POST',body); }
+    catch(e){
+      if(e.data&&e.data.outside_window && confirm(`That runs outside the booked window (${e.data.window}).\n\nExtend the booking to fit the new time? The calendar and Eventbrite move with it.`)){
+        body.extend_window=true; r=await api('/api/classes/'+id+'/update-live','POST',body);
+      } else throw e;
+    }
     alert(`Saved.\n\nEventbrite: ${r.eventbrite}${r.eventbrite_times?' · time '+r.eventbrite_times:''}\nCalendar: ${r.calendar}\nWebsite: updates itself.`);
     renderAdmin('approvals');
   }catch(e){ showErr('eerr',(e.data&&e.data.error)||e.message); }

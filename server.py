@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.104.0-collab"
+VERSION = "10.104.1-extend-window"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6943,8 +6943,25 @@ class H(http.server.BaseHTTPRequestHandler):
                 if len(parts) != 2 or len(win) != 2:
                     c.close(); return self.send_json({"error":"Could not read the class time."},400)
                 cs, ce = parts
-                if not (tmin(win[0]) <= tmin(cs) < tmin(ce) <= tmin(win[1])):
-                    c.close(); return self.send_json({"error":f"The end time must be after the start time, and both must sit inside the booked window ({row['slot_time']})."},400)
+                if not (tmin(cs) < tmin(ce)):
+                    c.close(); return self.send_json({"error":"The end time must be after the start time."},400)
+                if not (tmin(win[0]) <= tmin(cs) and tmin(ce) <= tmin(win[1])):
+                    if not b.get("extend_window"):
+                        c.close(); return self.send_json({"error":f"That runs outside the booked window ({row['slot_time']}).", "outside_window": True, "window": row["slot_time"]},400)
+                    # An admin chose to grow the booking around the new time. Claim
+                    # whatever calendar slots exist in the extra time; where the
+                    # calendar already holds it (setup and cleanup), nothing to claim.
+                    new_lo, new_hi = min(tmin(win[0]), tmin(cs)), max(tmin(win[1]), tmin(ce))
+                    extra = [r2 for r2 in c.execute("SELECT id, start, end FROM slots WHERE date=? AND room=? AND status='available' AND deleted_at IS NULL",
+                                                    (row["slot_date"], row["room"])).fetchall()
+                             if new_lo <= tmin(r2["start"]) and tmin(r2["end"]) <= new_hi]
+                    if extra:
+                        ph = ",".join("?" * len(extra))
+                        c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph})", [r2["id"] for r2 in extra])
+                        try: ids = json.loads(row["slot_ids"] or "[]")
+                        except Exception: ids = []
+                        sets.append("slot_ids=?"); vals.append(json.dumps(ids + [r2["id"] for r2 in extra]))
+                    sets.append("slot_time=?"); vals.append(f"{fmt_min(new_lo)} – {fmt_min(new_hi)}")
                 new_ct = f"{cs} – {ce}"
                 if new_ct != (row["class_time"] or ""):
                     sets.append("class_time=?"); vals.append(new_ct); time_changed = True
@@ -8016,6 +8033,11 @@ def invite_instructor(c, name, email, proto, host):
         + PROFILE_ASK + "\n\n"
         f"See you at The Gibby!")
     return uid, name
+
+def fmt_min(m):
+    """540 -> '9:00 AM', the app's clock format."""
+    h, mi = divmod(int(m), 60); ap = "AM" if h < 12 else "PM"; h = h % 12 or 12
+    return f"{h}:{mi:02d} {ap}"
 
 def now(): return datetime.datetime.now().isoformat(timespec="seconds")
 STARTED_AT = now()     # tells a cold start from a warm one (see /api/version)
