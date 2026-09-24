@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.109.0-open-studio"
+VERSION = "10.109.1-reimb-email"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1648,10 +1648,23 @@ def send_reimb_approved(row, files, approver, approved_on, resend=False):
         data = base64.b64decode(f["b64"])
         if budget - len(data) < 0: break
         budget -= len(data); atts.append((f["name"], data, f["mime"]))
-    detail = row.get("email_body") or "\n".join(reimb_pdf_text(row, items, receipts))
+    detail = row.get("email_body") or reimb_email_body(row, items)
     body = f"APPROVED by {approver} on {pretty}.\n\n" + ("(Sent again from the app.)\n\n" if resend else "") + detail
     mailer.send(reimb_to(), f"Approved reimbursement: ${row['total']:.2f} for {row['name']} ({row['class_title']})", body,
                 attachments=atts, reply_to=row["instr_email"], origin="user")
+
+def reimb_email_body(row, items, folder_link=None, instr_email=None):
+    """The plain summary of a reimbursement request for the treasurer's email:
+    who, which class, the receipt lines, the totals, delivery, and where the
+    form and receipts are."""
+    lines = "\n".join(f"  {it['date']}  {it['category']}  ${float(it['amount']):.2f}" for it in items)
+    delivery = row.get("delivery") or ""
+    return (f"{row['name']} submitted an expense reimbursement request through the Gibby Class Manager.\n\n"
+            f"Class: {row['class_title']}\n\n{lines}\n\n  Sub total: ${float(row.get('subtotal') or 0):.2f}\n  Less advance: ${float(row.get('advance') or 0):.2f}\n  TOTAL DUE: ${float(row.get('total') or 0):.2f}\n\n"
+            + (f"Details: {row['details']}\n\n" if row.get("details") else "")
+            + f"Check delivery: {delivery}" + (f" to {row['address']}" if delivery == "Mailed" and row.get("address") else "") + "\n\n"
+            + "The completed form (PDF) and the receipts are attached" + (f" and filed on Drive: {folder_link or row.get('drive_folder')}" if (folder_link or row.get("drive_folder")) else "") + ".\n\n"
+            + f"Reply to this email to reach {row['name']} directly" + (f" ({instr_email or row.get('instr_email')})" if (instr_email or row.get("instr_email")) else "") + ".")
 
 def reimb_pdf_text(r, items, receipts):
     """The Everett's Expense Reimbursement & Check Request, as the lines of a PDF."""
@@ -5729,13 +5742,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 data = base64.b64decode(f["b64"])
                 if budget - len(data) < 0: break
                 budget -= len(data); atts.append((f["name"], data, f["mime"]))
-            lines = "\n".join(f"  {it['date']}  {it['category']}  ${it['amount']:.2f}" for it in items)
-            body = (f"{row['name']} submitted an expense reimbursement request through the Gibby Class Manager.\n\n"
-                    f"Class: {row['class_title']}\n\n{lines}\n\n  Sub total: ${subtotal:.2f}\n  Less advance: ${advance:.2f}\n  TOTAL DUE: ${total:.2f}\n\n"
-                    + (f"Details: {details}\n\n" if details else "")
-                    + f"Check delivery: {delivery}" + (f" to {address}" if delivery == "Mailed" else "") + "\n\n"
-                    + "The completed form (PDF) and the receipts are attached" + (f" and filed on Drive: {folder_link}" if folder_link else "") + ".\n\n"
-                    + f"Reply to this email to reach {row['name']} directly ({u['email']}).")
+            body = reimb_email_body(row, items, folder_link=folder_link, instr_email=u["email"])
             # An admin approves first; only then does it go to the treasurer.
             c = db(); c.execute("UPDATE reimb_requests SET email_body=? WHERE id=?", (body, rid)); c.commit(); c.close()
             mailer.send([a for a in emails_for(db(), "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()],
