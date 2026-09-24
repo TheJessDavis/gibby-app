@@ -3430,7 +3430,7 @@ function openLiveEdit(id){
       <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Starts</label><select id="e_cstart">${opts(cur[0])}</select></div><div><label style="margin-top:0">Ends</label><select id="e_cend">${opts(cur[1])}</select></div></div>
       <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. A time marked "outside booking" grows the booking to fit when you save. Need a different day? <a href="#" onclick="startReschedule(${c.id});return false">Change the date</a>.</div>`; })()}
     ${c.is_series&&(c.sessions||[]).length?`<label style="margin-top:14px">Session dates (${c.sessions.length})</label>
-      <div class="meta">Untick a date to skip it; a make-up week is added at the end so the course keeps ${c.sessions.length} sessions. Same time and room.</div>
+      <div class="meta">Untick a date to skip it. A make-up week is added after ${esc(c.sessions[c.sessions.length-1].date)} (never in between) so the course keeps ${c.sessions.length} sessions. Same time and room.</div>
       <div id="e_sessions" style="margin-top:6px">${c.sessions.map(s=>`<label class="chk" style="margin:4px 0"><input type="checkbox" class="e_sess" value="${esc(s.date)}" checked> ${esc(s.date)} \u00b7 ${esc(s.start)} \u2013 ${esc(s.end)}</label>`).join('')}</div>
       ${c.enrolled?`<label class="chk" style="margin-top:6px"><input type="checkbox" id="e_sess_notify" checked> Email the ${c.enrolled} ticket holder${c.enrolled===1?'':'s'} the new dates</label>`:''}
       <button type="button" class="btn ghost" style="margin-top:8px;padding:9px 16px" onclick="saveSessions(${c.id})">Apply the new dates</button>
@@ -3458,7 +3458,8 @@ async function saveSessions(id){
   const keep=[...document.querySelectorAll('.e_sess:checked')].map(x=>x.value);
   const skip=(c.sessions||[]).map(s=>s.date).filter(d=>!keep.includes(d));
   if(!skip.length) return alert('Untick the date to skip first.');
-  if(!confirm(`Skip ${skip.join(', ')} and add ${skip.length} make-up week${skip.length===1?'':'s'} at the end?`)) return;
+  const lastDate=(c.sessions||[]).length?c.sessions[c.sessions.length-1].date:'the last date';
+  if(!confirm(`Skip ${skip.join(', ')} and add ${skip.length} make-up week${skip.length===1?'':'s'} after ${lastDate}?`)) return;
   try{
     const r=await api('/api/classes/'+id+'/sessions','POST',{skip, notify_students: !!(document.getElementById('e_sess_notify')&&document.getElementById('e_sess_notify').checked)});
     alert(`Dates updated: ${r.sessions.map(s=>s.date).join(', ')}.\nEventbrite: ${r.eventbrite}. Calendar: ${r.calendar}.${r.emailed?' '+r.emailed+' students emailed.':''}`);

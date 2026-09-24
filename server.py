@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.108.0-students-bring"
+VERSION = "10.108.1-series-makeup"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2328,6 +2328,48 @@ def _class_slot_ids(cls):
             ids += [int(x) for x in (sd.get("slot_ids") or [])]
     except Exception: pass
     return sorted(set(ids))
+
+def _slots_for_week(c, label, times, room, own):
+    """Slot ids on `label` matching each (start, end) in times, in `room` (or a
+    roomless slot), open or already this class's own. None if the week is taken."""
+    ids = []
+    for (st, en) in times:
+        r = c.execute("""SELECT id, status FROM slots WHERE date=? AND start=? AND end=?
+                         AND deleted_at IS NULL AND (room=? OR room='' OR ?='')
+                         AND (status='available' OR (status='claimed' AND id IN ({})))
+                         ORDER BY (room=?) DESC LIMIT 1""".format(",".join(str(i) for i in own) or "-1"),
+                      (label, st, en, room, room, room)).fetchone()
+        if not r: return None
+        ids.append(r["id"])
+    return ids
+
+def reshape_series(c, sessions, drop, skip_all, weeks, own_ids=None):
+    """Drop the given dates from a booked series and add make-up weeks AFTER the
+    last date currently on the schedule (never in the gaps), so the course keeps
+    `weeks` sessions. Dates in skip_all are never used for a make-up. Returns the
+    new session list, or None when the calendar runs out."""
+    drop = {str(x).strip() for x in (drop or [])}
+    skip_all = {str(x).strip() for x in (skip_all or [])}
+    kept = [s for s in sessions if s.get("date") not in drop]
+    if not kept: return None
+    own = {int(x) for x in (own_ids or [])}
+    first = c.execute("SELECT room FROM slots WHERE id=?", (int(kept[0]["slot_ids"][0]),)).fetchone()
+    room = (first["room"] if first else "") or ""
+    times = []
+    for i in kept[0]["slot_ids"]:
+        r = c.execute("SELECT start, end FROM slots WHERE id=?", (int(i),)).fetchone()
+        if r: times.append((r["start"], r["end"]))
+    if not times: return None
+    last = max((parse_day(s["date"]) for s in sessions if parse_day(s["date"])), default=None)
+    if not last: return None
+    out = list(kept); week = 1
+    while len(out) < weeks and week <= weeks * 3 + 8:
+        d = last + datetime.timedelta(days=7 * week); week += 1
+        label = day_label(d)
+        if label in skip_all or any(s["date"] == label for s in out): continue
+        ids = _slots_for_week(c, label, times, room, own)
+        if ids: out.append({"date": label, "start": times[0][0], "end": times[-1][1], "slot_ids": ids})
+    return out if len(out) >= 2 else None
 
 def find_series_sessions(c, first_ids, weeks, year=None, skip=None, own_ids=None):
     """Given the slot ids for the FIRST session, find the same weekday+time+room on
@@ -5411,25 +5453,30 @@ class H(http.server.BaseHTTPRequestHandler):
             try: sessions = json.loads(cls.get("session_dates") or "[]")
             except Exception: sessions = []
             if not sessions or not sessions[0].get("slot_ids"): c.close(); return self.send_json({"error":"This series has no booked slots to rebuild from."},400)
-            skip = [str(x).strip() for x in (b.get("skip") or []) if str(x).strip()]
+            drop = [str(x).strip() for x in (b.get("skip") or []) if str(x).strip()]
+            if not drop: c.close(); return self.send_json({"error":"Untick at least one date."},400)
+            try: skipped_before = [str(x) for x in json.loads(cls.get("series_skip") or "[]")]
+            except Exception: skipped_before = []
+            # Skips add up across edits: a date skipped last month stays skipped now.
+            skip = skipped_before + [d for d in drop if d not in skipped_before]
             weeks = max(2, int(b.get("weeks") or cls.get("session_count") or len(sessions)))
-            first_ids = [int(x) for x in sessions[0]["slot_ids"]]
             try: old_ids = [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
             except Exception: old_ids = []
             begin_immediate(c)
             if old_ids:
                 oph = ",".join("?" * len(old_ids))
                 c.execute(f"UPDATE slots SET status='available' WHERE id IN ({oph}) AND status='claimed'", old_ids)
-            new_sessions, _sk = find_series_sessions(c, first_ids, weeks, skip=skip, own_ids=old_ids)
+            new_sessions = reshape_series(c, sessions, drop, skip, weeks, own_ids=old_ids)
             if not new_sessions or len(new_sessions) < 2:
-                c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"Could not find enough open weeks after the skipped dates."},400)
+                c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"Could not find enough open weeks after the last date to make up for the skipped ones."},400)
             ids = [i for s in new_sessions for i in s["slot_ids"]]
             ph = ",".join("?" * len(ids))
             claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
             if claimed != len(ids):
                 c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"One of the make-up weeks was just taken. Try again."},409)
-            c.execute("UPDATE classes SET session_dates=?, session_count=?, slot_ids=?, series_skip=? WHERE id=?",
-                      (json.dumps(new_sessions), len(new_sessions), json.dumps(ids), json.dumps(skip), cid))
+            first_changed = new_sessions[0]["date"] != cls.get("slot_date")
+            c.execute("UPDATE classes SET session_dates=?, session_count=?, slot_ids=?, series_skip=?, slot_date=? WHERE id=?",
+                      (json.dumps(new_sessions), len(new_sessions), json.dumps(ids), json.dumps(skip), new_sessions[0]["date"], cid))
             audit(c, cid, cls.get("status"), "sessions-changed", u["id"])
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
             students = [dict(r) for r in c.execute("SELECT name,email FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'", (cid,)).fetchall()]
@@ -5439,6 +5486,10 @@ class H(http.server.BaseHTTPRequestHandler):
                 cfg = integrations.load_config()
                 try: eb_result = integrations.update_eventbrite_details(fresh, cfg)
                 except Exception as e: eb_result = f"failed: {e}"
+                if first_changed:
+                    # The event's own start date is the first session: move it too.
+                    try: eb_result += "; start " + integrations.update_eventbrite_times(fresh, cfg)
+                    except Exception as e: eb_result += f"; start failed: {e}"
                 try:
                     gcfg = gcal.load_gcal_config(); ext = json.loads(fresh.get("external_ids") or "{}")
                     if ext.get("gcal_event_id"):
