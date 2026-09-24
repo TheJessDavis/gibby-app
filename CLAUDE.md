@@ -129,6 +129,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - **Pricing**: instructor enters what they hope to make per student; ticket = materials + that / 0.6.
   Supply links (url, price, qty, name) are required unless they buy their own. Donation-based makes
   an Eventbrite donation ticket.
+- **Series dates**: `/api/classes/{id}/sessions` (admin) rebuilds a series from its first session with
+  `skip` dates, adding make-up weeks at the end (`find_series_sessions`), reclaims slots, updates
+  Eventbrite's date list and the calendar, optionally emails students. On the edit form under
+  "Session dates". `series_skip` stores the skipped labels.
 - **Admin "Edit this class"** (`openLiveEdit` / `update-live`): every field, plus the class's own
   start and end inside the booked window (pushed to Eventbrite via `update_eventbrite_times`, the
   calendar is recreated, the website reads the DB) and all three images (landscape poster to
@@ -186,8 +190,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   choice. On submit: form PDF via `pdfgen.contract_pdf`, PDF and receipts filed under "Gibby
   Reimbursements" on Drive, emailed with attachments to `reimb_to()` (default Tina Johnson
   tjohnson@theeverett.org and Michelle Truban; editable under More > Email), copy to the
-  instructor. Admins see the list under Money and tick Paid. The old per-class "Get paid back for
-  supplies" flow (`reimbursements` table) is retired; its route answers 410.
+  instructor. Since Sep 24, 2026 an admin approves first (Money > Approve): the submission emails
+  admins only; `/api/admin/reimb/{id}/approve` sends the form, receipts and "APPROVED by <admin>" to
+  `reimb_to()`; decline emails the instructor a note. Then Paid. Order requests work the same way:
+  new requests email admins, `/api/supplies/{id}/approved` sends them to `supply_to` (Michelle) with
+  the approver's name, then Ordered and Ready. The old per-class "Get paid back for supplies" flow
+  (`reimbursements` table) is retired.
 - **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
   "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
   Reports", emailed with the PDF to `incident_to()` (default Michelle Truban mtruban@theeverett.org and

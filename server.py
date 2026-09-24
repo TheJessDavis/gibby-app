@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.104.3-review-default"
+VERSION = "10.105.0-approvals-sessions"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -244,6 +244,9 @@ def init_db():
         items TEXT, details TEXT, advance REAL DEFAULT 0, subtotal REAL, total REAL, delivery TEXT, address TEXT,
         status TEXT DEFAULT 'submitted', created TEXT, drive_folder TEXT, pdf_link TEXT, receipts TEXT,
         emailed_to TEXT, paid_at TEXT, paid_by INTEGER)""")
+    for col in ("email_body", "approved_by", "approved_at", "admin_note"):
+        try: c.execute(f"ALTER TABLE reimb_requests ADD COLUMN {col} TEXT")
+        except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS reimb_files(
         id INTEGER PRIMARY KEY, req_id INTEGER NOT NULL, name TEXT, mime TEXT, b64 TEXT, link TEXT, created TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS lockbox(
@@ -295,7 +298,7 @@ def init_db():
     for col in ("bio_parts", "headshot_by", "headshot_web"):     # bio prompts JSON; who supplied the headshot; a 600px copy for the website
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
-    for col in ("eb_state", "eb_start"):     # what Eventbrite says about the event: status and local start, read back hourly
+    for col in ("eb_state", "eb_start", "series_skip"):     # Eventbrite's status and start read back hourly; skipped series dates (JSON)
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} TEXT")
         except Exception: pass
     # The website shows only what Marketing approved: pub_* is the published copy,
@@ -2549,9 +2552,7 @@ def create_order_request(c, u, cid, row, lines, needed, notes):
                  VALUES(?,?,?,?,?,'requested',?,?,?)""",
               (cid or None, u["id"], items, needed, notes, now(), now(), json.dumps(lines)))
     rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
-    to = [a for a in emails_for(c, "WHERE role='admin'")]
-    for extra in (_meta_get("supply_to") or SUPPLY_TO_DEFAULT).replace(";", ",").split(","):
-        if extra.strip() and "@" in extra: to.append(extra.strip())
+    to = [a for a in emails_for(c, "WHERE role='admin'")]     # admins approve first; the ordering address hears after
     seen = set(); recips = []
     for a in to:
         k = a.lower()
@@ -2562,9 +2563,9 @@ def create_order_request(c, u, cid, row, lines, needed, notes):
             + "\n".join(f"  • {ln['qty']} x {ln['name']}" + (f"\n    Link: {ln['link']}" if ln.get("link") else "") for ln in lines)
             + (f"\n\nNotes: {notes}" if notes else "")
             + (f"\n\nContact: {u.get('email','')}" + (f", {u.get('phone')}" if u.get("phone") else ""))
-            + f"\n\nMark it ordered or ready under More > Supplies: {mailer.APP_URL}")
+            + f"\n\nApprove it under More > Orders and it goes to the ordering address: {mailer.APP_URL}")
     if recips:
-        mailer.send(recips, f"Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
+        mailer.send(recips, f"Approve? Order request from {u['name']} {what}" + (f" (by {needed})" if needed else ""), body)
     return rid
 
 # Submission-deadline reminder campaign (Connections > Email). Every N days from
@@ -5329,6 +5330,66 @@ class H(http.server.BaseHTTPRequestHandler):
                                        f"Shopping list from the class form ({row['planned'] or row['max_p'] or '?'} students planned).")
             c.execute("UPDATE classes SET supplies_ordered_at=? WHERE id=?", (now(), cid)); c.commit(); c.close()
             return self.send_json({"ok":True, "id":rid})
+        mss = re.match(r"^/api/classes/(\d+)/sessions$", p)
+        if mss:
+            # Admin reshapes a series: skip dates (a holiday), and the run extends by
+            # one week per skipped date so the class keeps its full count. Same first
+            # session, same time and room. Eventbrite's date list and the calendar follow.
+            u = self.require("admin")
+            if not u: return
+            cid = int(mss.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(row)
+            if not cls.get("is_series"): c.close(); return self.send_json({"error":"Only a series has session dates to change."},400)
+            try: sessions = json.loads(cls.get("session_dates") or "[]")
+            except Exception: sessions = []
+            if not sessions or not sessions[0].get("slot_ids"): c.close(); return self.send_json({"error":"This series has no booked slots to rebuild from."},400)
+            skip = [str(x).strip() for x in (b.get("skip") or []) if str(x).strip()]
+            weeks = max(2, int(b.get("weeks") or cls.get("session_count") or len(sessions)))
+            first_ids = [int(x) for x in sessions[0]["slot_ids"]]
+            try: old_ids = [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
+            except Exception: old_ids = []
+            begin_immediate(c)
+            if old_ids:
+                oph = ",".join("?" * len(old_ids))
+                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({oph}) AND status='claimed'", old_ids)
+            new_sessions, _sk = find_series_sessions(c, first_ids, weeks, skip=skip, own_ids=old_ids)
+            if not new_sessions or len(new_sessions) < 2:
+                c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"Could not find enough open weeks after the skipped dates."},400)
+            ids = [i for s in new_sessions for i in s["slot_ids"]]
+            ph = ",".join("?" * len(ids))
+            claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
+            if claimed != len(ids):
+                c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"One of the make-up weeks was just taken. Try again."},409)
+            c.execute("UPDATE classes SET session_dates=?, session_count=?, slot_ids=?, series_skip=? WHERE id=?",
+                      (json.dumps(new_sessions), len(new_sessions), json.dumps(ids), json.dumps(skip), cid))
+            audit(c, cid, cls.get("status"), "sessions-changed", u["id"])
+            fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
+            students = [dict(r) for r in c.execute("SELECT name,email FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'", (cid,)).fetchall()]
+            c.commit(); c.close()
+            eb_result = gcal_result = "skipped"
+            if fresh.get("status") == "approved":
+                cfg = integrations.load_config()
+                try: eb_result = integrations.update_eventbrite_details(fresh, cfg)
+                except Exception as e: eb_result = f"failed: {e}"
+                try:
+                    gcfg = gcal.load_gcal_config(); ext = json.loads(fresh.get("external_ids") or "{}")
+                    if ext.get("gcal_event_id"):
+                        gcal.delete_events(ext.get("gcal_event_id") or "", gcfg)
+                        new_gid = gcal.create_event({**fresh, "instructor_name": u.get("name","")}, gcfg)
+                        if new_gid: merge_external(cid, {"gcal_event_id": new_gid})
+                        gcal_result = "rebuilt"
+                except Exception as e: gcal_result = f"failed: {e}"
+            dates = ", ".join(s["date"] for s in new_sessions)
+            emailed = 0
+            if b.get("notify_students"):
+                for s in students:
+                    if mailer.send(s["email"], f"New dates for {fresh['title']}",
+                        f"Hi {(s.get('name') or '').split(' ')[0] or 'there'},\n\nThe dates for \"{fresh['title']}\" have changed. The sessions are now:\n\n  {dates}\n\n"
+                        f"Same time and room ({fresh.get('class_time') or fresh.get('slot_time')}, {fresh.get('room')}). Your ticket carries over. Reply if the new dates do not work for you.\n\nThe Gibby"):
+                        emailed += 1
+            return self.send_json({"ok":True, "sessions": new_sessions, "eventbrite": eb_result, "calendar": gcal_result, "emailed": emailed})
         mnh = re.match(r"^/api/classes/(\d+)/need-help$", p)
         if mnh:
             # The instructor (or an admin) says this class needs a volunteer
@@ -5547,14 +5608,50 @@ class H(http.server.BaseHTTPRequestHandler):
                     + f"Check delivery: {delivery}" + (f" to {address}" if delivery == "Mailed" else "") + "\n\n"
                     + "The completed form (PDF) and the receipts are attached" + (f" and filed on Drive: {folder_link}" if folder_link else "") + ".\n\n"
                     + f"Reply to this email to reach {row['name']} directly ({u['email']}).")
-            mailer.send(reimb_to(), f"Reimbursement request: ${total:.2f} from {row['name']} ({cls['title']})", body,
+            # An admin approves first; only then does it go to the treasurer.
+            c = db(); c.execute("UPDATE reimb_requests SET email_body=? WHERE id=?", (body, rid)); c.commit(); c.close()
+            mailer.send([a for a in emails_for(db(), "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()],
+                        f"Approve? Reimbursement request: ${total:.2f} from {row['name']} ({cls['title']})",
+                        body + f"\n\nNothing has gone to the treasurer yet. Approve or decline it under More > Money in the app: {mailer.APP_URL}",
                         attachments=atts, reply_to=u["email"])
-            mailer.send(u["email"], f"Your reimbursement request for {cls['title']} was sent",
-                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour request for ${total:.2f} for \"{cls['title']}\" went to Tina Johnson and Michelle Truban, "
-                f"with the form and your receipt{'s' if len(files) != 1 else ''} attached. They will be in touch about the check ({delivery.lower()}).\n\n"
+            mailer.send(u["email"], f"Your reimbursement request for {cls['title']} was received",
+                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour request for ${total:.2f} for \"{cls['title']}\" is in. An admin at The Gibby looks it over first; "
+                f"once approved it goes to the treasurer with the form and your receipt{'s' if len(files) != 1 else ''} attached, and you will hear about the check ({delivery.lower()}).\n\n"
                 + (f"Your copy on Drive: {folder_link}\n\n" if folder_link else "") + "Thank you,\nThe Gibby", attachments=atts[:1])
             return self.send_json({"ok":True, "id": rid, "total": total, "folder": folder_link})
-        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid)$", p)
+        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid|approve|decline)$", p)
+        if mrp2 and mrp2.group(2) in ("approve", "decline"):
+            u = self.require("admin")
+            if not u: return
+            rid = int(mrp2.group(1)); b = self.read_json(); c = db()
+            r = c.execute("SELECT r.*, us.email AS instr_email FROM reimb_requests r JOIN users us ON us.id=r.user_id WHERE r.id=?", (rid,)).fetchone()
+            if not r: c.close(); return self.send_json({"error":"not found"},404)
+            first = (r["name"] or "").split(" ")[0] or "there"
+            if mrp2.group(2) == "decline":
+                note = str(b.get("note") or "").strip()[:500]
+                c.execute("UPDATE reimb_requests SET status='declined', approved_by=?, approved_at=?, admin_note=? WHERE id=?", (u["name"], now(), note, rid)); c.commit(); c.close()
+                mailer.send(r["instr_email"], f"About your reimbursement request for {r['class_title']}",
+                    f"Hi {first},\n\nWe could not approve the ${r['total']:.2f} request for \"{r['class_title']}\".\n\n" + (f"  {note}\n\n" if note else "")
+                    + f"Reply to this email if you have a question.\n\nThe Gibby", reply_to=u.get("email"))
+                return self.send_json({"ok":True})
+            files = [dict(x) for x in c.execute("SELECT name, mime, b64 FROM reimb_files WHERE req_id=? ORDER BY id", (rid,)).fetchall()]
+            c.execute("UPDATE reimb_requests SET status='approved', approved_by=?, approved_at=? WHERE id=?", (u["name"], now(), rid)); c.commit(); c.close()
+            items = _loads_list(r["items"]); receipts = _loads_list(r["receipts"])
+            row = dict(r)
+            pdf_bytes = pdfgen.contract_pdf(reimb_pdf_text(row, items, receipts), None,
+                                            [f"Request #{rid}", f"Submitted {row['created'][:16].replace('T',' ')} by {row['name']} ({r['instr_email']})", f"Approved by {u['name']} on {datetime.date.today().strftime('%B %d, %Y')}"])
+            atts = [(f"Reimbursement request #{rid}.pdf", pdf_bytes, "application/pdf")]
+            budget = 12_000_000
+            for f in files:
+                data = base64.b64decode(f["b64"])
+                if budget - len(data) < 0: break
+                budget -= len(data); atts.append((f["name"], data, f["mime"]))
+            body = (f"APPROVED by {u['name']} on {datetime.date.today().strftime('%B %d, %Y')}.\n\n" + (r["email_body"] or f"{r['name']}: ${r['total']:.2f} for {r['class_title']}."))
+            mailer.send(reimb_to(), f"Approved reimbursement: ${r['total']:.2f} for {r['name']} ({r['class_title']})", body, attachments=atts, reply_to=r["instr_email"])
+            mailer.send(r["instr_email"], f"Your reimbursement request for {r['class_title']} was approved",
+                f"Hi {first},\n\n{u['name']} approved your ${r['total']:.2f} request for \"{r['class_title']}\". It has gone to the treasurer with the form and receipts, "
+                f"and you will hear about the check ({(r['delivery'] or '').lower()}).\n\nThe Gibby")
+            return self.send_json({"ok":True})
         if mrp2:
             u = self.require("admin")
             if not u: return
@@ -5839,7 +5936,7 @@ class H(http.server.BaseHTTPRequestHandler):
             to = ", ".join(x.strip() for x in str(b.get("to") or "").replace(";", ",").split(",") if x.strip() and "@" in x)[:300]
             _meta_set("supply_to", to)
             return self.send_json({"ok":True, "to": to})
-        mss = re.match(r"^/api/supplies/(\d+)/(ordered|ready|declined|requested)$", p)
+        mss = re.match(r"^/api/supplies/(\d+)/(approved|ordered|ready|declined|requested)$", p)
         if mss:
             u = self.require("admin")
             if not u: return
@@ -5851,7 +5948,18 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("UPDATE supply_requests SET status=?, admin_note=?, decided_by=?, updated=? WHERE id=?", (status, note, u["id"], now(), rid))
             c.commit(); c.close()
             first = (row["instr_name"] or "").split(" ")[0] or "there"
-            word = {"ordered": "Ordered", "ready": "Ready at the Gibby", "declined": "Not this time"}.get(status)
+            if status == "approved":
+                # Now it goes to whoever does the ordering, marked with who approved it.
+                to = [e.strip() for e in (_meta_get("supply_to") or SUPPLY_TO_DEFAULT).replace(";", ",").split(",") if e.strip() and "@" in e]
+                try: lines = json.loads(row["lines"] or "[]")
+                except Exception: lines = []
+                mailer.send(to, f"Approved order request from {row['instr_name']} for \"{row['class_title']}\"" + (f" (by {row['needed_by']})" if row["needed_by"] else ""),
+                    f"APPROVED by {u['name']} on {datetime.date.today().strftime('%B %d, %Y')}.\n\n{row['instr_name']} would like these ordered for \"{row['class_title']}\""
+                    + (f" by {row['needed_by']}" if row["needed_by"] else "") + ":\n\n"
+                    + ("\n".join(f"  \u2022 {ln.get('qty')} x {ln.get('name')}" + (f"\n    Link: {ln.get('link')}" if ln.get("link") else "") for ln in lines) if lines else "\n".join("  \u2022 " + x for x in (row["items"] or "").splitlines()))
+                    + (f"\n\nNotes: {row['notes']}" if row["notes"] else "") + (f"\n\nNote from {u['name']}: {note}" if note else "")
+                    + f"\n\nContact: {row['instr_email']}\n\nMark it ordered, then ready, under More > Orders: {mailer.APP_URL}", reply_to=row["instr_email"])
+            word = {"approved": "Approved and sent for ordering", "ordered": "Ordered", "ready": "Ready at the Gibby", "declined": "Not this time"}.get(status)
             if word:
                 mailer.send(row["instr_email"], f"{word}: your order request for {row['class_title']}",
                     f"Hi {first},\n\nYour order request for \"{row['class_title']}\" is now: {word}.\n\n"

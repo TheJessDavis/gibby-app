@@ -1818,29 +1818,31 @@ async function reinvite(email,name,role){
 /* ---------------- connections ---------------- */
 async function adminSupplies(){
   const d=await api('/api/supplies'); const rs=d.supplies||[];
-  const open=rs.filter(s=>s.status==='requested'), ordered=rs.filter(s=>s.status==='ordered'), done=rs.filter(s=>s.status==='ready'||s.status==='declined');
+  const open=rs.filter(s=>s.status==='requested'), approved=rs.filter(s=>s.status==='approved'), ordered=rs.filter(s=>s.status==='ordered'), done=rs.filter(s=>s.status==='ready'||s.status==='declined');
   const lineHTML=l=>`${l.qty} x ${esc(l.name)}${l.link?` · <a href="${esc(l.link)}" target="_blank" rel="noopener noreferrer">open link</a>`:''}`;
   const linesOf=s=>(s.lines&&s.lines.length)?s.lines.map(lineHTML):(s.items||'').split('\n').filter(Boolean).map(esc);
-  const list=rs.filter(s=>s.status==='requested'||s.status==='ordered').flatMap(s=>linesOf(s).map(i=>({i, who:s.instructor_name, cls:s.class_title, by:s.needed_by})));
+  const list=rs.filter(s=>s.status==='approved'||s.status==='ordered').flatMap(s=>linesOf(s).map(i=>({i, who:s.instructor_name, cls:s.class_title, by:s.needed_by})));
   const card=s=>`<div class="card"><div class="row"><div><h3 style="font-size:1rem">${esc(s.class_title)} · by ${esc(s.needed_by||'?')}</h3>
       <div class="meta">${esc(s.instructor_name)}${s.instructor_phone?' · <a href="tel:'+esc(s.instructor_phone)+'">'+esc(s.instructor_phone)+'</a>':''}${s.notes?' · '+esc(s.notes):''}</div>
       <div class="meta" style="margin-top:6px">${linesOf(s).map(x=>`<div>\u2022 ${x}</div>`).join('')}</div>${s.admin_note?`<div class="meta">Note: ${esc(s.admin_note)}</div>`:''}</div>
-      ${({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready</span>',declined:'<span class="pill inc">declined</span>'})[s.status]}</div>
+      ${({requested:'<span class="pill pend">waiting for approval</span>',approved:'<span class="pill ir">approved</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready</span>',declined:'<span class="pill inc">declined</span>'})[s.status]||''}</div>
     <div class="two" style="margin-top:10px">
-      ${s.status==='requested'?`<button class="btn warn" onclick="supplyAct(${s.id},'declined')">Decline</button><button class="btn dark" onclick="supplyAct(${s.id},'ordered')">Ordered</button>`
+      ${s.status==='requested'?`<button class="btn warn" onclick="supplyAct(${s.id},'declined')">Decline</button><button class="btn dark" onclick="supplyAct(${s.id},'approved')">Approve and send for ordering</button>`
+       :s.status==='approved'?`<span></span><button class="btn dark" onclick="supplyAct(${s.id},'ordered')">Ordered</button>`
        :s.status==='ordered'?`<span></span><button class="btn green" onclick="supplyAct(${s.id},'ready')">Ready at the Gibby</button>`
        :`<button class="btn ghost" onclick="supplyAct(${s.id},'requested')">Reopen</button><span></span>`}</div></div>`;
   $('#tab').innerHTML=`<h2>Supply <em>orders</em></h2>
-    <p class="sub">Instructors ask from My classes: the class, a link to the exact item and how many. Mark each one Ordered, then Ready at the Gibby; they are emailed at each step.</p>
+    <p class="sub">Instructors ask from My classes. An admin approves each request here; it then goes to the ordering address with the approver's name. Mark it Ordered, then Ready at the Gibby; the instructor is emailed at each step.</p>
     <div class="card"><h3 style="font-size:1rem;margin:0 0 4px">Materials spreadsheet</h3>
       <div class="meta">Every class's supply list, one tab per season (Fall 2026, Spring 2027, Summer 2027), rebuilt from the app every hour and after each submission.</div>
       <div class="two" style="margin-top:8px">${d.materials_sheet_link?`<a class="btn dark" style="text-align:center" href="${esc(d.materials_sheet_link)}" target="_blank" rel="noopener noreferrer">Open Gibby Materials</a>`:'<span class="muted">Not built yet.</span>'}<button class="btn ghost" onclick="rebuildMaterials()">Rebuild now</button></div></div>
-    <div class="card"><label style="margin-top:0">New requests are emailed to</label>
+    <div class="card"><label style="margin-top:0">Approved requests are emailed to</label>
       <input id="sup_to" value="${esc(d.to||'')}" placeholder="mtruban@theeverett.com">
-      <div class="hint">Comma-separated. Admins are always included, and Jess gets her usual copy.</div>
+      <div class="hint">Comma-separated. New requests go to admins for approval first; Jess gets her usual copy of everything.</div>
       <button class="btn ghost" style="padding:8px 14px;margin-top:8px" onclick="saveSupplyTo()">Save</button></div>
     ${list.length?`<div class="card"><h3 style="font-size:1rem">Shopping list (${list.length} lines)</h3>${list.map(x=>`<div class="meta">\u2610 ${x.i} <span style="opacity:.7">· ${esc(x.who)}, ${esc(x.cls)}, by ${esc(x.by||'?')}</span></div>`).join('')}</div>`:''}
-    <label style="margin-top:12px">Waiting (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
+    <label style="margin-top:12px">Waiting for approval (${open.length})</label>${open.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
+    <label style="margin-top:16px">Approved, to be ordered (${approved.length})</label>${approved.map(card).join('')||'<div class="muted">None.</div>'}
     <label style="margin-top:16px">Ordered (${ordered.length})</label>${ordered.map(card).join('')||'<div class="muted">None.</div>'}
     ${done.length?`<label style="margin-top:16px">Done (${done.length})</label>${done.slice(0,20).map(card).join('')}`:''}`;
 }
@@ -2368,6 +2370,13 @@ async function adminIncidents(){
         <div class="meta" style="margin-top:6px">Reported by ${esc(r.reporter)}, ${esc(r.association||'')} \u00b7 sent ${esc((r.created||'').slice(0,16).replace('T',' '))}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form (PDF)</a>':''}</div>
       </div></details>`).join(''):'<div class="muted">No incident reports have been filed.</div>'}`;
 }
+async function reimbApprove(id, action){
+  let note='';
+  if(action==='decline'){ note=prompt('Why? (the instructor gets this by email)'); if(note===null) return; }
+  else if(!confirm('Approve this request? It goes to the treasurer now with your name on it.')) return;
+  try{ await api('/api/admin/reimb/'+id+'/'+action,'POST',{note}); }catch(e){ alert(e.message); return; }
+  renderAdmin('money');
+}
 async function reimbPaid(id, paid){
   try{ await api('/api/admin/reimb/'+id+'/'+(paid?'paid':'unpaid'),'POST',{}); }catch(e){ alert(e.message); return; }
   renderAdmin('money');
@@ -2545,10 +2554,13 @@ async function adminMoney(){
   const mtab=`<div class="seg" style="margin-bottom:12px"><button class="${MT==='summary'?'on':''}" onclick="MONEY_TAB='summary';renderAdmin('money')">Summary</button><button class="${MT==='classes'?'on':''}" onclick="MONEY_TAB='classes';renderAdmin('money')">By class</button><button class="${MT==='tickets'?'on':''}" onclick="MONEY_TAB='tickets';renderAdmin('money')">Where tickets came from</button></div>`;
   $('#tab').innerHTML = `<h2>Money</h2>${mtab}
     ${MT!=='summary'?'':(()=>{ const rs=window.__reimb||[]; const open=rs.filter(r=>r.status==='submitted'); if(!rs.length) return '';
-      return `<label style="margin-top:0">Reimbursement requests (${open.length} not yet paid)</label>
-      <div class="meta" style="margin-top:0">Each one was emailed to the treasurer with the form and receipts, and filed on Drive. Tick paid here once the check goes out.</div>
+      return `<label style="margin-top:0">Reimbursement requests (${open.length} waiting for approval)</label>
+      <div class="meta" style="margin-top:0">Approve a request and it goes to the treasurer with the form, the receipts and your name. Tick Paid once the check goes out.</div>
       ${rs.slice(0,30).map(r=>`<div class="card" style="padding:12px 16px"><div class="row"><div><b>${money(r.total)}</b> \u00b7 ${esc(r.name)}<div class="meta">${esc(r.class_title)} \u00b7 ${esc((r.created||'').slice(0,10))} \u00b7 ${esc(r.delivery||'')}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}${r.drive_folder?' \u00b7 <a href="'+esc(r.drive_folder)+'" target="_blank" rel="noopener">receipts</a>':''}</div></div>
-        ${r.status==='paid'?`<span class="pill appr" style="flex:none">paid</span> <a href="#" onclick="reimbPaid(${r.id},false);return false" style="font-size:12px">undo</a>`:`<button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px" onclick="reimbPaid(${r.id},true)">Paid</button>`}</div></div>`).join('')}`; })()}
+        ${r.status==='paid'?`<span class="pill appr" style="flex:none">paid</span> <a href="#" onclick="reimbPaid(${r.id},false);return false" style="font-size:12px">undo</a>`
+          :r.status==='declined'?`<span class="pill inc" style="flex:none">declined</span>`
+          :r.status==='approved'?`<span style="flex:none;text-align:right"><span class="pill ir">approved by ${esc(r.approved_by||'')}</span><br><button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px;margin-top:6px" onclick="reimbPaid(${r.id},true)">Paid</button></span>`
+          :`<span style="flex:none;text-align:right"><button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px" onclick="reimbApprove(${r.id},'approve')">Approve</button><br><a href="#" onclick="reimbApprove(${r.id},'decline');return false" style="font-size:12px">decline</a></span>`}</div></div>`).join('')}`; })()}
     ${MT==='tickets'?(chanRow||'<div class="muted">No ticket source data yet.</div>'):''}
     ${MT!=='summary'?'':`<p class="sub">Classes that have already run; upcoming ones are left out of the averages.
       ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>`}
@@ -3398,6 +3410,12 @@ function openLiveEdit(id){
       <div class="meta">Booked: ${esc(c.slot_date||'')} · ${esc(c.slot_time||'')} in the ${esc(c.room||'')}${c.is_series?' · '+(c.sessions||[]).length+' weekly sessions':''}. The class time must sit inside that window.</div>
       <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Starts</label><select id="e_cstart">${opts(cur[0])}</select></div><div><label style="margin-top:0">Ends</label><select id="e_cend">${opts(cur[1])}</select></div></div>
       <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. A time marked "outside booking" grows the booking to fit when you save. Need a different day? <a href="#" onclick="startReschedule(${c.id});return false">Change the date</a>.</div>`; })()}
+    ${c.is_series&&(c.sessions||[]).length?`<label style="margin-top:14px">Session dates (${c.sessions.length})</label>
+      <div class="meta">Untick a date to skip it; a make-up week is added at the end so the course keeps ${c.sessions.length} sessions. Same time and room.</div>
+      <div id="e_sessions" style="margin-top:6px">${c.sessions.map(s=>`<label class="chk" style="margin:4px 0"><input type="checkbox" class="e_sess" value="${esc(s.date)}" checked> ${esc(s.date)} \u00b7 ${esc(s.start)} \u2013 ${esc(s.end)}</label>`).join('')}</div>
+      ${c.enrolled?`<label class="chk" style="margin-top:6px"><input type="checkbox" id="e_sess_notify" checked> Email the ${c.enrolled} ticket holder${c.enrolled===1?'':'s'} the new dates</label>`:''}
+      <button type="button" class="btn ghost" style="margin-top:8px;padding:9px 16px" onclick="saveSessions(${c.id})">Apply the new dates</button>
+      <div class="hint">This changes the dates at once (Eventbrite's date list and the calendar too). The Save button below is for the other fields.</div>`:''}
     <label style="margin-top:14px">Images</label>
     <div class="meta">Replacing an image updates it everywhere at once: the Eventbrite listing (landscape poster), the website (portrait poster, or the class photo if there is none), and the app. Facebook posts already made keep their old picture.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px">
@@ -3415,6 +3433,18 @@ function openLiveEdit(id){
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>
       <button class="btn green" onclick="submitLiveEdit(${id})">Save &amp; update everywhere</button></div></div>`;
+}
+async function saveSessions(id){
+  const c=(window.__classes||[]).find(x=>x.id===id)||{};
+  const keep=[...document.querySelectorAll('.e_sess:checked')].map(x=>x.value);
+  const skip=(c.sessions||[]).map(s=>s.date).filter(d=>!keep.includes(d));
+  if(!skip.length) return alert('Untick the date to skip first.');
+  if(!confirm(`Skip ${skip.join(', ')} and add ${skip.length} make-up week${skip.length===1?'':'s'} at the end?`)) return;
+  try{
+    const r=await api('/api/classes/'+id+'/sessions','POST',{skip, notify_students: !!(document.getElementById('e_sess_notify')&&document.getElementById('e_sess_notify').checked)});
+    alert(`Dates updated: ${r.sessions.map(s=>s.date).join(', ')}.\nEventbrite: ${r.eventbrite}. Calendar: ${r.calendar}.${r.emailed?' '+r.emailed+' students emailed.':''}`);
+    c.sessions=r.sessions; c.session_count=r.sessions.length; openLiveEdit(id);
+  }catch(e){ showErr('eerr',(e.data&&e.data.error)||e.message); }
 }
 async function submitLiveEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
@@ -3474,7 +3504,7 @@ async function orderForm(classId){
   const classes=(window.__classes||[]).filter(c=>['approved','pending','graphic_review','instructor_review'].includes(c.status));
   let mine=[]; try{ mine=((await api('/api/supplies')).supplies||[]); }catch(_){}
   if(classId) mine=mine.filter(s=>s.class_id===classId);
-  const pill=s=>({requested:'<span class="pill pend">requested</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready at the Gibby</span>',declined:'<span class="pill inc">not this time</span>'})[s]||'';
+  const pill=s=>({requested:'<span class="pill pend">waiting for approval</span>',approved:'<span class="pill ir">approved, being ordered</span>',ordered:'<span class="pill ir">ordered</span>',ready:'<span class="pill appr">ready at the Gibby</span>',declined:'<span class="pill inc">not this time</span>'})[s]||'';
   const opt=c=>`<option value="${c.id}"${c.id===classId?' selected':''}>${esc(c.title)} · ${esc(c.slot_date||'')}</option>`;
   const m=document.createElement('div'); m.id='ordmodal';
   m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow:auto';
@@ -3915,7 +3945,7 @@ async function instrReimb(){
     </div>
     ${(d.requests||[]).length?`<label>Your requests (${d.requests.length})</label>
       ${d.requests.map(r=>`<div class="card" style="padding:12px 16px"><div class="row"><div><b>${money(r.total)}</b> \u00b7 ${esc(r.class_title)}<div class="meta">${esc((r.created||'').slice(0,10))} \u00b7 ${esc(r.delivery||'')}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}${r.drive_folder?' \u00b7 <a href="'+esc(r.drive_folder)+'" target="_blank" rel="noopener">receipts</a>':''}</div></div>
-        <span class="pill ${r.status==='paid'?'appr':'pend'}" style="flex:none">${r.status==='paid'?'paid':'sent'}</span></div></div>`).join('')}`:''}`;
+        <span class="pill ${r.status==='paid'?'appr':r.status==='declined'?'inc':'pend'}" style="flex:none">${r.status==='paid'?'paid':r.status==='approved'?'approved, with the treasurer':r.status==='declined'?'declined':'waiting for approval'}</span></div></div>`).join('')}`:''}`;
 }
 function rbDelivery(v){ RB_DELIV=v; document.querySelectorAll('#rb_deliv button').forEach(b=>b.classList.toggle('on', b.dataset.v===v)); const a=$('#rb_addrwrap'); if(a) a.classList.toggle('hidden', v!=='Mailed'); }
 function rbLines(){ return [...document.querySelectorAll('#rb_lines .rbline')].map(r=>({date:r.querySelector('.rb_date').value, category:r.querySelector('.rb_cat').value, amount:+r.querySelector('.rb_amt').value||0})); }
@@ -5164,7 +5194,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
