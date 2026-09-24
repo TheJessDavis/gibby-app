@@ -3097,6 +3097,7 @@ function cardCls(c){
     ${c.is_series&&c.sessions&&c.sessions.length?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">All ${c.sessions.length} dates</summary>
       <div class="sessionlist">${c.sessions.map((s,i)=>`<div class="sessrow"><b>${i+1}</b> ${esc(s.date)} · ${esc(s.start)} – ${esc(s.end)}</div>`).join('')}</div></details>`:''}
     ${c.alcohol?'<div style="margin-top:8px"><span class="pill alc">🍷 21+ · alcohol</span></div>':''}
+    ${c.open_studio?'<div style="margin-top:8px"><span class="pill ir">🚪 Open Door Studio · calendar and Eventbrite only, no Facebook</span></div>':''}
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
     <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${c.waives_pay?'\u{1F49B} volunteering (no teaching pay)':money0(c.instructor_pay)+' pay'}</div>
     ${c.close_days?`<div class="meta" style="margin-top:6px">Registration closes ${c.close_days} day${c.close_days===1?'':'s'} before</div>`:''}
@@ -3370,6 +3371,9 @@ async function openEditForm(id){
     <label>Age range (pick every group that fits)</label>${ageChips(c.age_range)}
     <label>Alcohol available for purchase?</label>
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <label>Open Door Studio?</label>
+    <div class="seg" id="e_open"><button class="${!c.open_studio?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.open_studio?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <div class="hint">Calendar and Eventbrite only; no Facebook or Instagram post, no after-class note or ratings.</div>
     <label>Can other resident teaching artists audit this class?</label>
     <div class="seg" id="e_audit"><button class="${!c.audit_ok?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.audit_ok?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
     <label>Needs a volunteer assistant?</label>
@@ -3410,6 +3414,9 @@ function openLiveEdit(id){
     <label>Age range (pick every group that fits)</label>${ageChips(c.age_range)}
     <label>Alcohol available for purchase?</label>
     <div class="seg" id="e_alc"><button class="${!c.alcohol?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.alcohol?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <label>Open Door Studio?</label>
+    <div class="seg" id="e_open"><button class="${!c.open_studio?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.open_studio?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <div class="hint">Calendar and Eventbrite only; no Facebook or Instagram post, no after-class note or ratings.</div>
     <label>Can other resident teaching artists audit this class?</label>
     <div class="seg" id="e_audit"><button class="${!c.audit_ok?'on':''}" data-v="no" onclick="segPick(this)">No</button><button class="${c.audit_ok?'on':''}" data-v="yes" onclick="segPick(this)">Yes</button></div>
     <label>Needs a volunteer assistant?</label>
@@ -3468,12 +3475,13 @@ async function saveSessions(id){
 }
 async function submitLiveEdit(id){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
+  const openS=!!($('#e_open')&&$('#e_open').querySelector('.on').dataset.v==='yes');
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
   const vol=!!($('#e_vol')&&$('#e_vol').querySelector('.on').dataset.v==='yes');
   const child=!!($('#e_child')&&$('#e_child').querySelector('.on').dataset.v==='yes');
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(), needs_volunteer:vol, needs_childcare:child, bring_list:($('#e_bring')?$('#e_bring').value.trim():''),
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
-    alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
+    alcohol:alc, audit_ok:aud, open_studio:openS, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
     close_days:+$('#e_close').value, headline:$('#e_head').value, subtitle:$('#e_sub').value,
     donation_based: !!($('#e_donate')&&$('#e_donate').checked)};
@@ -3492,12 +3500,13 @@ async function submitLiveEdit(id){
 }
 async function submitEdit(id, quiet){
   const alc=$('#e_alc').querySelector('.on').dataset.v==='yes';
+  const openS=!!($('#e_open')&&$('#e_open').querySelector('.on').dataset.v==='yes');
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
   const vol=!!($('#e_vol')&&$('#e_vol').querySelector('.on').dataset.v==='yes');
   const child=!!($('#e_child')&&$('#e_child').querySelector('.on').dataset.v==='yes');
   const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(), needs_volunteer:vol, needs_childcare:child, bring_list:($('#e_bring')?$('#e_bring').value.trim():''),
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
-    alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
+    alcohol:alc, audit_ok:aud, open_studio:openS, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
     headline:$('#e_head').value, subtitle:$('#e_sub').value, note:$('#e_note').value, quiet:!!quiet};
   try{ await api('/api/classes/'+id+'/edit','POST',body); if(quiet) alert('Saved. The class stays where it was.'); renderAdmin('approvals'); }
@@ -4573,6 +4582,7 @@ function applyDraft(p){
   const pick=(seg,val)=>{ const s=$(seg); if(!s) return;
     s.querySelectorAll('button').forEach(b=>b.classList.toggle('on', b.dataset.v===val)); };
   pick('#f_alc', p.alcohol?'yes':'no');
+  pick('#f_open', p.open_studio?'yes':'no');
   pick('#f_audit', p.audit_ok?'yes':'no');
   pick('#f_paym', p.pay_model||'flat');
   pick('#f_vol', p.needs_volunteer?'yes':'no');
@@ -4740,6 +4750,9 @@ function openForm(slot, draftPayload){
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="f_child"> I need childcare for this class</label>
     <div class="hint">Tick this and a Help card asks other teaching artists to watch your children while you teach. It posts once the class is approved.</div>
 
+    <label>Is this an Open Door Studio?</label>
+    <div class="seg" id="f_open"><button class="on" data-v="no" onclick="segPick(this)">No</button><button data-v="yes" onclick="segPick(this)">Yes</button></div>
+    <div class="hint">Open Door Studios go on the Gibby calendar and Eventbrite, but are not posted to Facebook or Instagram, and nobody is asked for a note or a rating afterwards.</div>
     <label>Will alcohol be available for purchase?</label>
     <div class="seg" id="f_alc"><button class="on" data-v="no" onclick="alcSel(this)">No</button>
       <button data-v="yes" onclick="alcSel(this)">Yes</button></div>
@@ -5112,7 +5125,7 @@ function collectForm(){
     students_bring: studentsBring(), bring_list: $('#f_bringlist')?$('#f_bringlist').value.trim():'',
     supply_links: collectSupplies(), planned:+$('#c_plan').value||0, pay_per_student:+($('#c_pps')?$('#c_pps').value:0)||0,
     supply_notes: $('#f_supnotes') ? $('#f_supnotes').value.trim() : '',
-    alcohol: seg('#f_alc')==='yes', audit_ok: seg('#f_audit')==='yes',
+    alcohol: seg('#f_alc')==='yes', audit_ok: seg('#f_audit')==='yes', open_studio: seg('#f_open')==='yes',
     max_p:+$('#f_max').value, min_p:+$('#f_min').value,
     ticket_price:+$('#f_ticket').value, instructor_pay:+$('#f_pay').value,
     waives_pay: !!($('#f_free')&&$('#f_free').checked),

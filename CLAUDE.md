@@ -146,7 +146,9 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   Eventbrite, portrait poster and class photo to the website via `/class-photo/`). Moving the date
   or the booked window is the reschedule flow.
 - **Approval**: pending -> graphic_review -> approved (`publish_now`) which posts everywhere and
-  sends the contract. Send back = incomplete. Admin "Save changes" on the edit form is a quiet
+  sends the contract. A class marked Open Door Studio on the form (`classes.open_studio`, Sep 24
+  2026) is queued for Eventbrite, the calendar and DelawareScene only: `queue_publish` skips the
+  Facebook and Instagram jobs, and `followup_exempt` skips the after-class note and thank-you. Send back = incomplete. Admin "Save changes" on the edit form is a quiet
   save; "Send to instructor" needs their approval.
 - **After class** (hourly scheduler, `run_scheduler`): day +1 asks the instructor for a note and
   up to five photos; day +2 thank-you to students with note, photos, review links and a personal

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.108.2-skip-prune"
+VERSION = "10.109.0-open-studio"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -348,7 +348,7 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
-                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("needs_childcare","INTEGER DEFAULT 0"),("students_bring","INTEGER DEFAULT 0"),("bring_list","TEXT"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
+                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("needs_childcare","INTEGER DEFAULT 0"),("students_bring","INTEGER DEFAULT 0"),("bring_list","TEXT"),("open_studio","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),("followup_reminded_at","TEXT"),("imported","INTEGER DEFAULT 0"),
@@ -929,8 +929,12 @@ def enqueue(c, class_id, platform, payload=None, delay=0):
 def queue_publish(class_id, image_url=None, instructor_name=""):
     """Queue every outbound post for a newly published class."""
     c = db()
+    row = c.execute("SELECT open_studio FROM classes WHERE id=?", (class_id,)).fetchone()
+    open_studio = bool(row and row["open_studio"])
     # No Wix: the site is Squarespace, which reads /embed.json directly.
     for platform in ("eventbrite", "facebook", "instagram", "descene", "gcal"):
+        if open_studio and platform in ("facebook", "instagram"):
+            continue   # Open Door Studios go on the calendar and Eventbrite only, never social posts
         payload = {}
         if platform == "eventbrite": payload["image_url"] = image_url
         if platform in ("gcal", "descene"): payload["instructor_name"] = instructor_name
@@ -2814,6 +2818,7 @@ def followup_exempt(c, cls):
     """Classes that never get the automatic after-class email or the note nudge:
     open studios (title keywords, editable under Connections) and anything with
     no registrations. Returns the reason, or ''."""
+    if cls.get("open_studio"): return "open door studio"
     kws = [k.strip().lower() for k in (thanks_settings().get("skip_keywords") or "").split(",") if k.strip()]
     title = (cls.get("title") or "").lower()
     for k in kws:
@@ -6949,9 +6954,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 teacher_id, on_behalf = invite_instructor(c, b.get("instructor_name"), email, proto, host)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,summary,age_range,
                 alcohol,audit_ok,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
-                length,pre_class,own_materials,material_cost,needs_volunteer,needs_childcare,students_bring,bring_list,slot_ids,links,
+                length,pre_class,own_materials,material_cost,needs_volunteer,needs_childcare,students_bring,bring_list,open_studio,slot_ids,links,
                 is_series,session_count,session_dates,age_label,close_days,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),teacher_id,slot_date,slot_time,room,
                  b.get("description"),(b.get("summary") or "").strip()[:140],
                  b.get("age_range"),1 if b.get("alcohol") else 0,
@@ -6959,7 +6964,7 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
-                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0,1 if b.get("needs_childcare") else 0, students_bring, bring_list, json.dumps(ids), b.get("links",""),
+                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0,1 if b.get("needs_childcare") else 0, students_bring, bring_list, 1 if b.get("open_studio") else 0, json.dumps(ids), b.get("links",""),
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -7192,6 +7197,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("pay_model") in ("flat","split"):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            if "open_studio" in b: sets.append("open_studio=?"); vals.append(1 if b["open_studio"] else 0)
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
@@ -7818,6 +7824,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if b.get("pay_model") in ("flat", "split"):
                 sets.append("pay_model=?"); vals.append(b["pay_model"])
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
+            if "open_studio" in b: sets.append("open_studio=?"); vals.append(1 if b["open_studio"] else 0)
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
             if "needs_childcare" in b: sets.append("needs_childcare=?"); vals.append(1 if b["needs_childcare"] else 0)
