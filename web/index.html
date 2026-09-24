@@ -3100,7 +3100,8 @@ function cardCls(c){
     <p style="font-size:13px;color:var(--ink-soft);line-height:1.45;margin:10px 0 0">${esc(c.description||'')}</p>
     <div class="meta" style="margin-top:8px">${esc(c.age_label||c.age_range)} · ${c.min_p}–${c.max_p} · ${money(c.ticket_price)} ticket · ${c.waives_pay?'\u{1F49B} volunteering (no teaching pay)':money0(c.instructor_pay)+' pay'}</div>
     ${c.close_days?`<div class="meta" style="margin-top:6px">Registration closes ${c.close_days} day${c.close_days===1?'':'s'} before</div>`:''}
-    ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}</div>`:''}
+    ${c.length?`<div class="meta" style="margin-top:6px">Length: ${esc(c.length)}${c.own_materials?` · instructor provides materials (${money(c.material_cost)}/student)`:''}${c.students_bring?' · students bring their own materials':''}</div>`:''}
+    ${c.students_bring&&c.bring_list?`<div class="meta" style="margin-top:4px"><i>Students bring:</i> ${esc(c.bring_list)}</div>`:''}
     ${c.pre_class?`<div class="meta" style="margin-top:6px">Before class: ${esc(c.pre_class)}</div>`:''}
     ${c.video?`<div class="meta" style="margin-top:6px">\u{1F3AC} <a href="${esc(c.video)}" target="_blank" rel="noopener noreferrer">Play the class video</a>${actingRole()==='admin' && c.video.indexOf('/media/')>-1?` \u00b7 <a href="${esc(c.video)}?dl=1">Download</a>`:''}</div>`:''}
     ${actingRole()==='admin' && (c.photo||'').startsWith('data:image')?`<div class="meta" style="margin-top:6px">\u{1F4F7} <a href="${c.photo}" download="${esc((c.title||'class').replace(/[^a-z0-9]+/gi,'-').toLowerCase())}-photo.jpg">Download the class photo</a></div>`:''}
@@ -3115,12 +3116,12 @@ function cardCls(c){
     ${c.needs_volunteer && actingRole()==='admin' ? `<div class="volbox">🙋 Needs a volunteer assistant. Possible volunteers to reach out to:<br>${VOLUNTEERS.map(v=>esc(v[0])+' — '+esc(v[1])).join('<br>')}</div>`:''}
     ${c.needs_childcare && actingRole()==='admin' ? `<div class="volbox">🧸 The instructor needs childcare while they teach (posted under Opportunities > Help).</div>`:''}
     ${actingRole()==='instructor' && ['pending','graphic_review','instructor_review','approved'].includes(c.status) && classEndKey(c)>=todayKey()
-      ? (c.needs_volunteer
+      ? `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">` + (c.needs_volunteer
           ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🙋 Assistant requested${c.status==='approved'?' (posted under Opportunities > Help)':' (posts under Opportunities once The Gibby approves it)'} · <a href="#" onclick="needHelp(${c.id},false);return false">no longer needed</a></div>`
           : `<button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="needHelp(${c.id},true)">I need a volunteer assistant</button>`)
         + (c.needs_childcare
           ? `<div class="meta" style="margin-top:6px;color:#5B3FB0;font-weight:800">🧸 Childcare requested${c.status==='approved'?' (posted under Opportunities > Help)':' (posts under Opportunities once The Gibby approves it)'} · <a href="#" onclick="needHelp(${c.id},false,'childcare');return false">no longer needed</a></div>`
-          : `<button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="needHelp(${c.id},true,'childcare')">I need childcare for this class</button>`)
+          : `<button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="needHelp(${c.id},true,'childcare')">I need childcare for this class</button>`) + `</div>`
       : ''}
     ${actingRole()==='admin' && c.audit_ok ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 Open to other teaching artists to take free${c.learners?` · ${c.learners} coming`:''}</div>`:''}
     ${actingRole()==='instructor' && c.audit_ok && c.learners ? `<div class="meta" style="margin-top:6px;color:#2c5b8a;font-weight:800">🎓 ${c.learners} teaching artist${c.learners===1?'':'s'} coming to take this class</div>`:''}
@@ -3363,6 +3364,7 @@ async function openEditForm(id){
     <div class="err" id="eerr"></div>
     <label>Class title</label><input id="e_title" value="${esc(c.title)}">
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
+    <label>What students bring <span style="color:var(--ink-soft);font-weight:600">(leave blank if materials are provided)</span></label><textarea id="e_bring" rows="2">${esc(c.bring_list||'')}</textarea>
     <label>One-line teaser</label><input id="e_summary" maxlength="140" value="${esc(c.summary||'')}"
       placeholder="The single line Eventbrite shows above the description">
     <label>Age range (pick every group that fits)</label>${ageChips(c.age_range)}
@@ -3402,6 +3404,7 @@ function openLiveEdit(id){
     <div class="err" id="eerr"></div>
     <label>Class title</label><input id="e_title" value="${esc(c.title)}">
     <label>Description</label><textarea id="e_desc">${esc(c.description||'')}</textarea>
+    <label>What students bring <span style="color:var(--ink-soft);font-weight:600">(leave blank if materials are provided)</span></label><textarea id="e_bring" rows="2">${esc(c.bring_list||'')}</textarea>
     <label>One-line teaser</label><input id="e_summary" maxlength="140" value="${esc(c.summary||'')}"
       placeholder="The single line Eventbrite shows above the description">
     <label>Age range (pick every group that fits)</label>${ageChips(c.age_range)}
@@ -3467,7 +3470,7 @@ async function submitLiveEdit(id){
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
   const vol=!!($('#e_vol')&&$('#e_vol').querySelector('.on').dataset.v==='yes');
   const child=!!($('#e_child')&&$('#e_child').querySelector('.on').dataset.v==='yes');
-  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(), needs_volunteer:vol, needs_childcare:child,
+  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(), needs_volunteer:vol, needs_childcare:child, bring_list:($('#e_bring')?$('#e_bring').value.trim():''),
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
@@ -3491,7 +3494,7 @@ async function submitEdit(id, quiet){
   const aud=!!($('#e_audit')&&$('#e_audit').querySelector('.on').dataset.v==='yes');
   const vol=!!($('#e_vol')&&$('#e_vol').querySelector('.on').dataset.v==='yes');
   const child=!!($('#e_child')&&$('#e_child').querySelector('.on').dataset.v==='yes');
-  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(), needs_volunteer:vol, needs_childcare:child,
+  const body={title:$('#e_title').value, description:$('#e_desc').value, age_range:readAgeChips(), needs_volunteer:vol, needs_childcare:child, bring_list:($('#e_bring')?$('#e_bring').value.trim():''),
     summary:($('#e_summary')?$('#e_summary').value.trim():''),
     alcohol:alc, audit_ok:aud, max_p:+$('#e_max').value, min_p:+$('#e_min').value,
     ticket_price:+$('#e_ticket').value, instructor_pay:+$('#e_pay').value, pay_model:$('#e_paym').value,
@@ -4562,6 +4565,8 @@ function applyDraft(p){
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
   if($('#f_own')) $('#f_own').checked = !!p.own_materials;
+  if($('#f_bring')) $('#f_bring').checked = !!p.students_bring;
+  if($('#f_bringlist')) $('#f_bringlist').value = p.bring_list||'';
   if($('#f_free')) $('#f_free').checked = !!p.waives_pay;
   if($('#f_donate')){ $('#f_donate').checked = !!p.donation_based; donateToggle(); }
   const pick=(seg,val)=>{ const s=$(seg); if(!s) return;
@@ -4717,6 +4722,10 @@ function openForm(slot, draftPayload){
     <button type="button" class="btn ghost" style="padding:8px 14px;margin-top:6px" onclick="supAdd()">+ Add another link</button>
     <label class="chk" style="margin:12px 0 0;display:block"><input type="checkbox" id="f_own" onchange="ownToggle()"> I am purchasing all of my class's supplies and I estimate it to be
       $<input id="c_mat" type="number" min="0" step="0.5" value="" oninput="calc()" style="width:84px;display:inline-block;margin:0 4px;padding:6px 8px"> per student</label>
+    <label class="chk" style="margin:8px 0 0;display:block"><input type="checkbox" id="f_bring" onchange="ownToggle()"> Students bring their own materials (no supply cost)</label>
+    <div id="f_bringwrap" class="hidden"><label>What should they bring?</label>
+      <textarea id="f_bringlist" rows="3" placeholder="e.g. A photo of your pet printed at 8x10, an old shirt or apron, your own knitting needles (size 8)"></textarea>
+      <div class="hint">This is listed under "What to bring" on the Eventbrite page and in the reminder email students get before class.</div></div>
     <div class="hint" id="matnote"></div>
     <label>Anything else about materials? <span style="color:var(--ink-soft);font-weight:600">(optional, but helpful)</span></label>
     <textarea id="f_supnotes" rows="2" placeholder="Things already in the studio you will use, substitutions that are fine, what to buy first if money is tight, prep needed before class..."></textarea>
@@ -4885,14 +4894,19 @@ function collectSupplies(){
 }
 function suppliesTotal(){ return collectSupplies().reduce((s,x)=>s+x.price*x.qty,0); }
 function validSupplies(){ return collectSupplies().filter(x=>x.url && x.price>0 && x.qty>0); }
+function studentsBring(){ return !!($('#f_bring')&&$('#f_bring').checked); }
 function ownToggle(){
+  const bring=studentsBring();
+  const ownBox=$('#f_own'); if(ownBox){ if(bring) ownBox.checked=false; ownBox.parentElement.style.opacity=bring?'.45':''; ownBox.parentElement.style.pointerEvents=bring?'none':''; }
   const own=$('#f_own')&&$('#f_own').checked;
-  const box=$('#f_supplies'); if(box){ box.style.opacity=own?'.45':''; box.style.pointerEvents=own?'none':''; }
-  const btn=box&&box.nextElementSibling; if(btn) btn.style.display=own?'none':'';
+  const box=$('#f_supplies'); if(box){ box.style.opacity=(own||bring)?'.45':''; box.style.pointerEvents=(own||bring)?'none':''; }
+  const btn=box&&box.nextElementSibling; if(btn) btn.style.display=(own||bring)?'none':'';
+  const bw=$('#f_bringwrap'); if(bw) bw.classList.toggle('hidden', !bring);
   if(own && $('#c_mat') && !$('#c_mat').value) $('#c_mat').value=8;
   calc();
 }
 function materialsPerStudent(plan){
+  if(studentsBring()) return 0;
   const own=$('#f_own')&&$('#f_own').checked;
   if(own) return +$('#c_mat').value||0;
   return Math.ceil(suppliesTotal()/Math.max(1,plan)*100)/100;
@@ -4907,15 +4921,20 @@ function calc(dir){
   const free=$('#f_free') && $('#f_free').checked;
   const om=$('#o_m'); if(om) om.textContent=money(mat);
   const note=$('#matnote');
-  if(note) note.textContent = own
+  const bring=studentsBring();
+  if(note) note.textContent = bring
+    ? 'Students bring their own materials, so nothing is built into the ticket and nothing is ordered.'
+    : own
     ? `You're providing materials, so ${money(reimb)} (materials for ${plan} students) is added to your pay.`
     : (suppliesTotal()>0 ? `${money(suppliesTotal())} of supplies across ${plan} students is ${money(mat)} per student, built into the ticket.`
-                         : 'Add at least one link with a price and quantity, or tick the box if you are buying the supplies yourself.');
+                         : 'Add at least one link with a price and quantity, tick the box if you are buying the supplies yourself, or say students bring their own.');
   const ml=$('#matline');
-  if(ml) ml.innerHTML = own
+  if(ml) ml.innerHTML = bring
+    ? `Materials: students bring their own. <a href="#" onclick="openMoreDetails('#f_bring');return false">Change</a>`
+    : own
     ? `Materials: you are buying them (${money(mat)} per student, reimbursed). <a href="#" onclick="openMoreDetails('#f_own');return false">Change</a>`
     : (suppliesTotal()>0 ? `Materials: ${validSupplies().length} item${validSupplies().length===1?'':'s'}, ${money(suppliesTotal())} total, ${money(mat)} per student. <a href="#" onclick="openMoreDetails('#f_supplies');return false">Edit</a>`
-                         : `<b>Materials needed:</b> add supply links, or tick that you are buying them yourself. <a href="#" onclick="openMoreDetails('#f_supplies');return false">Add supplies</a>`);
+                         : `<b>Materials needed:</b> add supply links, tick that you are buying them yourself, or that students bring their own. <a href="#" onclick="openMoreDetails('#f_supplies');return false">Add supplies</a>`);
   const fn=$('#freenote');
   if(fn){
     fn.style.display = free ? '' : 'none';
@@ -5002,11 +5021,13 @@ function validateForm(){
   if(!(max>0)) add('#f_max','Max students','max');
   if(!(min>0)) add('#f_min','Min students','min');
   if(max>0 && min>0 && min>max) add('#f_min','Min students can’t be more than Max','min vs max');
-  if($('#f_own')&&$('#f_own').checked){
+  if(studentsBring()){
+    if(!($('#f_bringlist')&&$('#f_bringlist').value.trim())) add('#f_bringlist','What students should bring','materials');
+  } else if($('#f_own')&&$('#f_own').checked){
     const mat=num('c_mat');
     if(mat===null || mat<0) add('#c_mat','Your estimated supply cost per student','materials');
   } else if(!validSupplies().length){
-    add('#f_supplies','Supply links with a price and quantity (or tick that you are buying the supplies yourself)','supplies');
+    add('#f_supplies','Supply links with a price and quantity, or tick that you are buying them yourself, or that students bring their own','supplies');
   }
   const ticket=num('f_ticket'), pay=num('f_pay');
   const donation=$('#f_donate')&&$('#f_donate').checked;
@@ -5087,6 +5108,7 @@ function collectForm(){
     needs_volunteer: seg('#f_vol')==='yes',
     needs_childcare: !!($('#f_child')&&$('#f_child').checked),
     own_materials: $('#f_own').checked, material_cost: materialsPerStudent(Math.max(1,+$('#c_plan').value||1)),
+    students_bring: studentsBring(), bring_list: $('#f_bringlist')?$('#f_bringlist').value.trim():'',
     supply_links: collectSupplies(), planned:+$('#c_plan').value||0, pay_per_student:+($('#c_pps')?$('#c_pps').value:0)||0,
     supply_notes: $('#f_supnotes') ? $('#f_supnotes').value.trim() : '',
     alcohol: seg('#f_alc')==='yes', audit_ok: seg('#f_audit')==='yes',
@@ -5184,7 +5206,7 @@ function showReview(){
     <div class="rvrow"><b>Ages</b><span>${esc(ageLabel(selectedAges()))}</span></div>
     <div class="rvrow"><b>Students</b><span>${f.min_p} to ${f.max_p}${f.close_days?` &middot; registration closes ${f.close_days} day${f.close_days===1?'':'s'} before`:''}</span></div>
     <div class="rvrow"><b>Ticket</b><span>${money(f.ticket_price)}${f.own_materials?` &middot; you supply materials (${money(f.material_cost)}/student, reimbursed)`:` &middot; materials ${money(f.material_cost)}/student`}</span></div>
-    <div class="rvrow"><b>Supplies</b><span>${f.own_materials?'You are buying them':`${(f.supply_links||[]).filter(x=>x.url).length} link${(f.supply_links||[]).filter(x=>x.url).length===1?'':'s'}, ${money((f.supply_links||[]).reduce((s,x)=>s+x.price*x.qty,0))} for The Gibby to buy`}</span></div>
+    <div class="rvrow"><b>Supplies</b><span>${f.students_bring?'Students bring their own':f.own_materials?'You are buying them':`${(f.supply_links||[]).filter(x=>x.url).length} link${(f.supply_links||[]).filter(x=>x.url).length===1?'':'s'}, ${money((f.supply_links||[]).reduce((s,x)=>s+x.price*x.qty,0))} for The Gibby to buy`}</span></div>
     <div class="rvrow"><b>You earn</b><span>${earn}</span></div>
     <div class="two" style="margin-top:16px">
       <button class="btn ghost" onclick="closeReview()">Keep editing</button>

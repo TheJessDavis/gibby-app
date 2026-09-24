@@ -295,6 +295,9 @@ def _event_description(cls):
         parts.append(f"A {len(sessions)}-week course. One ticket covers all "
                      f"{len(sessions)} sessions:\n{lines}")
     parts.append(cls.get("description", "") or "")
+    bring = (cls.get("bring_list") or "").strip() if cls.get("students_bring") else ""
+    if bring:
+        parts.append("What to bring\n\n" + bring)
     try:
         faq = json.loads(cls.get("faq") or "[]")
     except Exception:

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.107.0-slots-through"
+VERSION = "10.108.0-students-bring"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -348,7 +348,7 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
-                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("needs_childcare","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
+                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("needs_childcare","INTEGER DEFAULT 0"),("students_bring","INTEGER DEFAULT 0"),("bring_list","TEXT"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),("followup_reminded_at","TEXT"),("imported","INTEGER DEFAULT 0"),
@@ -2003,7 +2003,10 @@ def instructor_email_template(c, cls, instr, template):
     ts = thanks_settings()
     try: sup = json.loads(cls.get("supplies") or "[]")
     except Exception: sup = []
-    bring = ("Please bring: " + ", ".join(str(x) for x in sup)) if cls.get("own_materials") and sup else "All materials are provided; just bring yourself."
+    if cls.get("students_bring") and (cls.get("bring_list") or "").strip():
+        bring = "Please bring: " + " ".join((cls.get("bring_list") or "").split())
+    else:
+        bring = ("Please bring: " + ", ".join(str(x) for x in sup)) if cls.get("own_materials") and sup else "All materials are provided; just bring yourself."
     subj = EMAIL_TEMPLATES.get(template, "{title}").format(title=title)
     if template == "comeback":
         body = (f"Hi there,\n\nThank you again for taking {title} with me. I have new classes coming up at The Gibby "
@@ -6773,8 +6776,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 nm = str(x.get("name") or "").strip()[:120]
                 if url or price or qty or nm: supply_links.append({"url": url, "price": price, "qty": qty, "name": nm})
             good_links = [x for x in supply_links if x["url"] and x["price"] > 0 and x["qty"] > 0]
-            if not b.get("own_materials") and not good_links:
-                miss.append("supply links with price and quantity (or tick that you are buying the supplies yourself)")
+            students_bring = 1 if b.get("students_bring") else 0
+            bring_list = str(b.get("bring_list") or "").strip()[:1500]
+            if students_bring and not bring_list:
+                miss.append("what students should bring")
+            if students_bring:
+                b["own_materials"] = False; b["material_cost"] = 0; good_links = []
+            elif not b.get("own_materials") and not good_links:
+                miss.append("supply links with price and quantity, or tick that you are buying the supplies yourself, or that students bring their own")
             try: planned = max(0, int(float(b.get("planned") or 0)))
             except (TypeError, ValueError): planned = 0
             try: pps = max(0.0, float(b.get("pay_per_student") or 0))
@@ -6888,9 +6897,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 teacher_id, on_behalf = invite_instructor(c, b.get("instructor_name"), email, proto, host)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,summary,age_range,
                 alcohol,audit_ok,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
-                length,pre_class,own_materials,material_cost,needs_volunteer,needs_childcare,slot_ids,links,
+                length,pre_class,own_materials,material_cost,needs_volunteer,needs_childcare,students_bring,bring_list,slot_ids,links,
                 is_series,session_count,session_dates,age_label,close_days,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),teacher_id,slot_date,slot_time,room,
                  b.get("description"),(b.get("summary") or "").strip()[:140],
                  b.get("age_range"),1 if b.get("alcohol") else 0,
@@ -6898,7 +6907,7 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
-                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0,1 if b.get("needs_childcare") else 0, json.dumps(ids), b.get("links",""),
+                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0,1 if b.get("needs_childcare") else 0, students_bring, bring_list, json.dumps(ids), b.get("links",""),
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -7135,6 +7144,10 @@ class H(http.server.BaseHTTPRequestHandler):
             if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
             if "needs_childcare" in b: sets.append("needs_childcare=?"); vals.append(1 if b["needs_childcare"] else 0)
+            if "bring_list" in b:
+                bl = str(b.get("bring_list") or "").strip()[:1500]
+                sets.append("bring_list=?"); vals.append(bl)
+                sets.append("students_bring=?"); vals.append(1 if bl else 0)
             time_changed = False
             if b.get("class_time"):
                 # The class's own start and end, inside the booked window. The window
@@ -7756,6 +7769,10 @@ class H(http.server.BaseHTTPRequestHandler):
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
             if "needs_childcare" in b: sets.append("needs_childcare=?"); vals.append(1 if b["needs_childcare"] else 0)
+            if "bring_list" in b:
+                bl = str(b.get("bring_list") or "").strip()[:1500]
+                sets.append("bring_list=?"); vals.append(bl)
+                sets.append("students_bring=?"); vals.append(1 if bl else 0)
             if b.get("quiet"):
                 # A small fix (a capital letter, a typo): save it and leave the class
                 # exactly where it was. No status change, no email, no approval loop.

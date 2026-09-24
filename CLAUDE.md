@@ -131,7 +131,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   later weeks (`find_series_sessions`); instructors can untick dates. Resubmitting a sent-back class
   frees its own slots first.
 - **Pricing**: instructor enters what they hope to make per student; ticket = materials + that / 0.6.
-  Supply links (url, price, qty, name) are required unless they buy their own. Donation-based makes
+  Supply links (url, price, qty, name) are required unless they buy their own, or students bring
+  their own (`students_bring` + `bring_list`, Sep 24 2026: no cost, no order; the list goes under
+  "What to bring" in the Eventbrite description and into the before-class email; admins edit it on
+  the edit form). Donation-based makes
   an Eventbrite donation ticket.
 - **Series dates**: `/api/classes/{id}/sessions` (admin) rebuilds a series from its first session with
   `skip` dates, adding make-up weeks at the end (`find_series_sessions`), reclaims slots, updates
