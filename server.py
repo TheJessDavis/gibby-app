@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.105.0-approvals-sessions"
+VERSION = "10.106.0-childcare-resend"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -255,11 +255,17 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS class_requests(
+        id INTEGER PRIMARY KEY, title TEXT, notes TEXT, room TEXT, ages TEXT, when_text TEXT,
+        status TEXT DEFAULT 'open', created_by INTEGER, created TEXT,
+        claimed_by INTEGER, claimed_at TEXT, draft_id INTEGER, class_id INTEGER, closed_at TEXT)""")
     try: c.execute("ALTER TABLE class_requests ADD COLUMN description TEXT")   # what students will read
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN skills TEXT")        # JSON list of skill tags
     except Exception: pass
     try: c.execute("ALTER TABLE class_requests ADD COLUMN kind TEXT DEFAULT 'teach'")   # teach | help | sell
+    except Exception: pass
+    try: c.execute("ALTER TABLE class_requests ADD COLUMN help_for TEXT")   # auto Help cards: assistant | childcare
     except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS skills(name TEXT PRIMARY KEY, created TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS request_files(
@@ -307,13 +313,13 @@ def init_db():
     for col in ("pub_bio", "pub_headshot_web", "pub_headshot_by", "pub_at", "web_review", "web_review_note", "web_pending_at", "pronouns"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")   # also added below; needed here on a fresh database
+    except sqlite3.OperationalError: pass
     if not c.execute("SELECT 1 FROM meta WHERE k='web_review_seeded'").fetchone():
         # Everything already on the page counts as approved, so the page does not go blank.
         c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by, pub_at=?
                      WHERE deleted_at IS NULL AND (COALESCE(bio,'')!='' OR COALESCE(headshot,'') LIKE 'data:image/%')""", (now(),))
         c.execute("INSERT INTO meta(k,v) VALUES('web_review_seeded','1')")
-        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
-        except Exception: pass
     c.execute("""CREATE TABLE IF NOT EXISTS instructor_emails(
         id INTEGER PRIMARY KEY, user_id INTEGER, class_id INTEGER, template TEXT, audience TEXT,
         subject TEXT, body TEXT, feature_ids TEXT, add_links INTEGER DEFAULT 1, status TEXT DEFAULT 'scheduled',
@@ -327,10 +333,6 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS student_ratings(
         id INTEGER PRIMARY KEY, class_id INTEGER, token TEXT UNIQUE, email TEXT, rating INTEGER,
         comment TEXT, created TEXT, updated TEXT)""")
-    c.execute("""CREATE TABLE IF NOT EXISTS class_requests(
-        id INTEGER PRIMARY KEY, title TEXT, notes TEXT, room TEXT, ages TEXT, when_text TEXT,
-        status TEXT DEFAULT 'open', created_by INTEGER, created TEXT,
-        claimed_by INTEGER, claimed_at TEXT, draft_id INTEGER, class_id INTEGER, closed_at TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS social_posts(
         id INTEGER PRIMARY KEY, class_id INTEGER, photo_id INTEGER, message TEXT, status TEXT DEFAULT 'draft',
         created_by INTEGER, created TEXT, decided_by INTEGER, decided_at TEXT, fb_post_id TEXT, error TEXT)""")
@@ -346,7 +348,7 @@ def init_db():
         try: c.execute(f"ALTER TABLE classes ADD COLUMN {col} INTEGER DEFAULT 0")
         except sqlite3.OperationalError: pass
     for col, typ in (("length","TEXT"),("pre_class","TEXT"),("own_materials","INTEGER DEFAULT 0"),
-                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
+                     ("material_cost","REAL"),("needs_volunteer","INTEGER DEFAULT 0"),("needs_childcare","INTEGER DEFAULT 0"),("waives_pay","INTEGER DEFAULT 0"),("slot_ids","TEXT"),
                      ("video","TEXT"),("faq","TEXT"),("poster_portrait","TEXT"),("template_requested","INTEGER DEFAULT 0"),("contract_status","TEXT"),("contract_text","TEXT"),("contract_name","TEXT"),
                      ("contract_address","TEXT"),("contract_signed_at","TEXT"),("contract_signature","TEXT"),
                      ("contract_drive","INTEGER DEFAULT 0"),("contract_drive_link","TEXT"),("contract_sent_at","TEXT"),("contract_reminded_at","TEXT"),("followup_reminded_at","TEXT"),("imported","INTEGER DEFAULT 0"),
@@ -1051,15 +1053,31 @@ def queue_worker():
         except Exception as e: print("[queue] worker error:", e)
         time.sleep(QUEUE_TICK)
 
-def ensure_help_card(c, cls, instr=None, actor_id=None):
-    """A class whose instructor asked for a volunteer assistant gets a Help card
-    on the Opportunities tab. Called at approval and swept hourly, so a class
-    edited to need help later, or one approved before this existed, gets its
-    card too. Returns True when a card was created."""
+HELP_KINDS = {
+    # what: (class flag column, card title, card note)
+    "assistant": ("needs_volunteer", "Assist {first} with {title}",
+                  "Posted automatically because the instructor asked for a volunteer assistant."),
+    "childcare": ("needs_childcare", "Childcare during {title} (for {first})",
+                  "Posted automatically because the instructor needs someone to watch their children while they teach."),
+}
+
+def ensure_help_card(c, cls, instr=None, actor_id=None, what=None):
+    """A class whose instructor asked for a volunteer assistant, or for childcare
+    while they teach, gets a Help card on the Opportunities tab (one per need).
+    Called at approval and swept hourly, so a class edited to need help later,
+    or one approved before this existed, gets its card too. Returns True when
+    a card was created or reopened."""
+    if what is None:
+        made = False
+        for k in HELP_KINDS:
+            if ensure_help_card(c, cls, instr, actor_id, k): made = True
+        return made
+    flag, title_fmt, note = HELP_KINDS[what]
     # Approved, or approved and waiting on the poster: the class is real either way.
-    if not cls.get("needs_volunteer") or cls.get("status") not in ("approved", "graphic_review"):
+    if not cls.get(flag) or cls.get("status") not in ("approved", "graphic_review"):
         return False
-    old = c.execute("SELECT id, status FROM class_requests WHERE class_id=? AND kind='help'", (cls["id"],)).fetchone()
+    old = c.execute("SELECT id, status FROM class_requests WHERE class_id=? AND kind='help' AND COALESCE(help_for,'assistant')=?",
+                    (cls["id"], what)).fetchone()
     if old:
         if old["status"] == "open": return False
         c.execute("UPDATE class_requests SET status='open', closed_at=NULL WHERE id=?", (old["id"],))   # asked again: reopen the same card
@@ -1067,22 +1085,26 @@ def ensure_help_card(c, cls, instr=None, actor_id=None):
     if instr is None:
         instr = c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
         instr = dict(instr) if instr else {}
-    c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,class_id)
-                 VALUES(?,?,?,?,?,'open',?,?,?,?,'help',?)""",
-              (f"Assist {(instr.get('name') or 'the instructor').split(' ')[0]} with {cls.get('title')}",
-               "Posted automatically because the instructor asked for a volunteer assistant.",
+    first = (instr.get("name") or "the instructor").split(" ")[0]
+    c.execute("""INSERT INTO class_requests(title,notes,room,ages,when_text,status,created_by,created,description,skills,kind,class_id,help_for)
+                 VALUES(?,?,?,?,?,'open',?,?,?,?,'help',?,?)""",
+              (title_fmt.format(first=first, title=cls.get("title")), note,
                cls.get("room") or "", cls.get("age_label") or cls.get("age_range") or "",
                f"{cls.get('slot_date') or ''} {cls.get('class_time') or cls.get('slot_time') or ''}".strip(),
-               actor_id, now(), (cls.get("description") or "")[:600], "[]", cls["id"]))
+               actor_id, now(), (cls.get("description") or "")[:600], "[]", cls["id"], what))
     return True
 
 def sync_help_card(c, cls, actor_id=None):
-    """Flag on: make sure the Help card exists (approved classes only). Flag off:
-    close any open card for the class."""
-    if cls.get("needs_volunteer"):
-        return ensure_help_card(c, cls, None, actor_id)
-    c.execute("UPDATE class_requests SET status='closed', closed_at=? WHERE class_id=? AND kind='help' AND status='open'", (now(), cls["id"]))
-    return False
+    """For each need: flag on makes sure the Help card exists (approved classes
+    only); flag off closes any open card for it. Returns True if a card was made."""
+    made = False
+    for what, (flag, _t, _n) in HELP_KINDS.items():
+        if cls.get(flag):
+            if ensure_help_card(c, cls, None, actor_id, what): made = True
+        else:
+            c.execute("UPDATE class_requests SET status='closed', closed_at=? WHERE class_id=? AND kind='help' AND status='open' AND COALESCE(help_for,'assistant')=?",
+                      (now(), cls["id"], what))
+    return made
 
 def publish_now(c, cls, actor_id=None, spawn=True):
     """Final step, after the admin has reviewed the graphic: post to Eventbrite with
@@ -1606,6 +1628,26 @@ REIMB_DELIVERY = ["Mailed", "Hand delivered", "Placed in office"]
 
 def reimb_to():
     return [e.strip() for e in (_meta_get("reimb_to") or REIMB_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
+
+def send_reimb_approved(row, files, approver, approved_on, resend=False):
+    """Email the treasurer the approved request: the form PDF (with the approver
+    in its footer), the receipts, and the approver's name at the top."""
+    rid = row["id"]
+    try: pretty = datetime.date.fromisoformat(approved_on[:10]).strftime("%B %d, %Y")
+    except Exception: pretty = approved_on
+    items = _loads_list(row["items"]); receipts = _loads_list(row["receipts"])
+    pdf_bytes = pdfgen.contract_pdf(reimb_pdf_text(row, items, receipts), None,
+                                    [f"Request #{rid}", f"Submitted {row['created'][:16].replace('T',' ')} by {row['name']} ({row['instr_email']})", f"Approved by {approver} on {pretty}"])
+    atts = [(f"Reimbursement request #{rid}.pdf", pdf_bytes, "application/pdf")]
+    budget = 12_000_000
+    for f in files:
+        data = base64.b64decode(f["b64"])
+        if budget - len(data) < 0: break
+        budget -= len(data); atts.append((f["name"], data, f["mime"]))
+    detail = row.get("email_body") or "\n".join(reimb_pdf_text(row, items, receipts))
+    body = f"APPROVED by {approver} on {pretty}.\n\n" + ("(Sent again from the app.)\n\n" if resend else "") + detail
+    mailer.send(reimb_to(), f"Approved reimbursement: ${row['total']:.2f} for {row['name']} ({row['class_title']})", body,
+                attachments=atts, reply_to=row["instr_email"], origin="user")
 
 def reimb_pdf_text(r, items, receipts):
     """The Everett's Expense Reimbursement & Check Request, as the lines of a PDF."""
@@ -2952,7 +2994,7 @@ def run_scheduler(asof=None):
                                else f"marketing request suppressed for {cls['title']}: {why}")
     # Classes approved but still in poster review get their Help card now too.
     try:
-        for r in c.execute("SELECT * FROM classes WHERE status='graphic_review' AND needs_volunteer=1 AND deleted_at IS NULL").fetchall():
+        for r in c.execute("SELECT * FROM classes WHERE status='graphic_review' AND (needs_volunteer=1 OR needs_childcare=1) AND deleted_at IS NULL").fetchall():
             if ensure_help_card(c, dict(r)): actions.append(f"help card posted for {r['title']}")
         c.commit()
     except Exception as ex:
@@ -5401,17 +5443,22 @@ class H(http.server.BaseHTTPRequestHandler):
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             if u["role"] != "admin" and row["instructor_id"] != u["id"]: c.close(); return self.send_json({"error":"That is not your class."},403)
             need = 1 if b.get("need") else 0
-            c.execute("UPDATE classes SET needs_volunteer=? WHERE id=?", (need, cid))
+            what = b.get("what") if b.get("what") in HELP_KINDS else "assistant"
+            flag = HELP_KINDS[what][0]
+            c.execute(f"UPDATE classes SET {flag}=? WHERE id=?", (need, cid))
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
             made = sync_help_card(c, fresh, u["id"])
             c.commit(); c.close()
             if need and u["role"] != "admin":
-                mailer.send(emails_for(db(), "WHERE role='admin'"), f"{u['name']} needs an assistant for {row['title']}",
-                    f"{u['name']} asked for a volunteer assistant for \"{row['title']}\" ({row['slot_date']}). "
+                asked = "a volunteer assistant" if what == "assistant" else "childcare while they teach"
+                mailer.send(emails_for(db(), "WHERE role='admin'"),
+                    f"{u['name']} needs {'an assistant' if what == 'assistant' else 'childcare'} for {row['title']}",
+                    f"{u['name']} asked for {asked} for \"{row['title']}\" ({row['slot_date']}). "
                     + ("A Help card is now on the Opportunities tab for other teaching artists to answer." if made or row["status"] == "approved"
                        else "A Help card will appear on the Opportunities tab once the class is approved.")
                     + f"\n\nOpen the app: {mailer.APP_URL}")
-            return self.send_json({"ok":True, "needs_volunteer": bool(need), "card": bool(made)})
+            return self.send_json({"ok":True, "what": what, "need": bool(need), "needs_volunteer": bool(fresh.get("needs_volunteer")),
+                                   "needs_childcare": bool(fresh.get("needs_childcare")), "card": bool(made)})
         mhp = re.match(r"^/api/admin/headshot/(\d+)$", p)
         if mhp:
             # Marketing's standardized headshot for an artist, replacing whatever they uploaded.
@@ -5619,7 +5666,20 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"once approved it goes to the treasurer with the form and your receipt{'s' if len(files) != 1 else ''} attached, and you will hear about the check ({delivery.lower()}).\n\n"
                 + (f"Your copy on Drive: {folder_link}\n\n" if folder_link else "") + "Thank you,\nThe Gibby", attachments=atts[:1])
             return self.send_json({"ok":True, "id": rid, "total": total, "folder": folder_link})
-        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid|approve|decline)$", p)
+        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid|approve|decline|resend)$", p)
+        if mrp2 and mrp2.group(2) == "resend":
+            # Send an already-approved request to the treasurer again (for requests
+            # that went out before the approval step existed, or got lost).
+            u = self.require("admin")
+            if not u: return
+            rid = int(mrp2.group(1)); c = db()
+            r = c.execute("SELECT r.*, us.email AS instr_email FROM reimb_requests r JOIN users us ON us.id=r.user_id WHERE r.id=?", (rid,)).fetchone()
+            if not r: c.close(); return self.send_json({"error":"not found"},404)
+            if r["status"] not in ("approved", "paid"): c.close(); return self.send_json({"error":"Approve it first; then it can be resent."},400)
+            files = [dict(x) for x in c.execute("SELECT name, mime, b64 FROM reimb_files WHERE req_id=? ORDER BY id", (rid,)).fetchall()]
+            c.close()
+            send_reimb_approved(dict(r), files, r["approved_by"] or u["name"], (r["approved_at"] or now())[:10], resend=True)
+            return self.send_json({"ok":True})
         if mrp2 and mrp2.group(2) in ("approve", "decline"):
             u = self.require("admin")
             if not u: return
@@ -5636,18 +5696,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok":True})
             files = [dict(x) for x in c.execute("SELECT name, mime, b64 FROM reimb_files WHERE req_id=? ORDER BY id", (rid,)).fetchall()]
             c.execute("UPDATE reimb_requests SET status='approved', approved_by=?, approved_at=? WHERE id=?", (u["name"], now(), rid)); c.commit(); c.close()
-            items = _loads_list(r["items"]); receipts = _loads_list(r["receipts"])
-            row = dict(r)
-            pdf_bytes = pdfgen.contract_pdf(reimb_pdf_text(row, items, receipts), None,
-                                            [f"Request #{rid}", f"Submitted {row['created'][:16].replace('T',' ')} by {row['name']} ({r['instr_email']})", f"Approved by {u['name']} on {datetime.date.today().strftime('%B %d, %Y')}"])
-            atts = [(f"Reimbursement request #{rid}.pdf", pdf_bytes, "application/pdf")]
-            budget = 12_000_000
-            for f in files:
-                data = base64.b64decode(f["b64"])
-                if budget - len(data) < 0: break
-                budget -= len(data); atts.append((f["name"], data, f["mime"]))
-            body = (f"APPROVED by {u['name']} on {datetime.date.today().strftime('%B %d, %Y')}.\n\n" + (r["email_body"] or f"{r['name']}: ${r['total']:.2f} for {r['class_title']}."))
-            mailer.send(reimb_to(), f"Approved reimbursement: ${r['total']:.2f} for {r['name']} ({r['class_title']})", body, attachments=atts, reply_to=r["instr_email"])
+            send_reimb_approved(dict(r), files, u["name"], now()[:10])
             mailer.send(r["instr_email"], f"Your reimbursement request for {r['class_title']} was approved",
                 f"Hi {first},\n\n{u['name']} approved your ${r['total']:.2f} request for \"{r['class_title']}\". It has gone to the treasurer with the form and receipts, "
                 f"and you will hear about the check ({(r['delivery'] or '').lower()}).\n\nThe Gibby")
@@ -5936,29 +5985,42 @@ class H(http.server.BaseHTTPRequestHandler):
             to = ", ".join(x.strip() for x in str(b.get("to") or "").replace(";", ",").split(",") if x.strip() and "@" in x)[:300]
             _meta_set("supply_to", to)
             return self.send_json({"ok":True, "to": to})
-        mss = re.match(r"^/api/supplies/(\d+)/(approved|ordered|ready|declined|requested)$", p)
+        mss = re.match(r"^/api/supplies/(\d+)/(approved|ordered|ready|declined|requested|resend)$", p)
         if mss:
             u = self.require("admin")
             if not u: return
             rid, status = int(mss.group(1)), mss.group(2); b = self.read_json(); c = db()
-            row = c.execute("""SELECT s.*, COALESCE(cl.title,'studio stock') AS class_title, us.email AS instr_email, us.name AS instr_name
+            row = c.execute("""SELECT s.*, COALESCE(cl.title,'studio stock') AS class_title, us.email AS instr_email, us.name AS instr_name,
+                                      (SELECT name FROM users WHERE id=s.decided_by) AS decided_name
                                FROM supply_requests s LEFT JOIN classes cl ON cl.id=s.class_id JOIN users us ON us.id=s.user_id WHERE s.id=?""",(rid,)).fetchone()
             if not row: c.close(); return self.send_json({"error":"not found"},404)
             note = (b.get("note") or "").strip()[:300]
-            c.execute("UPDATE supply_requests SET status=?, admin_note=?, decided_by=?, updated=? WHERE id=?", (status, note, u["id"], now(), rid))
-            c.commit(); c.close()
+            resend = status == "resend"
+            if resend:
+                # Send an approved request to the orderer again, keeping the original approver.
+                if row["status"] not in ("approved", "ordered"): c.close(); return self.send_json({"error":"Approve it first; then it can be resent."},400)
+                c.close(); note = row["admin_note"] or ""
+                approver, approved_on = (row["decided_name"] or u["name"]), (row["updated"] or now())[:10]
+            else:
+                c.execute("UPDATE supply_requests SET status=?, admin_note=?, decided_by=?, updated=? WHERE id=?", (status, note, u["id"], now(), rid))
+                c.commit(); c.close()
+                approver, approved_on = u["name"], now()[:10]
             first = (row["instr_name"] or "").split(" ")[0] or "there"
-            if status == "approved":
+            if status == "approved" or resend:
                 # Now it goes to whoever does the ordering, marked with who approved it.
                 to = [e.strip() for e in (_meta_get("supply_to") or SUPPLY_TO_DEFAULT).replace(";", ",").split(",") if e.strip() and "@" in e]
                 try: lines = json.loads(row["lines"] or "[]")
                 except Exception: lines = []
+                try: pretty = datetime.date.fromisoformat(approved_on).strftime("%B %d, %Y")
+                except Exception: pretty = approved_on
                 mailer.send(to, f"Approved order request from {row['instr_name']} for \"{row['class_title']}\"" + (f" (by {row['needed_by']})" if row["needed_by"] else ""),
-                    f"APPROVED by {u['name']} on {datetime.date.today().strftime('%B %d, %Y')}.\n\n{row['instr_name']} would like these ordered for \"{row['class_title']}\""
+                    f"APPROVED by {approver} on {pretty}.\n\n" + ("(Sent again from the app.)\n\n" if resend else "")
+                    + f"{row['instr_name']} would like these ordered for \"{row['class_title']}\""
                     + (f" by {row['needed_by']}" if row["needed_by"] else "") + ":\n\n"
                     + ("\n".join(f"  \u2022 {ln.get('qty')} x {ln.get('name')}" + (f"\n    Link: {ln.get('link')}" if ln.get("link") else "") for ln in lines) if lines else "\n".join("  \u2022 " + x for x in (row["items"] or "").splitlines()))
-                    + (f"\n\nNotes: {row['notes']}" if row["notes"] else "") + (f"\n\nNote from {u['name']}: {note}" if note else "")
-                    + f"\n\nContact: {row['instr_email']}\n\nMark it ordered, then ready, under More > Orders: {mailer.APP_URL}", reply_to=row["instr_email"])
+                    + (f"\n\nNotes: {row['notes']}" if row["notes"] else "") + (f"\n\nNote from {approver}: {note}" if note else "")
+                    + f"\n\nContact: {row['instr_email']}\n\nMark it ordered, then ready, under More > Orders: {mailer.APP_URL}", reply_to=row["instr_email"], origin="user")
+                if resend: return self.send_json({"ok":True, "status": row["status"]})
             word = {"approved": "Approved and sent for ordering", "ordered": "Ordered", "ready": "Ready at the Gibby", "declined": "Not this time"}.get(status)
             if word:
                 mailer.send(row["instr_email"], f"{word}: your order request for {row['class_title']}",
@@ -6796,9 +6858,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 teacher_id, on_behalf = invite_instructor(c, b.get("instructor_name"), email, proto, host)
             c.execute("""INSERT INTO classes(title,instructor_id,slot_date,slot_time,room,description,summary,age_range,
                 alcohol,audit_ok,max_p,min_p,ticket_price,instructor_pay,supplies,headline,subtitle,photo,
-                length,pre_class,own_materials,material_cost,needs_volunteer,slot_ids,links,
+                length,pre_class,own_materials,material_cost,needs_volunteer,needs_childcare,slot_ids,links,
                 is_series,session_count,session_dates,age_label,close_days,status,created)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?, ?,?,?,?,?, 'pending', ?)""",
                 (b.get("title"),teacher_id,slot_date,slot_time,room,
                  b.get("description"),(b.get("summary") or "").strip()[:140],
                  b.get("age_range"),1 if b.get("alcohol") else 0,
@@ -6806,7 +6868,7 @@ class H(http.server.BaseHTTPRequestHandler):
                  b.get("max_p"),b.get("min_p"),b.get("ticket_price"),b.get("instructor_pay"),
                  json.dumps(b.get("supplies",[])),b.get("headline",""),b.get("subtitle",""),b.get("photo"),
                  b.get("length",""),b.get("pre_class",""),1 if b.get("own_materials") else 0,
-                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0, json.dumps(ids), b.get("links",""),
+                 b.get("material_cost"),1 if b.get("needs_volunteer") else 0,1 if b.get("needs_childcare") else 0, json.dumps(ids), b.get("links",""),
                  is_series, weeks, json.dumps(sessions), age_label(b.get("age_range")),
                  max(0, min(int(b.get("close_days") or 0), 30)), now()))
             new_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -7042,6 +7104,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "donation_based" in b: sets.append("donation_based=?"); vals.append(1 if b["donation_based"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
+            if "needs_childcare" in b: sets.append("needs_childcare=?"); vals.append(1 if b["needs_childcare"] else 0)
             time_changed = False
             if b.get("class_time"):
                 # The class's own start and end, inside the booked window. The window
@@ -7662,6 +7725,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if "alcohol" in b: sets.append("alcohol=?"); vals.append(1 if b["alcohol"] else 0)
             if "audit_ok" in b: sets.append("audit_ok=?"); vals.append(1 if b["audit_ok"] else 0)
             if "needs_volunteer" in b: sets.append("needs_volunteer=?"); vals.append(1 if b["needs_volunteer"] else 0)
+            if "needs_childcare" in b: sets.append("needs_childcare=?"); vals.append(1 if b["needs_childcare"] else 0)
             if b.get("quiet"):
                 # A small fix (a capital letter, a typo): save it and leave the class
                 # exactly where it was. No status change, no email, no approval loop.

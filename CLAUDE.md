@@ -168,7 +168,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   with `GET /api/admin/scheduler-errors`. (Before this, one crash rolled back every claim and the
   same alerts went out hourly.)
 - **Help cards**: `ensure_help_card` runs at approval and every scheduler tick for approved classes
-  with `needs_volunteer`, so any class asking for an assistant appears under Opportunities > Help.
+  with `needs_volunteer` (assistant) or `needs_childcare` (someone to watch the instructor's children
+  while they teach), one card per need (`class_requests.help_for`, `HELP_KINDS`), so they appear
+  under Opportunities > Help. Instructors set either from the class form, the class card or the
+  Ask The Gibby menu (`/api/classes/{id}/need-help` with `what`); admins from the edit form.
 - **Art for All donation add-on**: wanted on every Eventbrite event, but the API cannot create
   add-ons, and a donation ticket type counts toward capacity (it inflated every event to +500 and
   was removed on Sep 19). Only Eventbrite's own UI can add a true add-on; do not retry via tickets.
@@ -194,7 +197,9 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   admins only; `/api/admin/reimb/{id}/approve` sends the form, receipts and "APPROVED by <admin>" to
   `reimb_to()`; decline emails the instructor a note. Then Paid. Order requests work the same way:
   new requests email admins, `/api/supplies/{id}/approved` sends them to `supply_to` (Michelle) with
-  the approver's name, then Ordered and Ready. The old per-class "Get paid back for supplies" flow
+  the approver's name, then Ordered and Ready. Both have a `resend` action (Money: "send to the
+  treasurer again"; Orders: "send again") that re-emails an approved request with the original
+  approver, for requests that went out before the approval step. The old per-class "Get paid back for supplies" flow
   (`reimbursements` table) is retired.
 - **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
   "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
