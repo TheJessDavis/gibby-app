@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.104.2-review-michelle"
+VERSION = "10.104.3-review-default"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1558,7 +1558,7 @@ HEADSHOT_MIN_PX = 600                     # smallest square the website will loo
 ARTISTS_INTRO_DEFAULT = ("Meet the artists and instructors who bring The Gibby's creative workshops and classes to life. "
                          "Explore their work, learn a little about the people behind our programs, and discover upcoming opportunities to create with them.")
 
-WEB_REVIEW_TO_DEFAULT = "lbooker@theeverett.org"   # Marketing (Lou Booker) hears when a profile is waiting
+WEB_REVIEW_TO_DEFAULT = "mtruban@theeverett.org"   # Michelle Truban reviews website profiles (Lou Booker until Sep 24, 2026)
 
 def web_review_to():
     return [e.strip() for e in (_meta_get("web_review_to") or WEB_REVIEW_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
