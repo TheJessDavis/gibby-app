@@ -2282,6 +2282,8 @@ async function adminEmail(){
         <div><label style="margin-top:0">Booking open through (YYYY-MM)</label><input id="dl_open" placeholder="2027-04" value="${esc((d.deadline||{}).open_through||'')}"></div></div>
       <label>Months closed to new bookings (YYYY-MM, comma separated)</label><input id="dl_closed" placeholder="e.g. 2026-10, 2026-11" value="${esc((d.deadline||{}).closed_months||'')}">
       <div class="hint">Instructors cannot pick dates in a closed month. Classes already booked there are not affected.</div>
+      <label>Calendar slots through (YYYY-MM-DD)</label><input id="dl_slots" placeholder="e.g. ${esc((d.deadline||{}).slots_through_max||'2027-08-31')}" value="${esc((d.deadline||{}).slots_through||'')}">
+      <div class="hint">How far the Gibby calendar is turned into bookable time, summer included. Leave blank for the usual season (through May). This season ends ${esc((d.deadline||{}).slots_through_max||'')}; later dates need the season rollover.</div>
       <div class="hint">Reminders go out on the first date, every N days after, and on the deadline morning. Clear the deadline to stop them. "Booking open through" lets instructors book those months now instead of waiting for the usual month-end unlock.</div>
       <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="saveDeadline()">Save reminders</button><button class="btn ghost" onclick="sendDeadlineNow()">Send one now</button></div>
     </div><div class="card"><h3 style="font-size:1rem;margin:0 0 6px">Send now</h3>
@@ -2386,7 +2388,7 @@ async function reimbPaid(id, paid){
   renderAdmin('money');
 }
 async function saveDeadline(){
-  try{ await api('/api/admin/deadline-settings','POST',{what:$('#dl_what').value, date:$('#dl_date').value, start:$('#dl_start').value, every:$('#dl_every').value, open_through:$('#dl_open').value, closed_months:$('#dl_closed').value}); alert('Saved.'); }
+  try{ await api('/api/admin/deadline-settings','POST',{what:$('#dl_what').value, date:$('#dl_date').value, start:$('#dl_start').value, every:$('#dl_every').value, open_through:$('#dl_open').value, closed_months:$('#dl_closed').value, slots_through:$('#dl_slots').value}); alert('Saved.'); }
   catch(e){ alert(e.message); }
 }
 async function sendDeadlineNow(){

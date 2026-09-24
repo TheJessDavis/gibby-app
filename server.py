@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.106.0-childcare-resend"
+VERSION = "10.107.0-slots-through"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2618,7 +2618,22 @@ DEADLINE_DEFAULTS = {"what": "all spring classes (January through April)", "date
 def deadline_settings():
     d = {k: (_meta_get("deadline_" + k) or v) for k, v in DEADLINE_DEFAULTS.items()}
     d["closed_months"] = _meta_get("closed_months") or ""
+    d["slots_through"] = _meta_get("slots_through") or ""
+    d["slots_through_max"] = season_last_day().isoformat()
     return d
+
+def season_last_day():
+    """The last date slots can carry: slot labels have no year, so the app holds
+    one season, from SEASON_START to the day before it comes round again."""
+    pm, py = _season_pivot()
+    return datetime.date(py + 1, pm, 1) - datetime.timedelta(days=1)
+
+def slots_through():
+    """Admin override for how far the calendar is turned into slots (meta
+    'slots_through', YYYY-MM-DD), clamped to this season. None when unset."""
+    try: d = datetime.date.fromisoformat((_meta_get("slots_through") or "")[:10])
+    except ValueError: return None
+    return min(d, season_last_day())
 
 def send_deadline_reminders(c, today, force=False, cfg=None):
     """One reminder to every instructor on the campaign days. Returns the number sent."""
@@ -3122,6 +3137,12 @@ def sync_calendar():
     try:
         cfg = gcal.load_gcal_config()
         if not gcal.configured(cfg): return None
+        st = slots_through()
+        if st:
+            # An admin opened booking further than the configured season: generate
+            # slots up to that day, every month included (summer too).
+            cfg["season_end"] = st.isoformat()
+            cfg["season_months"] = set(range(1, 13))
         slots = gcal.sync_slots(cfg)
         if slots is None: return None
         r = reconcile_calendar_slots(slots)
@@ -6392,6 +6413,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 if k in b: _meta_set("deadline_" + k, str(b.get(k) or "").strip())
             if "open_through" in b: _meta_set("open_through", str(b.get("open_through") or "").strip())
             if "closed_months" in b: _meta_set("closed_months", str(b.get("closed_months") or "").strip()[:200])
+            if "slots_through" in b:
+                v = str(b.get("slots_through") or "").strip()[:10]
+                if v:
+                    try: datetime.date.fromisoformat(v)
+                    except ValueError: return self.send_json({"error":"Calendar slots through needs a date like 2027-08-31."},400)
+                    if datetime.date.fromisoformat(v) > season_last_day():
+                        return self.send_json({"error":f"Slots can only run through {season_last_day().strftime('%B %d, %Y')} (the end of this season); dates have no year in the app, so next season needs the season rollover."},400)
+                _meta_set("slots_through", v)
+                threading.Thread(target=sync_calendar, daemon=True).start()
             return self.send_json({"ok": True, "deadline": deadline_settings()})
         if p == "/api/admin/deadline-send":
             u = self.require("admin")

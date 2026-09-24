@@ -123,7 +123,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 ## How the main flows work
 
 - **Booking**: `slots` table from the Gibby calendar. Fall months are open; later months unlock at
-  month end, or early via `open_through` under Email settings. A series claims the same window on
+  month end, or early via `open_through` under Email settings. The calendar is turned into slots
+  through GCAL_SEASON_END (May 31) unless meta `slots_through` (Email settings, "Calendar slots
+  through") extends it, summer included; it is clamped to `season_last_day()` (Aug 31, 2027)
+  because slot labels carry no year. Booking into fall 2027 needs a season rollover (SEASON_START
+  and year-aware dates), not a setting. A series claims the same window on
   later weeks (`find_series_sessions`); instructors can untick dates. Resubmitting a sent-back class
   frees its own slots first.
 - **Pricing**: instructor enters what they hope to make per student; ticket = materials + that / 0.6.
