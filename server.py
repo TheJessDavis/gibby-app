@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.108.1-series-makeup"
+VERSION = "10.108.2-skip-prune"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -5474,6 +5474,7 @@ class H(http.server.BaseHTTPRequestHandler):
             claimed = c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({ph}) AND status='available' AND deleted_at IS NULL", ids).rowcount
             if claimed != len(ids):
                 c.execute("ROLLBACK"); c.close(); return self.send_json({"error":"One of the make-up weeks was just taken. Try again."},409)
+            skip = [d for d in skip if d not in {s["date"] for s in new_sessions}]   # a date on the schedule is not skipped
             first_changed = new_sessions[0]["date"] != cls.get("slot_date")
             c.execute("UPDATE classes SET session_dates=?, session_count=?, slot_ids=?, series_skip=?, slot_date=? WHERE id=?",
                       (json.dumps(new_sessions), len(new_sessions), json.dumps(ids), json.dumps(skip), new_sessions[0]["date"], cid))
