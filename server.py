@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.109.2-reimb-address"
+VERSION = "10.110.0-contracts"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -252,6 +252,12 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS lockbox(
         id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, name TEXT, signed_at TEXT,
         via TEXT DEFAULT 'app', by_admin INTEGER, ip TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS agreements(
+        id INTEGER PRIMARY KEY, title TEXT, text TEXT, class_id INTEGER, created_by INTEGER, created TEXT,
+        status TEXT DEFAULT 'open', completed_at TEXT, drive_link TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS agreement_signers(
+        id INTEGER PRIMARY KEY, agreement_id INTEGER NOT NULL, user_id INTEGER NOT NULL, ord INTEGER DEFAULT 0,
+        name TEXT, address TEXT, signed_at TEXT, signature TEXT, notified_at TEXT)""")
     c.execute("""CREATE TABLE IF NOT EXISTS thanks_codes(
         id INTEGER PRIMARY KEY, class_id INTEGER, email TEXT, name TEXT, code TEXT UNIQUE, eb_id TEXT,
         pct TEXT, expires_at TEXT, created TEXT, redeemed INTEGER DEFAULT 0, checked_at TEXT)""")
@@ -310,7 +316,7 @@ def init_db():
     # The website shows only what Marketing approved: pub_* is the published copy,
     # bio/headshot* is what the artist last saved, web_review says whether the
     # two differ ('pending'), or what Marketing said ('changes').
-    for col in ("pub_bio", "pub_headshot_web", "pub_headshot_by", "pub_at", "web_review", "web_review_note", "web_pending_at", "pronouns"):
+    for col in ("pub_bio", "pub_headshot_web", "pub_headshot_by", "pub_at", "web_review", "web_review_note", "web_pending_at", "pronouns", "web_approved_by"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
     try: c.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")   # also added below; needed here on a fresh database
@@ -1653,6 +1659,67 @@ def send_reimb_approved(row, files, approver, approved_on, resend=False):
     mailer.send(reimb_to(), f"Approved reimbursement: ${row['total']:.2f} for {row['name']} ({row['class_title']})", body,
                 attachments=atts, reply_to=row["instr_email"], origin="user")
 
+# Contracts with one or more signers, in order (an event coordinator agreement,
+# a contract for a class the app did not create). Each signer is emailed when
+# it is their turn; the finished PDF goes to everyone and to Drive.
+def agreement_signers(c, aid):
+    return [dict(r) for r in c.execute("""SELECT s.*, u.name AS user_name, u.email AS email
+        FROM agreement_signers s JOIN users u ON u.id=s.user_id WHERE s.agreement_id=? ORDER BY s.ord, s.id""", (aid,)).fetchall()]
+
+def agreement_current(signers):
+    for s in signers:
+        if not s.get("signed_at"): return s
+    return None
+
+def agreement_notify(c, aid, base_url=None):
+    """Email whoever signs next. Returns that signer, or None when all have signed."""
+    ag = c.execute("SELECT * FROM agreements WHERE id=?", (aid,)).fetchone()
+    if not ag: return None
+    cur = agreement_current(agreement_signers(c, aid))
+    if not cur: return None
+    first = (cur.get("user_name") or "").split(" ")[0] or "there"
+    url = base_url or mailer.APP_URL
+    c.execute("UPDATE agreement_signers SET notified_at=? WHERE id=?", (now(), cur["id"]))
+    mailer.send(cur["email"], f"Your contract is ready to sign: {ag['title']}",
+        f"Hi {first},\n\nThe Gibby has a contract for you to read and sign: \"{ag['title']}\".\n\n"
+        f"  1. Log in: {url}\n  2. Open My classes\n  3. Tap \"Sign: {ag['title']}\" in your to-do list\n\n"
+        f"Your username is this email address ({cur['email']}). If you have never signed in before, use the set-your-password "
+        f"link from your welcome email, or tap \"Forgot password?\" on the sign-in page and a fresh link will be sent here.\n\n"
+        f"It takes about a minute. Once everyone has signed, you will get the finished copy as a PDF.\n\nThe Gibby")
+    return cur
+
+def agreement_pdf_bytes(ag, signers):
+    footer = []
+    for s in signers:
+        footer += [f"Signed by: {s.get('name') or ''}", f"Address: {s.get('address') or ''}", f"Date: {(s.get('signed_at') or '')[:10]}", "-" * 60]
+    sigs = [s["signature"] for s in signers if (s.get("signature") or "").startswith("data:image/")]
+    return pdfgen.contract_pdf(ag["text"], sigs, footer)
+
+def push_agreement_to_drive(ag, signers, pdf_bytes):
+    """File the fully signed agreement with the class contracts on Drive."""
+    cfg = gcal.load_gcal_config()
+    if not cfg.get("webhook_url"): return None
+    import html as _html
+    e = _html.escape
+    blocks = "".join(f"<p><b>Signed by:</b> {e(s.get('name') or '')}<br><b>Address:</b> {e(s.get('address') or '')}<br><b>Date signed:</b> {e((s.get('signed_at') or '')[:10])}</p>"
+                     + (f'<p><img src="{s["signature"]}" style="height:90px" alt="signature"></p>' if (s.get("signature") or "").startswith("data:image/") else "")
+                     for s in signers)
+    doc = f"""<html><body style="font-family:Georgia,serif;max-width:640px;margin:40px auto;line-height:1.5"><pre style="white-space:pre-wrap;font-family:inherit">{e(ag['text'])}</pre><hr>{blocks}</body></html>"""
+    safe = re.sub(r"[^A-Za-z0-9 ,'-]", "", ag["title"] or "contract")
+    fname = f"Contract - {safe} - {', '.join((s.get('name') or s.get('user_name') or '') for s in signers)} - {now()[:10]}.pdf"
+    try:
+        payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "contract", "filename": fname, "html": doc,
+                              "pdf": base64.b64encode(pdf_bytes).decode()}).encode()
+        req = urllib.request.Request(cfg["webhook_url"], data=payload, headers={"Content-Type": "application/json", "User-Agent": "GibbyClassManager/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            res = json.loads(r.read().decode("utf-8", "replace"))
+        if res.get("ok"):
+            print(f"[agreement] filed to Drive: {fname}"); return res.get("link")
+        print("[agreement] Drive refused:", res)
+    except Exception as ex:
+        print("[agreement] Drive filing failed:", ex)
+    return None
+
 def reimb_email_body(row, items, folder_link=None, instr_email=None):
     """The plain summary of a reimbursement request for the treasurer's email:
     who, which class, the receipt lines, the totals, delivery, and where the
@@ -2226,7 +2293,8 @@ def build_contract_text(cls, instructor_name):
     elif (cls.get("pay_model") or "flat") == "split":
         rate = "60% of ticket sales after material costs"
     else:
-        rate = f"${cls.get('instructor_pay') or 0} (flat fee)"
+        pay = float(cls.get("instructor_pay") or 0)
+        rate = f"${int(pay) if pay == int(pay) else f'{pay:.2f}'} (flat fee)"
     title = cls.get("title") or "the class"
     return f"""VISUAL ARTS INSTRUCTOR CONTRACT
 
@@ -3833,6 +3901,31 @@ class H(http.server.BaseHTTPRequestHandler):
                 "contracts_to_sign":n_contracts},
                 "season_start": SEASON_START,
                 "csrf_token": session_csrf(self.cookie("gibby_session"))})
+        if p == "/api/agreements":
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db(); out = []
+            for ag in c.execute("""SELECT a.* FROM agreements a JOIN agreement_signers s ON s.agreement_id=a.id
+                                   WHERE s.user_id=? AND a.status!='cancelled' GROUP BY a.id ORDER BY a.id DESC""", (u["id"],)).fetchall():
+                ag = dict(ag); signers = agreement_signers(c, ag["id"]); cur = agreement_current(signers)
+                mine = next((s for s in signers if s["user_id"] == u["id"]), None)
+                my_turn = bool(cur and cur["user_id"] == u["id"])
+                out.append({"id": ag["id"], "title": ag["title"], "status": ag["status"], "class_id": ag["class_id"],
+                            "my_turn": my_turn, "signed": bool(mine and mine["signed_at"]), "waiting_on": cur["user_name"] if cur else "",
+                            "signers": [{"name": s["user_name"], "signed_at": s["signed_at"]} for s in signers],
+                            "text": ag["text"] if (my_turn or (mine and mine["signed_at"])) else ""})
+            c.close(); return self.send_json({"agreements": out})
+        if p == "/api/admin/agreements":
+            u = self.require("admin")
+            if not u: return
+            c = db(); out = []
+            for ag in c.execute("SELECT * FROM agreements ORDER BY id DESC").fetchall():
+                ag = dict(ag); signers = agreement_signers(c, ag["id"]); cur = agreement_current(signers)
+                out.append({**ag, "waiting_on": cur["user_name"] if cur else "",
+                            "signers": [{"id": s["id"], "user_id": s["user_id"], "name": s["user_name"], "email": s["email"],
+                                         "signed_at": s["signed_at"], "notified_at": s["notified_at"], "signed_name": s["name"]} for s in signers]})
+            people = [dict(r) for r in c.execute("SELECT id, name, email FROM users WHERE deleted_at IS NULL ORDER BY name").fetchall()]
+            c.close(); return self.send_json({"agreements": out, "people": people})
         if p == "/api/users":
             u = self.require("admin")
             if not u: return
@@ -5099,7 +5192,25 @@ class H(http.server.BaseHTTPRequestHandler):
                 if hs: mark_web_pending(c, u["id"], "headshot")
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
+            # Every change to what the website could show goes to Marketing, however
+            # small (name, pronouns, links, skills, sign-off, bio, headshot, photo), and
+            # a save while Marketing is waiting on a change is the resubmission.
+            watched = ("name", "pronouns", "bio", "headshot", "photo", "skills", "signoff",
+                       "social_facebook", "social_instagram", "social_tiktok", "social_website", "social_etsy")
+            after = dict(c.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone())
+            changed = [k for k in watched if (after.get(k) or "") != (u.get(k) or "")]
+            if changed or (u.get("web_review") or "") == "changes":
+                mark_web_pending(c, u["id"], ", ".join(changed) or "profile")
             c.commit(); c.close()
+            return self.send_json({"ok":True, "review": bool(changed or (u.get("web_review") or "") == "changes")})
+        if p == "/api/profile/resubmit":
+            # "Done, send it back": the artist answers Marketing's request without
+            # changing anything the app tracks (or after fixing it elsewhere).
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            if (u.get("web_review") or "") != "changes": c.close(); return self.send_json({"error":"Nothing is waiting on you."},400)
+            mark_web_pending(c, u["id"], "profile"); c.commit(); c.close()
             return self.send_json({"ok":True})
         if p == "/api/upload-video":
             u = self.require("instructor")
@@ -5457,6 +5568,114 @@ class H(http.server.BaseHTTPRequestHandler):
                                        f"Shopping list from the class form ({row['planned'] or row['max_p'] or '?'} students planned).")
             c.execute("UPDATE classes SET supplies_ordered_at=? WHERE id=?", (now(), cid)); c.commit(); c.close()
             return self.send_json({"ok":True, "id":rid})
+        if p == "/api/admin/agreements":
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            title = str(b.get("title") or "").strip()[:160]; text = str(b.get("text") or "").strip()[:30000]
+            ids = []
+            for x in (b.get("signer_ids") or []):
+                try:
+                    if int(x) not in ids: ids.append(int(x))
+                except (TypeError, ValueError): pass
+            if len(title) < 3 or len(text) < 40 or not ids:
+                return self.send_json({"error":"A title, the contract text and at least one signer are needed."},400)
+            c = db()
+            for i in ids:
+                if not c.execute("SELECT 1 FROM users WHERE id=? AND deleted_at IS NULL", (i,)).fetchone():
+                    c.close(); return self.send_json({"error":"One of the signers is not in the app."},400)
+            c.execute("INSERT INTO agreements(title,text,class_id,created_by,created,status) VALUES(?,?,?,?,?,'open')",
+                      (title, text, int(b.get("class_id")) if b.get("class_id") else None, u["id"], now()))
+            aid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            for n, i in enumerate(ids):
+                c.execute("INSERT INTO agreement_signers(agreement_id,user_id,ord) VALUES(?,?,?)", (aid, i, n))
+            c.commit()
+            proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+            cur = agreement_notify(c, aid, f"{proto}://{host}"); c.commit(); c.close()
+            return self.send_json({"ok":True, "id": aid, "sent_to": cur["email"] if cur else ""})
+        mag = re.match(r"^/api/admin/agreements/(\d+)/(remind|cancel)$", p)
+        if mag:
+            u = self.require("admin")
+            if not u: return
+            aid = int(mag.group(1)); c = db()
+            if not c.execute("SELECT 1 FROM agreements WHERE id=?", (aid,)).fetchone(): c.close(); return self.send_json({"error":"not found"},404)
+            if mag.group(2) == "cancel":
+                c.execute("UPDATE agreements SET status='cancelled' WHERE id=?", (aid,)); c.commit(); c.close(); return self.send_json({"ok":True})
+            proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+            cur = agreement_notify(c, aid, f"{proto}://{host}"); c.commit(); c.close()
+            return self.send_json({"ok":True, "sent_to": cur["email"] if cur else ""})
+        mas = re.match(r"^/api/agreements/(\d+)/sign$", p)
+        if mas:
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            aid = int(mas.group(1)); b = self.read_json()
+            name = str(b.get("name") or "").strip(); addr = str(b.get("address") or "").strip()
+            if len(name) < 3: return self.send_json({"error":"Type your full name; that is your signature."},400)
+            sig = str(b.get("signature") or "")
+            if not sig.startswith("data:image/"): return self.send_json({"error":"Please sign in the signature box too."},400)
+            if len(sig) > 200_000: return self.send_json({"error":"That signature drawing is too large. Tap Clear and sign again."},400)
+            c = db()
+            ag = c.execute("SELECT * FROM agreements WHERE id=? AND status='open'", (aid,)).fetchone()
+            if not ag: c.close(); return self.send_json({"error":"There is no contract waiting here."},400)
+            ag = dict(ag); signers = agreement_signers(c, aid); cur = agreement_current(signers)
+            if not cur or cur["user_id"] != u["id"]:
+                c.close(); return self.send_json({"error": (f"It is {cur['user_name']}'s turn to sign first." if cur else "This contract is fully signed.")},400)
+            c.execute("UPDATE agreement_signers SET name=?, address=?, signed_at=?, signature=? WHERE id=?", (name[:120], addr[:200], now(), sig, cur["id"]))
+            if addr and not (u.get("address") or "").strip():
+                c.execute("UPDATE users SET address=? WHERE id=?", (addr[:200], u["id"]))
+            c.commit()
+            signers = agreement_signers(c, aid); nxt = agreement_current(signers)
+            proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+            first = (u.get("name") or "").split(" ")[0] or "there"
+            if nxt:
+                agreement_notify(c, aid, f"{proto}://{host}"); c.commit(); c.close()
+                mailer.send(u["email"], f"Signed: {ag['title']}",
+                    f"Hi {first},\n\nThank you, your signature on \"{ag['title']}\" is recorded. It now goes to {nxt['user_name']} to sign; "
+                    f"once everyone has signed you will get the finished copy as a PDF.\n\nThe Gibby")
+                return self.send_json({"ok":True, "next": nxt["user_name"]})
+            c.execute("UPDATE agreements SET status='signed', completed_at=? WHERE id=?", (now(), aid)); c.commit(); c.close()
+            pdf_att, pdf_bytes, link = [], None, None
+            try:
+                pdf_bytes = agreement_pdf_bytes(ag, signers)
+                pdf_att = [(f"{re.sub(r'[^A-Za-z0-9 ,-]', '', ag['title'] or 'Contract')}.pdf", pdf_bytes, "application/pdf")]
+            except Exception as ex:
+                print("[agreement] pdf failed:", ex)
+            if pdf_bytes:
+                link = push_agreement_to_drive(ag, signers, pdf_bytes)
+                if link:
+                    cq = db(); cq.execute("UPDATE agreements SET drive_link=? WHERE id=?", (link, aid)); cq.commit(); cq.close()
+            who = ", ".join((s.get("name") or s["user_name"]) for s in signers)
+            body = (f"\"{ag['title']}\" is now signed by everyone: {who}.\n\nThe signed copy is attached"
+                    + (f" and filed on Drive: {link}" if link else "") + ".\n\nThe Gibby")
+            recips = [s["email"] for s in signers] + [a for a in emails_for(db(), "WHERE role='admin'")]
+            seen, to = set(), []
+            for a in recips:
+                if a.lower() not in seen: seen.add(a.lower()); to.append(a)
+            mailer.send(to, f"Fully signed: {ag['title']}", body, attachments=pdf_att)
+            return self.send_json({"ok":True, "done": True})
+        msc = re.match(r"^/api/classes/(\d+)/send-contract$", p)
+        if msc:
+            # An approved class that skipped the contract step (an imported Eventbrite
+            # event, an event someone is coordinating): write the contract and email it.
+            u = self.require("admin")
+            if not u: return
+            cid = int(msc.group(1)); c = db()
+            cls = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not cls: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(cls)
+            if cls.get("contract_status") == "signed": c.close(); return self.send_json({"error":"This contract is already signed."},400)
+            instr = c.execute("SELECT * FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
+            if not instr: c.close(); return self.send_json({"error":"This class has no instructor."},400)
+            instr = dict(instr)
+            ctext = build_contract_text(cls, instr["name"])
+            c.execute("""UPDATE classes SET contract_status='sent', contract_text=?, contract_sent_at=?, contract_reminded_at=NULL WHERE id=?""",
+                      (ctext, datetime.datetime.now().isoformat(timespec="seconds"), cid))
+            audit(c, cid, cls.get("status"), "contract-sent", u["id"])
+            c.commit(); c.close()
+            proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
+            subj, body = contract_ready_email(instr, cls, f"{proto}://{host}")
+            mailer.send(instr["email"], subj, body)
+            return self.send_json({"ok":True, "to": instr["email"]})
         mss = re.match(r"^/api/classes/(\d+)/sessions$", p)
         if mss:
             # Admin reshapes a series: skip dates (a holiday), and the run extends by
@@ -5619,16 +5838,21 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour incident report went to Michelle Truban and Seth Cosans with the completed form attached. "
                 f"Thank you for filing it promptly.\n\nThe Gibby", attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")])
             return self.send_json({"ok":True, "id": rid, "folder": folder_link})
-        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes)$", p)
+        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes|requeue)$", p)
         if mwr:
             u = self.require("admin")
             if not u: return
             uid = int(mwr.group(1)); b = self.read_json(); c = db()
             who = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL", (uid,)).fetchone()
             if not who: c.close(); return self.send_json({"error":"not found"},404)
+            if mwr.group(2) == "requeue":
+                # Put a profile back in front of Marketing (it was approved by someone
+                # else, or changed through a path that did not hold it).
+                mark_web_pending(c, uid, "profile"); c.commit(); c.close()
+                return self.send_json({"ok":True})
             if mwr.group(2) == "approve":
                 c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by,
-                             pub_at=?, web_review=NULL, web_review_note=NULL WHERE id=?""", (now(), uid))
+                             pub_at=?, web_review=NULL, web_review_note=NULL, web_approved_by=? WHERE id=?""", (now(), u["name"], uid))
                 c.commit(); c.close()
                 mailer.send(who["email"], "Your website profile is live",
                     f"Hi {(who['name'] or '').split(' ')[0] or 'there'},\n\nMarketing approved your bio and headshot. They are now on The Everett's website: "

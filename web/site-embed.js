@@ -126,13 +126,20 @@ function renderInstructors(){
   }).catch(function(e){rep('artists fetch failed: '+e)});
 }
 function paintArtists(host,list,intro){
+  // The page title sits in the same Squarespace code block as this list, where
+  // headings are not given the site's heading styles. Match the rest of the site.
+  try{
+    var blk=host.closest('.sqs-block-code')||host.parentElement;
+    var h1=blk&&blk.querySelector('h1');
+    if(h1){ h1.style.fontFamily='var(--heading-font-font-family, inherit)'; h1.style.fontWeight='var(--heading-font-font-weight, 500)'; h1.style.fontSize='clamp(2rem, 4vw, 3.4rem)'; h1.style.lineHeight='1.15'; h1.style.margin='0 0 .4em'; }
+  }catch(e){}
   {
     var h=(intro?'<p class="gibby-artists-intro" style="max-width:720px;margin:0 0 28px">'+esc(intro)+'</p>':'')+'<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
     list.forEach(function(i){
       h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
-        +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:160px;height:160px;border-radius:50%;object-fit:cover;margin-bottom:12px">'
-               :'<div style="width:160px;height:160px;border-radius:50%;background:#EDE8DC;margin-bottom:12px"></div>')
-        +'<h3 style="margin:0 0 4px">'+esc(i.name)+(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
+        +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:100%;max-width:260px;aspect-ratio:1/1;height:auto;border-radius:0;object-fit:cover;margin-bottom:14px;display:block">'
+               :'<div style="width:100%;max-width:260px;aspect-ratio:1/1;border-radius:0;background:#EDE8DC;margin-bottom:14px"></div>')
+        +'<h3 style="margin:0 0 4px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500);font-size:1.35em;line-height:1.2">'+esc(i.name)+(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
         +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
         +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
         +((i.classes||[]).length?'<div style="margin-top:12px;font-size:.9em"><b>Upcoming classes</b><div style="height:6px"></div>'+i.classes.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'')

@@ -678,7 +678,7 @@ async function renderProfile(focus){
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">TikTok</label><input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="@yourhandle or link">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
     ${ME&&ME.web_review==='pending'?`<div class="card waiting" style="margin:10px 0 0;padding:10px 14px"><b>Waiting for Marketing.</b> <span class="meta">Your latest bio or headshot is with Marketing for a look before it goes on the website. You will get an email when it is up.</span></div>`
-      :ME&&ME.web_review==='changes'?`<div class="card needs" style="margin:10px 0 0;padding:10px 14px"><b>Marketing asked for a change:</b> <span class="meta">${esc(ME.web_review_note||'')}</span><div class="hint">Update it below and save; it goes back to them.</div></div>`
+      :ME&&ME.web_review==='changes'?`<div class="card needs" style="margin:10px 0 0;padding:10px 14px"><b>Marketing asked for a change:</b> <span class="meta">${esc(ME.web_review_note||'')}</span><div class="hint">Update it below and tap Save; it goes straight back to them. Already done? <a href="#" onclick="resubmitProfile();return false">Send it back for review</a>.</div></div>`
       :ME&&ME.web_published?`<div class="meta" style="margin:10px 0 0">\u2713 Your bio and headshot are on The Everett's website. Changes you save here go to Marketing first.</div>`:''}
     <label id="pf_bio" style="margin-top:14px">Your bio (for the website)</label>
     <div class="hint" style="margin-top:0">Three short answers, in your own words. Every artist answers the same three, so the page reads as one set. ${BIO_MIN} to ${BIO_MAX} words in all.</div>
@@ -713,7 +713,7 @@ function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null;
 const MORE_ITEMS=[['all','\u{1F4CB}','All classes','Classes'],
   ['money','\u{1F4B0}','Money','Money'],['supplies','\u{1F9FA}','Orders','Money'],
   ['reviews','\u{1F5BC}\uFE0F','Website reviews','Reach'],['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
-  ['incidents','\u{1F6A8}','Incidents','Records'],['audit','\u{1F50D}','Audit','Records'],['archive','\u{1F5C3}\uFE0F','Archive','Records']];
+  ['agreements','\u{1F4DD}','Contracts','Records'],['incidents','\u{1F6A8}','Incidents','Records'],['audit','\u{1F50D}','Audit','Records'],['archive','\u{1F5C3}\uFE0F','Archive','Records']];
 const MORE_GROUPS=['Classes','Money','Reach','Records'];
 /* A tab left open across a deploy keeps old code and can misread new answers.
    Watch the version and reload quietly when nothing is half-typed. */
@@ -864,6 +864,90 @@ async function openContract(id){
   }
   setTimeout(check, 250);   // short contracts that fit without scrolling unlock at once
   setTimeout(check, 1200);  // and again after mobile layout settles
+}
+/* A contract with named signers in order (coordinator agreements, contracts for
+   classes the app did not create). Same reading and signing flow as the class
+   contract; the server decides whose turn it is. */
+async function openAgreement(id){
+  let a; try{ a=((await api('/api/agreements')).agreements||[]).find(x=>x.id===id); }catch(e){ return alert(e.message); }
+  if(!a||!a.text) return alert('Could not load the contract.');
+  const m=document.createElement('div'); m.id='ctmodal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,18,12,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:14px';
+  const others=(a.signers||[]).filter(s=>s.signed_at).map(s=>s.name);
+  m.innerHTML=`<div style="background:#FFFDF8;border-radius:18px;max-width:480px;width:100%;max-height:92vh;display:flex;flex-direction:column;padding:18px 20px;overflow-y:auto">
+    <h2 style="margin:0 0 4px">${esc(a.title)}</h2>
+    ${others.length?`<div class="meta" style="margin-bottom:8px">Already signed by ${esc(others.join(', '))}.</div>`:'<div style="height:4px"></div>'}
+    <div style="flex:1;position:relative;min-height:160px;display:flex">
+      <pre id="ct_pre" style="flex:1;overflow:auto;white-space:pre-wrap;font-family:inherit;font-size:12.5px;line-height:1.5;background:var(--paper);border-radius:12px;padding:12px;padding-bottom:34px;margin:0">${esc(a.text)}<span id="ct_end" style="display:block;height:1px"></span></pre>
+      <div id="ct_fade" style="position:absolute;left:0;right:0;bottom:0;height:56px;border-radius:0 0 12px 12px;background:linear-gradient(rgba(251,247,239,0),#FBF7EF 78%);pointer-events:none;display:flex;align-items:flex-end;justify-content:center">
+        <span style="background:var(--ink);color:#fff;font-size:10.5px;font-weight:800;border-radius:999px;padding:5px 12px;margin-bottom:7px">\u2193 Scroll to read the rest</span>
+      </div>
+    </div>
+    <div class="err" id="cterr"></div>
+    <label>Type your full name (this is your signature)</label><input id="ct_name" value="${esc(ME&&ME.name||'')}" placeholder="Your full legal name">
+    <label>Your address</label><input id="ct_addr" value="${esc(ME&&ME.address||'')}" placeholder="Street, town, ZIP">
+    <label>Sign here with your finger (or mouse)</label>
+    <div style="background:#fff;border:2px solid var(--line);border-radius:12px;position:relative">
+      <canvas id="ct_pad" style="display:block;width:100%;height:120px;touch-action:none;border-radius:10px"></canvas>
+      <button type="button" onclick="padClear()" style="position:absolute;top:6px;right:8px;border:none;background:none;font-family:inherit;font-weight:800;font-size:11px;color:var(--ink-soft);cursor:pointer;text-decoration:underline">Clear</button>
+    </div>
+    <div class="hint">Signed ${new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})}</div>
+    <div class="two" style="margin-top:10px">
+      <button class="btn ghost" onclick="closeContract()">Not yet</button>
+      <button class="btn dark" id="ct_signbtn" onclick="signAgreementNow(${a.id})" disabled style="opacity:.45">Read to the end first</button></div></div>`;
+  m.addEventListener('click',e=>{ if(e.target===m) closeContract(); });
+  document.body.appendChild(m);
+  padInit();
+  const pre=$('#ct_pre'), fade=$('#ct_fade'), btn=$('#ct_signbtn');
+  const unlock=()=>{ btn.disabled=false; btn.style.opacity='1'; btn.textContent='Sign contract'; fade.style.display='none'; };
+  const check=()=>{ if(pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 48) unlock(); };
+  pre.addEventListener('scroll', check);
+  const endMark=$('#ct_end');
+  if(endMark && window.IntersectionObserver){
+    new IntersectionObserver((es,obs)=>{ if(es.some(e=>e.isIntersecting)){ unlock(); obs.disconnect(); } },{root: pre, threshold: 0}).observe(endMark);
+  }
+  setTimeout(check, 250); setTimeout(check, 1200);
+}
+async function signAgreementNow(id){
+  const x=$('#cterr');
+  if(!CT_DRAWN){ x.textContent='Please sign in the box with your finger or mouse.'; x.classList.add('show'); return; }
+  try{
+    const r=await api('/api/agreements/'+id+'/sign','POST',{name:$('#ct_name').value,address:$('#ct_addr').value,signature:$('#ct_pad').toDataURL('image/png')});
+    closeContract();
+    alert(r.done?'Signed! Everyone has signed now; your copy is on its way by email.':'Signed! It now goes to '+r.next+' to sign.');
+    renderInstr('mine');
+  }catch(e){ x.textContent=e.message; x.classList.add('show'); }
+}
+let AG_SIGNERS=[];
+async function adminAgreements(){
+  let d; try{ d=await api('/api/admin/agreements'); }catch(e){ $('#tab').innerHTML=`<div class="err show">${esc(e.message)}</div>`; return; }
+  const people=d.people||[];
+  const nameOf=id=>{ const p=people.find(x=>x.id===id); return p?p.name:'?'; };
+  const row=a=>`<div class="card ${a.status==='signed'?'done':a.status==='cancelled'?'past':'waiting'}" style="padding:12px 16px"><div class="row"><div><b>${esc(a.title)}</b><div class="meta">${esc((a.created||'').slice(0,10))} \u00b7 ${a.signers.map(s=>esc(s.name)+(s.signed_at?' \u2713 signed '+esc(s.signed_at.slice(0,10)):'')).join(' \u2192 ')}</div>
+      <div class="meta">${a.status==='signed'?'Fully signed'+(a.drive_link?' \u00b7 <a href="'+esc(a.drive_link)+'" target="_blank" rel="noopener">on Drive</a>':''):a.status==='cancelled'?'Cancelled':'Waiting on '+esc(a.waiting_on)}</div></div>
+      ${a.status==='open'?`<span style="flex:none;text-align:right"><button class="btn ghost" style="width:auto;padding:8px 12px;font-size:13px" onclick="agreementAct(${a.id},'remind')">Remind</button><br><a href="#" onclick="agreementAct(${a.id},'cancel');return false" style="font-size:12px">cancel</a></span>`:''}</div></div>`;
+  $('#tab').innerHTML=`<h2>Contracts <em>to sign</em></h2>
+    <p class="sub">Contracts with one or more signers, in order. Each person is emailed when it is their turn; everyone gets the finished PDF and it is filed on Drive.</p>
+    <label style="margin-top:0">New contract</label>
+    <div class="card">
+      <label style="margin-top:0">Title</label><input id="ag_title" placeholder="e.g. Event Coordinator Contract: Halloween Mad Artist Labs">
+      <label>Contract text</label><textarea id="ag_text" rows="10" placeholder="Paste the full contract. The signature lines are added by the app."></textarea>
+      <label>Who signs, in order</label>
+      <div id="ag_list" class="meta">${AG_SIGNERS.length?AG_SIGNERS.map((id,i)=>`${i+1}. ${esc(nameOf(id))} <a href="#" onclick="AG_SIGNERS.splice(${i},1);adminAgreements();return false">remove</a>`).join('<br>'):'Nobody yet.'}</div>
+      <div class="two" style="margin-top:6px"><select id="ag_pick">${people.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select><button class="btn ghost" onclick="const v=+$('#ag_pick').value; if(!AG_SIGNERS.includes(v)) AG_SIGNERS.push(v); const t=$('#ag_title').value, x=$('#ag_text').value; adminAgreements().then(()=>{ $('#ag_title').value=t; $('#ag_text').value=x; })">Add signer</button></div>
+      <button class="btn dark" style="margin-top:10px" onclick="sendAgreement()">Send to the first signer</button>
+    </div>
+    <label>All contracts (${d.agreements.length})</label>
+    ${d.agreements.map(row).join('')||'<div class="muted">None yet.</div>'}`;
+}
+async function sendAgreement(){
+  const body={title:$('#ag_title').value.trim(), text:$('#ag_text').value.trim(), signer_ids:AG_SIGNERS};
+  if(!body.title||!body.text||!AG_SIGNERS.length) return alert('Title, text and at least one signer are needed.');
+  try{ const r=await api('/api/admin/agreements','POST',body); AG_SIGNERS=[]; toast('Sent to '+r.sent_to+'.'); adminAgreements(); }catch(e){ alert(e.message); }
+}
+async function agreementAct(id, what){
+  if(what==='cancel' && !confirm('Cancel this contract? Nobody else will be asked to sign it.')) return;
+  try{ const r=await api('/api/admin/agreements/'+id+'/'+what,'POST',{}); toast(what==='remind'?'Reminder sent to '+r.sent_to+'.':'Cancelled.'); adminAgreements(); }catch(e){ alert(e.message); }
 }
 let CT_DRAWN=false;
 function padInit(){
@@ -1275,7 +1359,7 @@ async function renderAdmin(tab){
   // Each section renders inside its own boundary, into #tab. If one throws, the
   // nav and the rest of the app stay intact; only this panel shows the fallback.
   const SECTIONS={dashboard:adminDashboard, slots:adminSlots, approvals:adminApprovals,
-    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies, incidents:adminIncidents, reviews:adminReviews,
+    templates:adminTemplates, calendar:adminCalendar, connections:adminIntegrations, integrations:adminIntegrations, email:adminEmail, ebimport:adminEbImport, calreview:adminCalReview, requests:adminRequests, supplies:adminSupplies, incidents:adminIncidents, reviews:adminReviews, agreements:adminAgreements,
     all:adminAll, money:adminMoney, marketing:adminMarketing, people:adminPeople, audit:adminAudit, archive:adminArchive};
   loadNavBadges();
   const fn=SECTIONS[tab]||adminDashboard;
@@ -1906,7 +1990,8 @@ async function adminReviews(){
       <div style="min-width:0"><b>${esc(u.name||u.email)}</b>${u.pronouns?` <span class="meta">${esc(u.pronouns)}</span>`:''}${(u.skills||[]).length?`<div class="meta">${esc(u.skills.join(' \u00b7 '))}</div>`:''}
         <div class="meta" style="margin-top:6px;white-space:pre-wrap">${esc(u.bio||'(no bio yet)')}</div>
         <div class="meta" style="margin-top:6px">${u.headshot_px?`Headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':' (their own)'}`:'No headshot'}${u.bio_words?` \u00b7 bio ${u.bio_words} words`:''}${u.web_review==='changes'?` \u00b7 change requested: \u201C${esc(u.web_review_note||'')}\u201D`:''}</div></div></div>
-      ${u.web_review==='pending'?`<div class="two" style="margin-top:10px"><button class="btn ghost" onclick="webReview(${u.id},'changes')">Ask for a change</button><button class="btn dark" onclick="webReview(${u.id},'approve')">Approve for the website</button></div>`:''}</div>`;
+      ${u.web_review==='pending'?`<div class="two" style="margin-top:10px"><button class="btn ghost" onclick="webReview(${u.id},'changes')">Ask for a change</button><button class="btn dark" onclick="webReview(${u.id},'approve')">Approve for the website</button></div>`
+        :u.published&&!u.web_review?`<div class="meta" style="margin-top:6px"><a href="#" onclick="webReview(${u.id},'requeue');return false">Send to Marketing for another look</a></div>`:''}</div>`;
   $('#tab').innerHTML=`<h2>Website <em>reviews</em></h2>
     <p class="sub">Bios and headshots artists have saved for theeverett.org/meet-our-teaching-artists. Nothing goes on the page until it is approved here. <a href="/embed/instructors" target="_blank" rel="noopener">See the page as it is now</a>.</p>
     <label style="margin-top:0">Waiting for approval (${pend.length})</label>${pend.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
@@ -1917,7 +2002,7 @@ async function webReview(uid, action){
   let note='';
   if(action==='changes'){ note=prompt('What should they change? (they get this by email)'); if(note===null) return; }
   try{ await api('/api/admin/web-review/'+uid+'/'+action,'POST',{note}); }catch(e){ alert(e.message); return; }
-  alert(action==='approve'?'Approved. It is on the website now.':'Sent back with your note.');
+  alert(action==='approve'?'Approved. It is on the website now.':action==='requeue'?'Sent to Marketing for review.':'Sent back with your note.');
   if(ADMIN_TAB==='reviews') adminReviews(); else adminPeople();
 }
 let PEOPLE_REVIEW=false;
@@ -3198,6 +3283,7 @@ function cardCls(c){
       ${c.contract_signature?`<img src="${c.contract_signature}" alt="signature" style="height:36px;margin-top:4px;background:#fff;border-radius:8px;padding:2px 8px">`:''}
       <a class="btn ghost" style="margin-top:8px;display:block;text-align:center;text-decoration:none" href="/contract-pdf/${c.id}" target="_blank">Download contract (PDF)</a>`:''}
     ${c.contract_status==='sent' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px;color:#B45309">\u{1F4DD} Contract sent, waiting on signature</div>`:''}
+    ${!c.contract_status && c.status==='approved' && actingRole()==='admin'?`<div class="meta" style="margin-top:8px">No contract for this class. <a href="#" onclick="sendContract(${c.id});return false">Send the instructor a contract to sign</a></div>`:''}
     ${(()=>{ let fq=c.faq; try{ if(typeof fq==='string') fq=JSON.parse(fq||'[]'); }catch(_){ fq=[]; }
       return (fq&&fq.length)?`<details style="margin-top:6px"><summary class="meta" style="cursor:pointer">FAQ (${fq.length})</summary>
         ${fq.map(x=>`<div class="meta" style="margin-top:5px"><b>${esc(x.q)}</b><br>${esc(x.a)}</div>`).join('')}</details>`:''; })()}
@@ -4193,6 +4279,8 @@ async function instrMine(){
   const todos=[];
   if(ME && !ME.lockbox_signed && !paperOpen.some(x=>x.kind==='lockbox')) todos.push({t:'Sign the lockbox key code contract', go:'openLockbox()', k:'\u{1F510}'});
   classes.filter(c=>c.contract_status==='sent').forEach(c=>todos.push({t:`Sign your contract for ${c.title}`, go:`openContract(${c.id})`, k:'\u{1F4DD}'}));
+  let agrs=[]; try{ agrs=((await api('/api/agreements')).agreements||[]); }catch(_){}
+  agrs.filter(a=>a.my_turn).forEach(a=>todos.push({t:`Sign: ${a.title}`, go:`openAgreement(${a.id})`, k:'\u{1F4DD}'}));
   classes.filter(c=>c.status==='incomplete').forEach(c=>todos.push({t:`Fix and resubmit ${c.title}`, go:`startResubmit(${c.id})`, k:'\u{1F501}'}));
   classes.filter(c=>c.status==='instructor_review').forEach(c=>todos.push({t:`Review the admin's edits to ${c.title}`, go:`jumpTo('#cls${c.id}')`, k:'\u{1F440}'}));
   paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':x.kind==='lockbox'?'Sign the lockbox key code contract':'Complete your background check', go:x.kind==='lockbox'?'openLockbox()':`jumpTo('#pw${x.id}')`, k:x.kind==='lockbox'?'\u{1F510}':'\u{1F4CB}'}));
@@ -4487,6 +4575,15 @@ function classList(classes){
     ${past.length?`<details id="pastwrap" style="margin-top:14px"><summary class="foldsum">Past and cancelled (${past.length}) <span class="rowchev">\u203A</span></summary>${past.map(row).join('')}</details>`:''}`;
 }
 function todayKey(){ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+async function resubmitProfile(){
+  try{ await api('/api/profile/resubmit','POST',{}); }catch(e){ alert(e.message); return; }
+  toast('Sent back to Marketing for review.'); if(ME) ME.web_review='pending'; renderProfile();
+}
+async function sendContract(id){
+  if(!confirm('Write the instructor contract for this class and email it to them to sign?')) return;
+  try{ const r=await api('/api/classes/'+id+'/send-contract','POST',{}); toast('Contract sent to '+r.to+'.'); renderAdmin('approvals'); }
+  catch(e){ alert(e.message); }
+}
 async function needHelp(id, need, what){
   const child=what==='childcare';
   if(need && !confirm(child?'Ask for childcare during this class? A Help card goes on the Opportunities tab for other teaching artists, and The Gibby is told.':'Ask for a volunteer assistant for this class? It goes on the Opportunities tab for other teaching artists, and The Gibby is told.')) return;
@@ -5255,7 +5352,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','resubmitProfile','sendContract','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

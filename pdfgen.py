@@ -106,14 +106,15 @@ def contract_pdf(text, sig_data_url=None, footer_lines=None):
     body_lines = _wrap(text)
     tail = footer_lines or []
 
-    sig = None
-    if sig_data_url:
-        m = re.match(r"^data:image/png;base64,(.*)$", sig_data_url, re.S)
-        if m:
-            try:
-                sig = _decode_png(base64.b64decode(m.group(1)))
-            except Exception:
-                sig = None
+    # One signature, or a list of them (a contract with several signers): the
+    # images stack in signing order under the footer block.
+    sigs = []
+    for url in ([sig_data_url] if isinstance(sig_data_url, str) else (sig_data_url or [])):
+        m = re.match(r"^data:image/png;base64,(.*)$", url or "", re.S)
+        if not m: continue
+        try: sigs.append(_decode_png(base64.b64decode(m.group(1))))
+        except Exception: pass
+    sig = sigs[0] if sigs else None
 
     # Paginate: body first, then a divider, the footer block and the signature.
     pages = []          # each: (lines, place_signature_after_lines_bool)
@@ -124,11 +125,11 @@ def contract_pdf(text, sig_data_url=None, footer_lines=None):
         pages.append(all_lines[i:i+per_page])
         i += per_page
     sig_h_pt = 0
-    if sig:
-        w, h, _ = sig
-        sig_w_pt = min(240.0, float(w))
-        sig_h_pt = sig_w_pt * h / w
-        # does the signature fit under the last page's text? if not, new page
+    if sigs:
+        for (w, h, _) in sigs:
+            sig_w_pt = min(240.0, float(w))
+            sig_h_pt += sig_w_pt * h / w + 10
+        # do the signatures fit under the last page's text? if not, new page
         used = len(pages[-1]) * LEADING
         if used + sig_h_pt + 30 > PAGE_H - 2*MARGIN:
             pages.append([])
@@ -138,16 +139,15 @@ def contract_pdf(text, sig_data_url=None, footer_lines=None):
     font_num = 1
     objs[font_num] = (b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica "
                       b"/Encoding /WinAnsiEncoding >>")
-    img_num = None
-    if sig:
-        w, h, rgb = sig
+    img_nums = []
+    next_num = 2
+    for (w, h, rgb) in sigs:
         comp = zlib.compress(rgb, 9)
-        img_num = 2
-        objs[img_num] = (f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} "
-                         f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
-                         f"/Length {len(comp)} >>\nstream\n".encode() + comp + b"\nendstream")
-
-    next_num = 3
+        objs[next_num] = (f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} "
+                          f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+                          f"/Length {len(comp)} >>\nstream\n".encode() + comp + b"\nendstream")
+        img_nums.append(next_num); next_num += 1
+    img_num = img_nums[0] if img_nums else None
     page_nums, content_nums = [], []
     for pi, lines in enumerate(pages):
         stream = bytearray()
@@ -157,12 +157,14 @@ def contract_pdf(text, sig_data_url=None, footer_lines=None):
                 stream += b"BT /F1 %.1f Tf %d %.1f Td (" % (FONT_SIZE, MARGIN, y)
                 stream += _txt(ln) + b") Tj ET\n"
             y -= LEADING
-        if sig and pi == len(pages) - 1:
-            w, h, _ = sig
-            sig_w_pt = min(240.0, float(w))
-            sh = sig_w_pt * h / w
-            iy = y - sh - 6
-            stream += (f"q {sig_w_pt:.1f} 0 0 {sh:.1f} {MARGIN} {iy:.1f} cm /Sig Do Q\n").encode()
+        if sigs and pi == len(pages) - 1:
+            iy = y
+            for k, (w, h, _) in enumerate(sigs):
+                sig_w_pt = min(240.0, float(w))
+                sh = sig_w_pt * h / w
+                iy = iy - sh - 6
+                stream += (f"q {sig_w_pt:.1f} 0 0 {sh:.1f} {MARGIN} {iy:.1f} cm /Sig{k} Do Q\n").encode()
+                iy -= 10
         comp = zlib.compress(bytes(stream), 9)
         cnum = next_num; next_num += 1
         objs[cnum] = (f"<< /Filter /FlateDecode /Length {len(comp)} >>\nstream\n".encode()
@@ -175,8 +177,8 @@ def contract_pdf(text, sig_data_url=None, footer_lines=None):
 
     for idx, pnum in enumerate(page_nums):
         res = f"/Font << /F1 {font_num} 0 R >>"
-        if img_num:
-            res += f" /XObject << /Sig {img_num} 0 R >>"
+        if img_nums:
+            res += " /XObject << " + " ".join(f"/Sig{k} {n} 0 R" for k, n in enumerate(img_nums)) + " >>"
         objs[pnum] = (f"<< /Type /Page /Parent {pages_num} 0 R "
                       f"/MediaBox [0 0 {PAGE_W} {PAGE_H}] /Resources << {res} >> "
                       f"/Contents {content_nums[idx]} 0 R >>").encode()

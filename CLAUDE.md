@@ -210,6 +210,19 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   treasurer again"; Orders: "send again") that re-emails an approved request with the original
   approver, for requests that went out before the approval step. The old per-class "Get paid back for supplies" flow
   (`reimbursements` table) is retired.
+- **Contracts to sign** (`agreements` + `agreement_signers`, Sep 25 2026; More > Records > Contracts):
+  any contract text with one or more signers in order. `/api/admin/agreements` creates and emails the
+  first signer; `/api/agreements` lists a person's own (text only when it is their turn or signed);
+  `/api/agreements/{id}/sign` records name, address and drawn signature, emails the next signer, and
+  when the last one signs builds the PDF (`pdfgen.contract_pdf` takes a list of signatures), files it
+  on Drive with the class contracts (`push_agreement_to_drive`) and emails everyone. Remind and
+  cancel at `/api/admin/agreements/{id}/remind|cancel`. Separately, `/api/classes/{id}/send-contract`
+  writes the standard instructor contract for an approved class that never had one (imported events).
+- **Marketing review, every change**: `/api/profile` compares the saved row against the user's row
+  before the save (name, pronouns, bio, headshot, photo, skills, sign-off, links) and any difference
+  sets `web_review='pending'` and emails Michelle; a save while status is `changes` is the
+  resubmission. `/api/profile/resubmit` sends it back without a change. Admin `requeue` puts a
+  published profile back in front of Marketing; `users.web_approved_by` records who approved.
 - **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
   "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
   Reports", emailed with the PDF to `incident_to()` (default Michelle Truban mtruban@theeverett.org and
