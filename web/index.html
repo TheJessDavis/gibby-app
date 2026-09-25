@@ -3971,7 +3971,7 @@ async function instrReimb(){
       <div class="hint">A photo of each receipt is fine, or a PDF. Up to six.</div>
       <label>How should the check reach you?</label>
       <div class="seg" id="rb_deliv">${(d.delivery||[]).map(x=>`<button type="button" class="${x===RB_DELIV?'on':''}" data-v="${esc(x)}" onclick="rbDelivery('${esc(x)}')">${esc(x)}</button>`).join('')}</div>
-      <div id="rb_addrwrap" class="${RB_DELIV==='Mailed'?'':'hidden'}"><label>Mail it to</label><input id="rb_addr" value="${esc(d.address||'')}" placeholder="Street, town, ZIP"></div>
+      <div id="rb_addrwrap"><label>Your mailing address <span style="color:var(--ink-soft);font-weight:600">(the treasurer needs it on file)</span></label><input id="rb_addr" value="${esc(d.address||'')}" placeholder="Street, town, ZIP"></div>
       <div class="err" id="rb_err"></div>
       <button class="btn dark" style="margin-top:12px" onclick="sendReimb()">Send my request</button>
       <div class="hint">Goes to ${esc(d.to||'the treasurer')}, with a copy to you. The form and receipts are also saved in The Gibby's Drive.</div>
@@ -3980,7 +3980,7 @@ async function instrReimb(){
       ${d.requests.map(r=>`<div class="card" style="padding:12px 16px"><div class="row"><div><b>${money(r.total)}</b> \u00b7 ${esc(r.class_title)}<div class="meta">${esc((r.created||'').slice(0,10))} \u00b7 ${esc(r.delivery||'')}${r.pdf_link?' \u00b7 <a href="'+esc(r.pdf_link)+'" target="_blank" rel="noopener">form</a>':''}${r.drive_folder?' \u00b7 <a href="'+esc(r.drive_folder)+'" target="_blank" rel="noopener">receipts</a>':''}</div></div>
         <span class="pill ${r.status==='paid'?'appr':r.status==='declined'?'inc':'pend'}" style="flex:none">${r.status==='paid'?'paid':r.status==='approved'?'approved, with the treasurer':r.status==='declined'?'declined':'waiting for approval'}</span></div></div>`).join('')}`:''}`;
 }
-function rbDelivery(v){ RB_DELIV=v; document.querySelectorAll('#rb_deliv button').forEach(b=>b.classList.toggle('on', b.dataset.v===v)); const a=$('#rb_addrwrap'); if(a) a.classList.toggle('hidden', v!=='Mailed'); }
+function rbDelivery(v){ RB_DELIV=v; document.querySelectorAll('#rb_deliv button').forEach(b=>b.classList.toggle('on', b.dataset.v===v)); }
 function rbLines(){ return [...document.querySelectorAll('#rb_lines .rbline')].map(r=>({date:r.querySelector('.rb_date').value, category:r.querySelector('.rb_cat').value, amount:+r.querySelector('.rb_amt').value||0})); }
 function rbCalc(){ const sub=rbLines().reduce((s,x)=>s+x.amount,0); const adv=+($('#rb_adv')&&$('#rb_adv').value)||0; const t=$('#rb_total'); if(t) t.textContent='$'+Math.max(0,sub-adv).toFixed(2); }
 function rbDrawFiles(){ const l=$('#rb_filelist'); if(l) l.innerHTML=RB_FILES.map((f,i)=>`\u{1F4CE} ${esc(f.name)} <a href="#" onclick="RB_FILES.splice(${i},1);rbDrawFiles();return false">remove</a>`).join(' \u00b7 ')||''; }

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.109.1-reimb-email"
+VERSION = "10.109.2-reimb-address"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1662,7 +1662,8 @@ def reimb_email_body(row, items, folder_link=None, instr_email=None):
     return (f"{row['name']} submitted an expense reimbursement request through the Gibby Class Manager.\n\n"
             f"Class: {row['class_title']}\n\n{lines}\n\n  Sub total: ${float(row.get('subtotal') or 0):.2f}\n  Less advance: ${float(row.get('advance') or 0):.2f}\n  TOTAL DUE: ${float(row.get('total') or 0):.2f}\n\n"
             + (f"Details: {row['details']}\n\n" if row.get("details") else "")
-            + f"Check delivery: {delivery}" + (f" to {row['address']}" if delivery == "Mailed" and row.get("address") else "") + "\n\n"
+            + f"Check delivery: {delivery}\n"
+            + f"Address: {row.get('address') or row.get('profile_address') or 'not on file (ask the instructor)'}\n\n"
             + "The completed form (PDF) and the receipts are attached" + (f" and filed on Drive: {folder_link or row.get('drive_folder')}" if (folder_link or row.get("drive_folder")) else "") + ".\n\n"
             + f"Reply to this email to reach {row['name']} directly" + (f" ({instr_email or row.get('instr_email')})" if (instr_email or row.get("instr_email")) else "") + ".")
 
@@ -1675,7 +1676,7 @@ def reimb_pdf_text(r, items, receipts):
         L.append(f"{it['date']:<16} {it['category']:<25} ${it['amount']:>9.2f}")
     L += ["", f"Sub total: ${r['subtotal']:.2f}", f"Less advance: ${r['advance']:.2f}", f"TOTAL DUE: ${r['total']:.2f}", "",
           "Details:", r['details'] or "(none)", "",
-          f"Reimbursement delivery: {r['delivery']}" + (f" to {r['address']}" if r['delivery'] == 'Mailed' and r['address'] else ""), "",
+          f"Reimbursement delivery: {r['delivery']}", f"Address: {r.get('address') or r.get('profile_address') or 'not on file'}", "",
           "Receipts attached: " + (", ".join(x['name'] for x in receipts) or "none"), "",
           "Submitted through the Gibby Class Manager. Date received: __________  Approved by: __________"]
     return "\n".join(L)
@@ -5697,6 +5698,9 @@ class H(http.server.BaseHTTPRequestHandler):
             delivery = str(b.get("delivery") or "").strip()
             if delivery not in REIMB_DELIVERY: c.close(); return self.send_json({"error":"Pick how you would like the check: mailed, hand delivered, or placed in the office."},400)
             address = str(b.get("address") or "").strip()[:200]
+            if not address:
+                prof = c.execute("SELECT address FROM users WHERE id=?", (u["id"],)).fetchone()
+                address = ((prof["address"] if prof else "") or "").strip()[:200]
             if delivery == "Mailed" and len(address) < 8: c.close(); return self.send_json({"error":"Add the address the check should be mailed to."},400)
             files = []
             for f in (b.get("files") or [])[:6]:
@@ -5761,7 +5765,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             rid = int(mrp2.group(1)); c = db()
-            r = c.execute("SELECT r.*, us.email AS instr_email FROM reimb_requests r JOIN users us ON us.id=r.user_id WHERE r.id=?", (rid,)).fetchone()
+            r = c.execute("SELECT r.*, us.email AS instr_email, us.address AS profile_address FROM reimb_requests r JOIN users us ON us.id=r.user_id WHERE r.id=?", (rid,)).fetchone()
             if not r: c.close(); return self.send_json({"error":"not found"},404)
             if r["status"] not in ("approved", "paid"): c.close(); return self.send_json({"error":"Approve it first; then it can be resent."},400)
             files = [dict(x) for x in c.execute("SELECT name, mime, b64 FROM reimb_files WHERE req_id=? ORDER BY id", (rid,)).fetchall()]
@@ -5772,7 +5776,7 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             rid = int(mrp2.group(1)); b = self.read_json(); c = db()
-            r = c.execute("SELECT r.*, us.email AS instr_email FROM reimb_requests r JOIN users us ON us.id=r.user_id WHERE r.id=?", (rid,)).fetchone()
+            r = c.execute("SELECT r.*, us.email AS instr_email, us.address AS profile_address FROM reimb_requests r JOIN users us ON us.id=r.user_id WHERE r.id=?", (rid,)).fetchone()
             if not r: c.close(); return self.send_json({"error":"not found"},404)
             first = (r["name"] or "").split(" ")[0] or "there"
             if mrp2.group(2) == "decline":
