@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.110.0-contracts"
+VERSION = "10.111.0-rebook"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -5653,6 +5653,70 @@ class H(http.server.BaseHTTPRequestHandler):
                 if a.lower() not in seen: seen.add(a.lower()); to.append(a)
             mailer.send(to, f"Fully signed: {ag['title']}", body, attachments=pdf_att)
             return self.send_json({"ok":True, "done": True})
+        mrb = re.match(r"^/api/classes/(\d+)/rebook$", p)
+        if mrb:
+            # Admin sets the booked window (setup to cleanup) for every session of a
+            # class, and the class's own start and end inside it, in one go. The old
+            # slots are released and the new ones claimed, whatever the class's status.
+            u = self.require("admin")
+            if not u: return
+            cid = int(mrb.group(1)); b = self.read_json(); c = db()
+            row = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (cid,)).fetchone()
+            if not row: c.close(); return self.send_json({"error":"not found"},404)
+            cls = dict(row)
+            want = []
+            for s in (b.get("sessions") or []):
+                d = str(s.get("date") or "").strip(); st = str(s.get("start") or "").strip(); en = str(s.get("end") or "").strip()
+                if not (d and st and en and tmin(st) < tmin(en)): c.close(); return self.send_json({"error":"Each session needs a date, a start and an end."},400)
+                want.append((d, st, en))
+            if not want: c.close(); return self.send_json({"error":"Give at least one session."},400)
+            room = str(b.get("room") or cls.get("room") or "").strip()
+            ct = str(b.get("class_time") or cls.get("class_time") or "").strip()
+            parts = re.split(r"\s*[–-]\s*", ct)
+            if len(parts) != 2 or not (tmin(parts[0]) < tmin(parts[1])): c.close(); return self.send_json({"error":"Could not read the class time."},400)
+            lo, hi = tmin(want[0][1]), tmin(want[0][2])
+            if not (lo <= tmin(parts[0]) and tmin(parts[1]) <= hi):
+                c.close(); return self.send_json({"error":f"The class time {ct} must sit inside the booked window {want[0][1]} to {want[0][2]}."},400)
+            try: old_ids = [int(x) for x in json.loads(cls.get("slot_ids") or "[]")]
+            except Exception: old_ids = []
+            begin_immediate(c)
+            if old_ids:
+                c.execute(f"UPDATE slots SET status='available' WHERE id IN ({','.join('?'*len(old_ids))}) AND status='claimed'", old_ids)
+            sessions, all_ids = [], []
+            for (d, st, en) in want:
+                need = [(fmt_min(m), fmt_min(m + 30)) for m in range(tmin(st), tmin(en), 30)]
+                ids = []
+                for (a1, a2) in need:
+                    r2 = c.execute("""SELECT id FROM slots WHERE date=? AND start=? AND end=? AND status='available' AND deleted_at IS NULL
+                                      AND (room=? OR room='') ORDER BY (room=?) DESC LIMIT 1""", (d, a1, a2, room, room)).fetchone()
+                    if not r2:
+                        c.execute("ROLLBACK"); c.close()
+                        return self.send_json({"error":f"{d} {a1} to {a2} in the {room} is not open on the calendar."},400)
+                    ids.append(r2["id"])
+                sessions.append({"date": d, "start": st, "end": en, "slot_ids": ids}); all_ids += ids
+            c.execute(f"UPDATE slots SET status='claimed' WHERE id IN ({','.join('?'*len(all_ids))})", all_ids)
+            mins = tmin(parts[1]) - tmin(parts[0])
+            length = f"{mins} minutes" if mins < 60 else ("1 hour" if mins == 60 else f"{mins/60:g} hours")
+            c.execute("""UPDATE classes SET slot_date=?, slot_time=?, class_time=?, room=?, is_series=?, session_count=?, session_dates=?, slot_ids=?, length=? WHERE id=?""",
+                      (want[0][0], f"{want[0][1]} – {want[0][2]}", f"{parts[0]} – {parts[1]}", room, 1 if len(sessions) > 1 else 0,
+                       len(sessions), json.dumps(sessions), json.dumps(all_ids), length, cid))
+            audit(c, cid, cls.get("status"), "rebooked", u["id"])
+            fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
+            c.commit(); c.close()
+            eb_result = gcal_result = "skipped (not published)"
+            if fresh.get("status") == "approved":
+                cfg = integrations.load_config()
+                try: eb_result = integrations.update_eventbrite_details(fresh, cfg) + "; times " + integrations.update_eventbrite_times(fresh, cfg)
+                except Exception as e: eb_result = f"failed: {e}"
+                try:
+                    gcfg = gcal.load_gcal_config(); ext = json.loads(fresh.get("external_ids") or "{}")
+                    if ext.get("gcal_event_id"):
+                        gcal.delete_events(ext.get("gcal_event_id") or "", gcfg)
+                        new_gid = gcal.create_event({**fresh, "instructor_name": u.get("name","")}, gcfg)
+                        if new_gid: merge_external(cid, {"gcal_event_id": new_gid})
+                        gcal_result = "rebuilt"
+                except Exception as e: gcal_result = f"failed: {e}"
+            return self.send_json({"ok":True, "sessions": sessions, "slot_time": fresh["slot_time"], "class_time": fresh["class_time"], "eventbrite": eb_result, "calendar": gcal_result})
         msc = re.match(r"^/api/classes/(\d+)/send-contract$", p)
         if msc:
             # An approved class that skipped the contract step (an imported Eventbrite

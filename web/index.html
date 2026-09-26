@@ -3521,7 +3521,12 @@ function openLiveEdit(id){
       return `<label style="margin-top:14px">When the class itself runs</label>
       <div class="meta">Booked: ${esc(c.slot_date||'')} · ${esc(c.slot_time||'')} in the ${esc(c.room||'')}${c.is_series?' · '+(c.sessions||[]).length+' weekly sessions':''}. The class time must sit inside that window.</div>
       <div class="two" style="margin-top:6px"><div><label style="margin-top:0">Starts</label><select id="e_cstart">${opts(cur[0])}</select></div><div><label style="margin-top:0">Ends</label><select id="e_cend">${opts(cur[1])}</select></div></div>
-      <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. A time marked "outside booking" grows the booking to fit when you save. Need a different day? <a href="#" onclick="startReschedule(${c.id});return false">Change the date</a>.</div>`; })()}
+      <div class="hint">Saving pushes the new time to Eventbrite, the calendar and the website. Students are not emailed. A time marked "outside booking" grows the booking to fit when you save. Need a different day? <a href="#" onclick="startReschedule(${c.id});return false">Change the date</a>.</div>
+      <label style="margin-top:12px">Booked window (setup to cleanup)</label>
+      <div class="meta">The room is held for this whole window${c.is_series?' on every session date':''}; the class itself runs inside it.</div>
+      <div class="two" style="margin-top:6px"><div><label style="margin-top:0">From</label><select id="e_wstart">${(()=>{let o='';for(let m=6*60;m<=22*60;m+=30){o+=`<option${fmtT(m)===win[0]?' selected':''}>${fmtT(m)}</option>`;}return o;})()}</select></div><div><label style="margin-top:0">To</label><select id="e_wend">${(()=>{let o='';for(let m=6*60+30;m<=22*60+30;m+=30){o+=`<option${fmtT(m)===win[1]?' selected':''}>${fmtT(m)}</option>`;}return o;})()}</select></div></div>
+      <button type="button" class="btn ghost" style="margin-top:8px;padding:9px 16px" onclick="rebookWindow(${c.id})">Apply the booked window</button>
+      <div class="hint">Releases the old times and holds the new ones on the calendar at once. If a time is already taken, nothing changes and it tells you.</div>`; })()}
     ${c.is_series&&(c.sessions||[]).length?`<label style="margin-top:14px">Session dates (${c.sessions.length})</label>
       <div class="meta">Untick a date to skip it. A make-up week is added after ${esc(c.sessions[c.sessions.length-1].date)} (never in between) so the course keeps ${c.sessions.length} sessions. Same time and room.</div>
       <div id="e_sessions" style="margin-top:6px">${c.sessions.map(s=>`<label class="chk" style="margin:4px 0"><input type="checkbox" class="e_sess" value="${esc(s.date)}" checked> ${esc(s.date)} \u00b7 ${esc(s.start)} \u2013 ${esc(s.end)}</label>`).join('')}</div>
@@ -3545,6 +3550,19 @@ function openLiveEdit(id){
     <div class="fab"><div class="two">
       <button class="btn ghost" onclick="renderAdmin('approvals')">Cancel</button>
       <button class="btn green" onclick="submitLiveEdit(${id})">Save &amp; update everywhere</button></div></div>`;
+}
+async function rebookWindow(id){
+  const c=(window.__classes||[]).find(x=>x.id===id)||{};
+  const ws=$('#e_wstart').value, we=$('#e_wend').value;
+  const cs=$('#e_cstart')?$('#e_cstart').value:null, ce=$('#e_cend')?$('#e_cend').value:null;
+  const ct=(cs&&ce)?(cs+' – '+ce):(c.class_time||c.slot_time);
+  const dates=(c.sessions&&c.sessions.length)?c.sessions.map(s=>s.date):[c.slot_date];
+  if(!confirm(`Hold the ${c.room} ${ws} to ${we} on ${dates.join(', ')}, with the class at ${ct}?`)) return;
+  try{
+    const r=await api('/api/classes/'+id+'/rebook','POST',{sessions:dates.map(d=>({date:d,start:ws,end:we})), class_time:ct});
+    alert(`Booked ${r.slot_time}, class ${r.class_time}.\nEventbrite: ${r.eventbrite}. Calendar: ${r.calendar}.`);
+    renderAdmin('approvals');
+  }catch(e){ showErr('eerr',(e.data&&e.data.error)||e.message); }
 }
 async function saveSessions(id){
   const c=(window.__classes||[]).find(x=>x.id===id)||{};
@@ -5352,7 +5370,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','resubmitProfile','sendContract','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','resubmitProfile','sendContract','rebookWindow','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();

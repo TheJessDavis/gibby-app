@@ -140,6 +140,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   `skip` dates, adding make-up weeks at the end (`find_series_sessions`), reclaims slots, updates
   Eventbrite's date list and the calendar, optionally emails students. On the edit form under
   "Session dates". `series_skip` stores the skipped labels.
+- **Rebook** (`/api/classes/{id}/rebook`, admin, any status): sets the booked window (setup to
+  cleanup) for every session date and the class time inside it, releasing the old slots and
+  claiming the new; a one-day class becomes a series when given several dates. On the edit form as
+  "Booked window". Approved classes push Eventbrite and the calendar.
 - **Admin "Edit this class"** (`openLiveEdit` / `update-live`): every field, plus the class's own
   start and end inside the booked window (pushed to Eventbrite via `update_eventbrite_times`, the
   calendar is recreated, the website reads the DB) and all three images (landscape poster to
