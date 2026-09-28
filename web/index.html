@@ -2651,7 +2651,7 @@ async function adminMoney(){
         ${r.status==='paid'?`<span class="pill appr" style="flex:none">paid</span> <a href="#" onclick="reimbPaid(${r.id},false);return false" style="font-size:12px">undo</a>`
           :r.status==='declined'?`<span class="pill inc" style="flex:none">declined</span>`
           :r.status==='approved'?`<span style="flex:none;text-align:right"><span class="pill ir">approved by ${esc(r.approved_by||'')}</span><br><button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px;margin-top:6px" onclick="reimbPaid(${r.id},true)">Paid</button><br><a href="#" onclick="reimbApprove(${r.id},'resend');return false" style="font-size:12px">send to the treasurer again</a></span>`
-          :`<span style="flex:none;text-align:right"><button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px" onclick="reimbApprove(${r.id},'approve')">Approve</button><br><a href="#" onclick="reimbApprove(${r.id},'decline');return false" style="font-size:12px">decline</a></span>`}</div></div>`).join('')}`; })()}
+          :`<span style="flex:none;text-align:right">${r.marketing?'<span class="pill pend">Lou approves (marketing)</span><br>':''}<button class="btn dark" style="width:auto;padding:8px 14px;font-size:13px;margin-top:4px" onclick="reimbApprove(${r.id},'approve')">Approve</button><br><a href="#" onclick="reimbApprove(${r.id},'decline');return false" style="font-size:12px">decline</a></span>`}</div></div>`).join('')}`; })()}
     ${MT==='tickets'?(chanRow||'<div class="muted">No ticket source data yet.</div>'):''}
     ${MT!=='summary'?'':`<p class="sub">Classes that have already run; upcoming ones are left out of the averages.
       ${DRIVE.treasurer_sheet?`&nbsp;<a href="${DRIVE.treasurer_sheet}" target="_blank" rel="noopener"><b>Open the Treasurer Sheet \u2197</b></a>`:''}</p>`}
@@ -4060,7 +4060,9 @@ async function instrReimb(){
     <p class="sub">The Everett's expense reimbursement form, filled in here. It goes to the treasurer with your receipts attached.</p>
     <div class="card">
       <label style="margin-top:0">Which class is this for?</label>
-      <select id="rb_class">${(d.classes||[]).length?'<option value="">Pick a class</option>'+d.classes.map(c=>`<option value="${c.id}">${esc(c.title)} \u00b7 ${esc(c.slot_date||'')}</option>`).join(''):'<option value="">You have no classes yet</option>'}</select>
+      <select id="rb_class" onchange="const w=$('#rb_purposewrap'); if(w) w.classList.toggle('hidden', this.value!=='other')"><option value="">Pick a class</option>${(d.classes||[]).map(c=>`<option value="${c.id}">${esc(c.title)} \u00b7 ${esc(c.slot_date||'')}</option>`).join('')}<option value="other">Not for a class (an event, a party, the studio, marketing)</option></select>
+      <div id="rb_purposewrap" class="hidden"><label>What was it for?</label><input id="rb_purpose" placeholder="e.g. Halloween party supplies, October flyers"></div>
+      <div class="hint">Marketing expenses are approved by Lou Booker; everything else by The Gibby's admins.</div>
       <label>What you bought</label>
       <div class="meta" style="margin-top:0">One line per receipt: the date on the receipt, the kind of expense, the amount.</div>
       <div id="rb_lines">${line(0)}</div>
@@ -4100,7 +4102,7 @@ async function rbPickFiles(ev){
 async function sendReimb(){
   const err=$('#rb_err'); err.classList.remove('show');
   const items=rbLines().filter(x=>x.amount>0||x.date);
-  const body={class_id:+$('#rb_class').value||0, items, details:$('#rb_details').value.trim(), advance:+$('#rb_adv').value||0, delivery:RB_DELIV, address:($('#rb_addr')?$('#rb_addr').value.trim():''), files:RB_FILES};
+  const body={class_id:+$('#rb_class').value||0, purpose:($('#rb_class').value==='other'&&$('#rb_purpose'))?$('#rb_purpose').value.trim():'', items, details:$('#rb_details').value.trim(), advance:+$('#rb_adv').value||0, delivery:RB_DELIV, address:($('#rb_addr')?$('#rb_addr').value.trim():''), files:RB_FILES};
   if(!body.class_id){ err.textContent='Pick which class this is for.'; err.classList.add('show'); return; }
   if(!items.length || items.some(x=>!x.date||!(x.amount>0))){ err.textContent='Each line needs the receipt date and an amount.'; err.classList.add('show'); return; }
   if(!RB_FILES.length){ err.textContent='Attach the receipt: a photo or a PDF.'; err.classList.add('show'); return; }
@@ -4689,6 +4691,7 @@ function applyDraft(p){
   set('#f_cstart',p.class_start); set('#f_cend',p.class_end);
   (p.age_range||'').split(',').map(s=>s.trim()).filter(Boolean).forEach(a=>{
     const cb=document.querySelector(`#f_ages input[value="${a}"]`); if(cb) cb.checked=true; });
+  fillCustomAge('f_', p.age_range);
   if($('#f_own')) $('#f_own').checked = !!p.own_materials;
   if($('#f_bring')) $('#f_bring').checked = !!p.students_bring;
   if($('#f_bringlist')) $('#f_bringlist').value = p.bring_list||'';
@@ -4812,6 +4815,9 @@ function openForm(slot, draftPayload){
     <div class="fsec"><span>2</span><b>Who it&rsquo;s for</b></div>
     <label style="margin-top:0">Age range (choose all that apply)</label>
     <div class="chkgrid" id="f_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" onchange="ageChanged()"> ${a}</label>`).join('')}</div>
+    <label class="chk" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"><input type="checkbox" id="f_agecustom" onchange="ageChanged()"> Other: ages
+      <input id="f_agelo" type="number" min="1" max="99" placeholder="7" oninput="$('#f_agecustom').checked=true;ageChanged()" style="width:64px;display:inline-block;margin:0;padding:6px 8px"> to
+      <input id="f_agehi" type="number" min="1" max="99" placeholder="12" oninput="$('#f_agecustom').checked=true;ageChanged()" style="width:64px;display:inline-block;margin:0;padding:6px 8px"></label>
     <div class="hint" id="f_agepreview"></div>
 
     <div class="fsec"><span>3</span><b>The photo</b></div>
@@ -4957,7 +4963,20 @@ function openForm(slot, draftPayload){
 }
 // Under-14 groups trigger the "do you need a volunteer assistant?" question.
 const KID_AGES=['Ages 2–4','Ages 5–7','Ages 8–10','Ages 8–12','Ages 11–14','Elementary Students','Middle School Students'];
-function selectedAges(){ return [...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); }
+function customAge(pfx){
+  const on=$('#'+pfx+'agecustom'), lo=$('#'+pfx+'agelo'), hi=$('#'+pfx+'agehi');
+  if(!(on&&on.checked&&lo&&hi)) return null;
+  const a=+lo.value, b=+hi.value;
+  return (a>0 && b>=a) ? `Ages ${a}\u2013${b}` : null;
+}
+function selectedAges(){ const l=[...document.querySelectorAll('#f_ages input:checked')].map(x=>x.value); const c=customAge('f_'); if(c) l.push(c); return l; }
+/* A stored range that is not one of the fixed chips (e.g. "Ages 7–12") fills the custom row. */
+function fillCustomAge(pfx, stored){
+  const odd=(stored||'').split(',').map(s=>s.trim()).filter(s=>s && !AGES.includes(s) && /^Ages \d+\s*[–-]\s*\d+$/.test(s));
+  if(!odd.length) return;
+  const n=odd[0].match(/\d+/g); const on=$('#'+pfx+'agecustom'), lo=$('#'+pfx+'agelo'), hi=$('#'+pfx+'agehi');
+  if(on&&lo&&hi){ on.checked=true; lo.value=n[0]; hi.value=n[1]; }
+}
 /* Mirrors age_label() on the server so the instructor sees the exact phrase that
    will appear on Eventbrite and the poster, not the raw checkbox list. */
 function ageBounds(s){
@@ -4985,11 +5004,16 @@ function ageLabel(list){
    the stored comma list, with the public phrase previewed underneath. */
 function ageChips(stored){
   const have=(stored||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const odd=have.find(s=>!AGES.includes(s) && /^Ages \d+\s*[–-]\s*\d+$/.test(s)); const n=odd?odd.match(/\d+/g):null;
   return `<div class="chkgrid" id="e_ages">${AGES.map(a=>`<label class="chk"><input type="checkbox" value="${a}" ${have.includes(a)?'checked':''} onchange="ageChipsChanged()"> ${a}</label>`).join('')}</div>
+    <label class="chk" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"><input type="checkbox" id="e_agecustom" ${odd?'checked':''} onchange="ageChipsChanged()"> Other: ages
+      <input id="e_agelo" type="number" min="1" max="99" value="${n?n[0]:''}" placeholder="7" oninput="$('#e_agecustom').checked=true;ageChipsChanged()" style="width:64px;display:inline-block;margin:0;padding:6px 8px"> to
+      <input id="e_agehi" type="number" min="1" max="99" value="${n?n[1]:''}" placeholder="12" oninput="$('#e_agecustom').checked=true;ageChipsChanged()" style="width:64px;display:inline-block;margin:0;padding:6px 8px"></label>
     <div class="hint" id="e_agepreview">${have.length?'Will appear as: '+esc(ageLabel(have)):''}</div>`;
 }
-function readAgeChips(){ return [...document.querySelectorAll('#e_ages input:checked')].map(x=>x.value).join(', '); }
-function ageChipsChanged(){ const p=$('#e_agepreview'); const sel=[...document.querySelectorAll('#e_ages input:checked')].map(x=>x.value); if(p) p.textContent = sel.length?'Will appear as: '+ageLabel(sel):''; }
+function readAgeChipsList(){ const l=[...document.querySelectorAll('#e_ages input:checked')].map(x=>x.value); const c=customAge('e_'); if(c) l.push(c); return l; }
+function readAgeChips(){ return readAgeChipsList().join(', '); }
+function ageChipsChanged(){ const p=$('#e_agepreview'); const sel=readAgeChipsList(); if(p) p.textContent = sel.length?'Will appear as: '+ageLabel(sel):''; }
 function ageChanged(){
   const sel=selectedAges();
   const kid=sel.some(a=>KID_AGES.includes(a));

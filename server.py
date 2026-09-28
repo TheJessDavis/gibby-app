@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.111.0-rebook"
+VERSION = "10.112.0-nonclass-costs"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1502,6 +1502,15 @@ def sweep_master_sheet():
     except Exception as ex:
         print("[sheet] update failed (will retry hourly):", ex)
 
+def refresh_unsigned_contract(c, cid):
+    """After a date, time or session change: an unsigned contract is rewritten so
+    the instructor signs the schedule that is actually booked. Signed ones stay."""
+    cls = c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone()
+    if not cls or cls["contract_status"] != "sent": return False
+    instr = c.execute("SELECT name FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
+    c.execute("UPDATE classes SET contract_text=? WHERE id=?", (build_contract_text(dict(cls), instr["name"] if instr else ""), cid))
+    return True
+
 def contract_ready_email(instr, cls, base_url=None, reminder=False):
     """The 'your contract is ready to sign' email (and its 3-day reminder)."""
     first = (instr.get("name") or "").split(" ")[0] or "there"
@@ -1633,7 +1642,14 @@ def incident_pdf_text(r):
 
 REIMB_TO_DEFAULT = "tjohnson@theeverett.org, mtruban@theeverett.org"   # Tina Johnson (treasurer) and Michelle Truban
 REIMB_CATEGORIES = ["Set materials", "Set/show paint", "Props", "Costumes", "Misc (show)",
-                    "Paint (facilities)", "Office supplies", "Concessions", "Misc (facilities)"]
+                    "Paint (facilities)", "Office supplies", "Concessions", "Marketing", "Event or party supplies", "Misc (facilities)"]
+MARKETING_APPROVER_DEFAULT = "lbooker@theeverett.org"   # Lou Booker approves anything with a Marketing line
+
+def marketing_approver():
+    return (_meta_get("marketing_approver") or MARKETING_APPROVER_DEFAULT).strip().lower()
+
+def reimb_needs_marketing(items):
+    return any((it.get("category") or "") == "Marketing" for it in (items or []))
 REIMB_DELIVERY = ["Mailed", "Hand delivered", "Placed in office"]
 
 def reimb_to():
@@ -4599,7 +4615,9 @@ class H(http.server.BaseHTTPRequestHandler):
             rows = [dict(r) for r in c.execute("""SELECT r.*, us.email AS instr_email FROM reimb_requests r JOIN users us ON us.id=r.user_id
                         ORDER BY r.status='submitted' DESC, r.id DESC LIMIT 200""").fetchall()]
             c.close()
-            for r in rows: r["items"] = _loads_list(r.get("items")); r["receipts"] = _loads_list(r.get("receipts"))
+            for r in rows:
+                r["items"] = _loads_list(r.get("items")); r["receipts"] = _loads_list(r.get("receipts"))
+                r["marketing"] = reimb_needs_marketing(r["items"])
             return self.send_json({"requests": rows, "to": ", ".join(reimb_to())})
         mrf2 = re.match(r"^/api/reimb/(\d+)/file/(\d+)$", p)
         if mrf2:
@@ -5700,6 +5718,7 @@ class H(http.server.BaseHTTPRequestHandler):
             c.execute("""UPDATE classes SET slot_date=?, slot_time=?, class_time=?, room=?, is_series=?, session_count=?, session_dates=?, slot_ids=?, length=? WHERE id=?""",
                       (want[0][0], f"{want[0][1]} – {want[0][2]}", f"{parts[0]} – {parts[1]}", room, 1 if len(sessions) > 1 else 0,
                        len(sessions), json.dumps(sessions), json.dumps(all_ids), length, cid))
+            refresh_unsigned_contract(c, cid)
             audit(c, cid, cls.get("status"), "rebooked", u["id"])
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
             c.commit(); c.close()
@@ -5732,14 +5751,19 @@ class H(http.server.BaseHTTPRequestHandler):
             if not instr: c.close(); return self.send_json({"error":"This class has no instructor."},400)
             instr = dict(instr)
             ctext = build_contract_text(cls, instr["name"])
+            again = cls.get("contract_status") == "sent"
             c.execute("""UPDATE classes SET contract_status='sent', contract_text=?, contract_sent_at=?, contract_reminded_at=NULL WHERE id=?""",
                       (ctext, datetime.datetime.now().isoformat(timespec="seconds"), cid))
             audit(c, cid, cls.get("status"), "contract-sent", u["id"])
             c.commit(); c.close()
             proto = self.headers.get("X-Forwarded-Proto","http"); host = self.headers.get("Host","localhost:8000")
             subj, body = contract_ready_email(instr, cls, f"{proto}://{host}")
+            if again:
+                subj = f"Updated contract for {cls['title']}"
+                body = (f"Hi {(instr.get('name') or '').split(' ')[0] or 'there'},\n\nThe dates or times for \"{cls['title']}\" changed, so your contract was rewritten to match. "
+                        f"Please read the new one and sign it in the app.\n\n" + body.split("\n\n", 1)[1])
             mailer.send(instr["email"], subj, body)
-            return self.send_json({"ok":True, "to": instr["email"]})
+            return self.send_json({"ok":True, "to": instr["email"], "updated": again})
         mss = re.match(r"^/api/classes/(\d+)/sessions$", p)
         if mss:
             # Admin reshapes a series: skip dates (a holiday), and the run extends by
@@ -5780,6 +5804,7 @@ class H(http.server.BaseHTTPRequestHandler):
             first_changed = new_sessions[0]["date"] != cls.get("slot_date")
             c.execute("UPDATE classes SET session_dates=?, session_count=?, slot_ids=?, series_skip=?, slot_date=? WHERE id=?",
                       (json.dumps(new_sessions), len(new_sessions), json.dumps(ids), json.dumps(skip), new_sessions[0]["date"], cid))
+            refresh_unsigned_contract(c, cid)
             audit(c, cid, cls.get("status"), "sessions-changed", u["id"])
             fresh = dict(c.execute("SELECT * FROM classes WHERE id=?", (cid,)).fetchone())
             students = [dict(r) for r in c.execute("SELECT name,email FROM registrations WHERE class_id=? AND refunded=0 AND email LIKE '%@%'", (cid,)).fetchall()]
@@ -5964,9 +5989,15 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return self.send_json({"error":"not signed in"},401)
             if self.rate_limited("reimb", u["id"]): return
             b = self.read_json(); c = db()
-            cls = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (int(b.get("class_id") or 0),)).fetchone()
-            if not cls or (u["role"] != "admin" and cls["instructor_id"] != u["id"]):
-                c.close(); return self.send_json({"error":"Pick which of your classes this is for."},400)
+            purpose = str(b.get("purpose") or "").strip()[:120]
+            cls = c.execute("SELECT * FROM classes WHERE id=? AND deleted_at IS NULL", (int(b.get("class_id") or 0),)).fetchone() if b.get("class_id") else None
+            if cls and (u["role"] != "admin" and cls["instructor_id"] != u["id"]): cls = None
+            if not cls and len(purpose) < 3:
+                c.close(); return self.send_json({"error":"Pick which of your classes this is for, or choose \"Not for a class\" and say what it was for."},400)
+            # Not every expense belongs to a class: a party, the studio, marketing.
+            ctitle = cls["title"] if cls else purpose
+            cdate = (cls["slot_date"] or "") if cls else ""
+            cid_val = cls["id"] if cls else None
             items = []
             for x in (b.get("items") or [])[:20]:
                 if not isinstance(x, dict): continue
@@ -6001,18 +6032,18 @@ class H(http.server.BaseHTTPRequestHandler):
                 files.append({"name": re.sub(r"[^A-Za-z0-9._ -]+", "-", str(f.get("name") or "receipt"))[:80], "mime": mime, "b64": b64})
             if not files: c.close(); return self.send_json({"error":"Attach the receipt: a photo or a PDF. Every request needs one."},400)
             subtotal = round(sum(it["amount"] for it in items), 2); total = round(max(0.0, subtotal - advance), 2)
-            row = {"name": u["name"] or u["email"], "created": now(), "class_title": f"{cls['title']} ({cls['slot_date'] or ''})".strip(),
+            row = {"name": u["name"] or u["email"], "created": now(), "class_title": (f"{ctitle} ({cdate})" if cdate else ctitle).strip(),
                    "subtotal": subtotal, "advance": advance, "total": total, "details": details, "delivery": delivery, "address": address}
             c.execute("""INSERT INTO reimb_requests(user_id,class_id,class_title,name,items,details,advance,subtotal,total,delivery,address,status,created)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,'submitted',?)""",
-                      (u["id"], cls["id"], row["class_title"], row["name"], json.dumps(items), details, advance, subtotal, total, delivery, address, row["created"]))
+                      (u["id"], cid_val, row["class_title"], row["name"], json.dumps(items), details, advance, subtotal, total, delivery, address, row["created"]))
             rid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
             for f in files:
                 c.execute("INSERT INTO reimb_files(req_id,name,mime,b64,created) VALUES(?,?,?,?,?)", (rid, f["name"], f["mime"], f["b64"], now()))
             c.commit(); c.close()
             # The form as a PDF, then everything to Drive under its own folder.
             pdf_bytes = pdfgen.contract_pdf(reimb_pdf_text(row, items, files), None, [f"Request #{rid}", f"Submitted {row['created'][:16].replace('T',' ')} by {row['name']} ({u['email']})"])
-            folder_title = f"{row['name']} - {row['created'][:10]} - {cls['title']}"
+            folder_title = f"{row['name']} - {row['created'][:10]} - {ctitle}"
             links, pdf_link, folder_link = [], None, None
             try:
                 res = push_photo_to_drive({"title": folder_title}, f"Reimbursement request #{rid}.pdf", base64.b64encode(pdf_bytes).decode(), "application/pdf", root="Gibby Reimbursements")
@@ -6037,12 +6068,16 @@ class H(http.server.BaseHTTPRequestHandler):
             body = reimb_email_body(row, items, folder_link=folder_link, instr_email=u["email"])
             # An admin approves first; only then does it go to the treasurer.
             c = db(); c.execute("UPDATE reimb_requests SET email_body=? WHERE id=?", (body, rid)); c.commit(); c.close()
-            mailer.send([a for a in emails_for(db(), "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()],
-                        f"Approve? Reimbursement request: ${total:.2f} from {row['name']} ({cls['title']})",
-                        body + f"\n\nNothing has gone to the treasurer yet. Approve or decline it under More > Money in the app: {mailer.APP_URL}",
+            mk = reimb_needs_marketing(items)
+            approvers = [a for a in emails_for(db(), "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()]
+            if mk and marketing_approver() not in [a.lower() for a in approvers]: approvers.append(marketing_approver())
+            mailer.send(approvers,
+                        ("Lou to approve: " if mk else "Approve? ") + f"Reimbursement request: ${total:.2f} from {row['name']} ({ctitle})",
+                        body + ("\n\nThis one has a Marketing line, so it needs Lou Booker's approval." if mk else "")
+                        + f"\n\nNothing has gone to the treasurer yet. Approve or decline it under More > Money in the app: {mailer.APP_URL}",
                         attachments=atts, reply_to=u["email"])
-            mailer.send(u["email"], f"Your reimbursement request for {cls['title']} was received",
-                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour request for ${total:.2f} for \"{cls['title']}\" is in. An admin at The Gibby looks it over first; "
+            mailer.send(u["email"], f"Your reimbursement request for {ctitle} was received",
+                f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour request for ${total:.2f} for \"{ctitle}\" is in. {'Lou Booker' if mk else 'An admin at The Gibby'} looks it over first; "
                 f"once approved it goes to the treasurer with the form and your receipt{'s' if len(files) != 1 else ''} attached, and you will hear about the check ({delivery.lower()}).\n\n"
                 + (f"Your copy on Drive: {folder_link}\n\n" if folder_link else "") + "Thank you,\nThe Gibby", attachments=atts[:1])
             return self.send_json({"ok":True, "id": rid, "total": total, "folder": folder_link})
@@ -6074,6 +6109,8 @@ class H(http.server.BaseHTTPRequestHandler):
                     f"Hi {first},\n\nWe could not approve the ${r['total']:.2f} request for \"{r['class_title']}\".\n\n" + (f"  {note}\n\n" if note else "")
                     + f"Reply to this email if you have a question.\n\nThe Gibby", reply_to=u.get("email"))
                 return self.send_json({"ok":True})
+            if reimb_needs_marketing(_loads_list(r["items"])) and (u.get("email") or "").lower() != marketing_approver():
+                c.close(); return self.send_json({"error":"This request has a Marketing line, so only Lou Booker can approve it."},400)
             files = [dict(x) for x in c.execute("SELECT name, mime, b64 FROM reimb_files WHERE req_id=? ORDER BY id", (rid,)).fetchall()]
             c.execute("UPDATE reimb_requests SET status='approved', approved_by=?, approved_at=? WHERE id=?", (u["name"], now(), rid)); c.commit(); c.close()
             send_reimb_approved(dict(r), files, u["name"], now()[:10])
@@ -7505,6 +7542,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 bl = str(b.get("bring_list") or "").strip()[:1500]
                 sets.append("bring_list=?"); vals.append(bl)
                 sets.append("students_bring=?"); vals.append(1 if bl else 0)
+                if bl: sets.append("own_materials=?"); vals.append(0)   # students bring it: the instructor is not buying
+            if "own_materials" in b: sets.append("own_materials=?"); vals.append(1 if b["own_materials"] else 0)
             time_changed = False
             if b.get("class_time"):
                 # The class's own start and end, inside the booked window. The window
@@ -8131,6 +8170,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 bl = str(b.get("bring_list") or "").strip()[:1500]
                 sets.append("bring_list=?"); vals.append(bl)
                 sets.append("students_bring=?"); vals.append(1 if bl else 0)
+                if bl: sets.append("own_materials=?"); vals.append(0)   # students bring it: the instructor is not buying
+            if "own_materials" in b: sets.append("own_materials=?"); vals.append(1 if b["own_materials"] else 0)
             if b.get("quiet"):
                 # A small fix (a capital letter, a typo): save it and leave the class
                 # exactly where it was. No status change, no email, no approval loop.

@@ -144,6 +144,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   cleanup) for every session date and the class time inside it, releasing the old slots and
   claiming the new; a one-day class becomes a series when given several dates. On the edit form as
   "Booked window". Approved classes push Eventbrite and the calendar.
+- **Ages**: fixed chips (AGES) plus an "Other: ages N to M" row on the class form and the admin edit
+  form (`customAge`, `fillCustomAge`); the value is a plain "Ages 7–12" string and merges with the
+  other picks through `age_label`.
+- **Contracts follow dates**: `refresh_unsigned_contract` rewrites a `sent` (unsigned) contract after
+  `sessions` or `rebook` changes; `send-contract` on a class whose contract is already out re-sends it
+  as "Updated contract".
 - **Admin "Edit this class"** (`openLiveEdit` / `update-live`): every field, plus the class's own
   start and end inside the booked window (pushed to Eventbrite via `update_eventbrite_times`, the
   calendar is recreated, the website reads the DB) and all three images (landscape poster to
@@ -212,7 +218,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   new requests email admins, `/api/supplies/{id}/approved` sends them to `supply_to` (Michelle) with
   the approver's name, then Ordered and Ready. Both have a `resend` action (Money: "send to the
   treasurer again"; Orders: "send again") that re-emails an approved request with the original
-  approver, for requests that went out before the approval step. The old per-class "Get paid back for supplies" flow
+  approver, for requests that went out before the approval step. A request can be "Not for a class"
+  (class_id NULL, `purpose` becomes class_title: a party, the studio, marketing). Categories include
+  Marketing and Event or party supplies; any Marketing line means only `marketing_approver()` (meta,
+  default Lou Booker lbooker@theeverett.org) may approve, and the approval email goes to Lou too. The old per-class "Get paid back for supplies" flow
   (`reimbursements` table) is retired.
 - **Contracts to sign** (`agreements` + `agreement_signers`, Sep 25 2026; More > Records > Contracts):
   any contract text with one or more signers in order. `/api/admin/agreements` creates and emails the
