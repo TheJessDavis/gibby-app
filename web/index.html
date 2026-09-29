@@ -2014,13 +2014,15 @@ async function adminReviews(){
     <label style="margin-top:0">The page itself</label>
     <div class="card"><label style="margin-top:0">Title</label><input id="wp_title" value="${esc(s.artists_title||'Meet Our Teaching Artists')}">
       <label>Intro paragraph</label><textarea id="wp_intro" rows="3">${esc(s.artists_intro||'')}</textarea>
+      <label>Individual artist pages</label><input id="wp_artist" value="${esc(s.artist_page||'')}" placeholder="/teaching-artist">
+      <div class="hint">The address of the Squarespace page that holds <code>&lt;div id="gibby-artist"&gt;&lt;/div&gt;</code>. Once it is set, every name on the main page links to that artist's own page (for example /teaching-artist?artist=jess-kille). Leave blank until the page exists.</div>
       <button class="btn dark" style="margin-top:10px" onclick="webPageSave()">Save the page text</button></div>
     <label>Waiting for approval (${pend.length})</label>${pend.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
     ${back.length?`<label>Change requested (${back.length})</label>${back.map(card).join('')}`:''}
     <label>On the website (${live.filter(u=>!u.web_hidden).length}${live.some(u=>u.web_hidden)?', '+live.filter(u=>u.web_hidden).length+' hidden':''})</label>${live.map(liveCard).join('')||'<div class="muted">Nobody yet.</div>'}`;
 }
 async function webPageSave(){
-  try{ await api('/api/admin/web-review-settings','POST',{title:$('#wp_title').value, intro:$('#wp_intro').value}); toast('Saved. The site picks it up within a minute.'); }catch(e){ alert(e.message); }
+  try{ await api('/api/admin/web-review-settings','POST',{title:$('#wp_title').value, intro:$('#wp_intro').value, artist_page:$('#wp_artist').value}); toast('Saved. The site picks it up within a minute.'); }catch(e){ alert(e.message); }
 }
 async function webEditSave(uid){
   try{ await api('/api/admin/web-review/'+uid+'/edit','POST',{bio:$('#wlt'+uid).value, pronouns:$('#wlp'+uid).value}); toast('Saved to the website.'); adminReviews(); }catch(e){ alert(e.message); }

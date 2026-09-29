@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.114.0-alcohol-cert"
+VERSION = "10.115.0-artist-pages"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1642,6 +1642,11 @@ BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
 
 ARTISTS_TITLE_DEFAULT = "Meet Our Teaching Artists"
+
+def artist_slug(name, uid):
+    """'Jess Kille' -> 'jess-kille': the address of an artist's own page on the site."""
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return s or f"artist-{uid}"
 ARTISTS_INTRO_DEFAULT = ("Meet the artists and instructors who bring The Gibby's creative workshops and classes to life. "
                          "Explore their work, learn a little about the people behind our programs, and discover upcoming opportunities to create with them.")
 
@@ -3484,6 +3489,8 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == "/embed.json": return self.embed_json()
         if p == "/embed/instructors.json": return self.embed_instructors_json()
         if p == "/embed/instructors": return self.embed_instructors_page()
+        mai = re.match(r"^/embed/instructor/([a-z0-9-]+)\.json$", p)
+        if mai: return self.embed_instructor_json(mai.group(1))
         mhs = re.match(r"^/headshot/(\d+)\.jpg$", p)
         if mhs:
             # Public headshot for the website's teaching artists list.
@@ -3845,11 +3852,12 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body); return
 
-    def _public_instructors(self):
-        """Teaching artists with a headshot or bio on their profile: the website's list."""
+    def _public_instructors(self, limit=3):
+        """Teaching artists with a headshot or bio on their profile: the website's list.
+        `classes` holds the next `limit` sign-up-open classes; `all_classes` every one."""
         c = db()
         rows = [dict(r) for r in c.execute("""SELECT id, name, substr(pub_headshot_web, 1, 12) || substr(pub_headshot_web, -64) AS photo,
-                    pub_bio AS bio, skills, social_website, social_instagram, social_etsy, role, pronouns
+                    pub_bio AS bio, skills, social_website, social_instagram, social_etsy, social_facebook, social_tiktok, role, pronouns
                     FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin') AND COALESCE(web_hidden,0)=0
                     AND (COALESCE(pub_bio,'')!='' OR COALESCE(pub_headshot_web,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
         c.close()
@@ -3879,14 +3887,29 @@ class H(http.server.BaseHTTPRequestHandler):
         out = []
         for r in rows:
             if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
-            out.append({"id": r["id"], "name": r["name"] or "", "pronouns": r.get("pronouns") or "", "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:3],
+            out.append({"id": r["id"], "slug": artist_slug(r["name"] or "", r["id"]), "name": r["name"] or "", "pronouns": r.get("pronouns") or "",
+                        "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:limit], "all_classes": upcoming.get(r["id"], []),
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
                         "img": (f"/headshot/{r['id']}.jpg?v=" + hashlib.sha1((r.get("photo") or "")[-64:].encode()).hexdigest()[:8]) if (r.get("photo") or "").startswith("data:image/") else "",
-                        "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or ""})
+                        "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or "",
+                        "facebook": r.get("social_facebook") or "", "tiktok": r.get("social_tiktok") or ""})
         return out
 
+    def embed_instructor_json(self, slug):
+        """One artist, for their own page on the site: everything the list has plus every upcoming class."""
+        hit = next((i for i in self._public_instructors() if i["slug"] == slug), None)
+        body = json.dumps({"artist": hit, "artists_page": "/meet-our-teaching-artists", "artist_page": (_meta_get("artist_page") or "").strip(),
+                           "title": (_meta_get("artists_title") or ARTISTS_TITLE_DEFAULT).strip()}).encode()
+        self.send_response(200 if hit else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body); return
+
     def embed_instructors_json(self):
-        body = json.dumps({"title": (_meta_get("artists_title") or ARTISTS_TITLE_DEFAULT).strip(), "intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT).strip(), "instructors": self._public_instructors()}).encode()
+        body = json.dumps({"title": (_meta_get("artists_title") or ARTISTS_TITLE_DEFAULT).strip(), "intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT).strip(),
+                           "artist_page": (_meta_get("artist_page") or "").strip(), "instructors": self._public_instructors()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -4832,6 +4855,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "web_review_to": ", ".join(web_review_to()),
                                    "artists_intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT),
                                    "artists_title": (_meta_get("artists_title") or ARTISTS_TITLE_DEFAULT),
+                                   "artist_page": (_meta_get("artist_page") or ""),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
@@ -6026,9 +6050,13 @@ class H(http.server.BaseHTTPRequestHandler):
             b = self.read_json()
             if b.get("title") is not None:
                 _meta_set("artists_title", str(b.get("title") or "").strip()[:120] or ARTISTS_TITLE_DEFAULT)
+            if b.get("artist_page") is not None:
+                ap = str(b.get("artist_page") or "").strip()[:120]
+                if ap and not ap.startswith("/"): ap = "/" + ap
+                _meta_set("artist_page", ap)
             if b.get("intro") is not None:
                 _meta_set("artists_intro", str(b.get("intro") or "").strip()[:600])
-            if b.get("intro") is not None or b.get("title") is not None:
+            if b.get("intro") is not None or b.get("title") is not None or b.get("artist_page") is not None:
                 if b.get("to") is None: return self.send_json({"ok":True})
             to = [e.strip().lower() for e in str(b.get("to") or "").replace(";", ",").split(",") if e.strip()]
             if not to or any(not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e) for e in to):

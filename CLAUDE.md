@@ -249,6 +249,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   (`/api/admin/web-review/{id}/edit`, which also emails the artist), a replacement headshot, and
   hide/show (`users.web_hidden`, INTEGER; hidden artists drop out of `/embed/instructors.json`).
   `site-embed.js` sets the code block's h1 from the feed's `title`.
+- **Individual artist pages** (Sep 29 2026): one Squarespace page holding `<h1>Teaching artist</h1>
+  <div id="gibby-artist"></div>` shows the artist named in `?artist=<slug>` (`artist_slug`, e.g.
+  jess-kille) from `/embed/instructor/<slug>.json` (headshot, bio, pronouns, links, every upcoming
+  class). The page's path is meta `artist_page` (Website page screen); while it is blank the main
+  list shows no links, once set every name and a "More about" link point there.
 - **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
   "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
   Reports", emailed with the PDF to `incident_to()` (default Michelle Truban mtruban@theeverett.org and

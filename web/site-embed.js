@@ -114,14 +114,14 @@ function renderInstructors(){
   host.setAttribute('data-done','1');
   // Paint the last list at once from this browser's memory, then refresh it.
   var cached=null; try{cached=JSON.parse(localStorage.getItem('gibby-artists')||'null')}catch(e){}
-  if(cached&&cached.instructors&&cached.instructors.length){paintArtists.title=cached.title||'';paintArtists(host,cached.instructors,cached.intro)}
+  if(cached&&cached.instructors&&cached.instructors.length){paintArtists.title=cached.title||'';paintArtists.page=cached.artist_page||'';paintArtists(host,cached.instructors,cached.intro)}
   else{host.innerHTML='<div style="opacity:.6;padding:24px 0">Loading our teaching artists\u2026</div>'}
   fetch(APP+'/embed/instructors.json').then(function(r){return r.json()}).then(function(d){
     try{localStorage.setItem('gibby-artists',JSON.stringify(d))}catch(e){}
     var list=d.instructors||[];
     if(!list.length){host.innerHTML='';return}
     if(cached&&JSON.stringify(cached)===JSON.stringify(d))return;
-    paintArtists.title=d.title||'';
+    paintArtists.title=d.title||''; paintArtists.page=d.artist_page||'';
     paintArtists(host,list,d.intro);
     rep('artists='+list.length);
   }).catch(function(e){rep('artists fetch failed: '+e)});
@@ -141,15 +141,56 @@ function paintArtists(host,list,intro){
       h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
         +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:100%;max-width:240px;aspect-ratio:4/5;height:auto;border-radius:0;object-fit:cover;object-position:center top;margin-bottom:14px;display:block">'
                :'<div style="width:100%;max-width:240px;aspect-ratio:4/5;border-radius:0;background:#EDE8DC;margin-bottom:14px"></div>')
-        +'<h3 style="margin:0 0 4px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500);font-size:1.35em;line-height:1.2">'+esc(i.name)+(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
+        +'<h3 style="margin:0 0 4px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500);font-size:1.35em;line-height:1.2">'
+        +(paintArtists.page&&i.slug?'<a href="'+esc(paintArtists.page)+'?artist='+esc(i.slug)+'" style="text-decoration:none;color:inherit">'+esc(i.name)+'</a>':esc(i.name))
+        +(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
         +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
         +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
         +((i.classes||[]).length?'<div style="margin-top:12px;font-size:.9em"><b>Upcoming classes</b><div style="height:6px"></div>'+i.classes.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'')
+        +(paintArtists.page&&i.slug?'<p style="margin:10px 0 0"><a href="'+esc(paintArtists.page)+'?artist='+esc(i.slug)+'">More about '+esc((i.name||'').split(' ')[0])+' \u2192</a></p>':'')
         +((i.website||i.etsy||i.instagram)?'<p style="margin-top:8px">'+[['website',i.website],['etsy',i.etsy],['instagram',i.instagram]].filter(function(x){return x[1]}).map(function(x){return '<a href="'+esc(x[1])+'" target="_blank" rel="noopener">'+(x[0]==='website'?esc(x[1].replace(/^https?:\/\//,'').replace(/\/$/,'')):x[0]==='etsy'?'Etsy shop':'Instagram')+'</a>'}).join(' \u00b7 ')+'</p>':'')
         +'</div>';
     });
     host.innerHTML=h+'</div>';
   }
+}
+/* ---------------- one teaching artist ----------------
+   A page with <div id="gibby-artist"></div> shows the artist named in the
+   address (?artist=jess-kille): headshot, bio, links, every upcoming class.
+   Same app data as the main list, so there is nothing else to maintain. */
+function renderArtist(){
+  var host=document.getElementById('gibby-artist');
+  if(!host||host.getAttribute('data-done'))return;
+  host.setAttribute('data-done','1');
+  var slug=(new URLSearchParams(location.search).get('artist')||'').toLowerCase().replace(/[^a-z0-9-]/g,'');
+  var blk=host.closest('.sqs-block-code')||host.parentElement;
+  var h1=blk&&blk.querySelector('h1');
+  function heading(t){ if(h1){ h1.textContent=t; h1.style.fontFamily='var(--heading-font-font-family, inherit)'; h1.style.fontWeight='var(--heading-font-font-weight, 500)'; h1.style.fontSize='clamp(2rem, 4vw, 3.4rem)'; h1.style.lineHeight='1.15'; h1.style.margin='0 0 .4em'; } }
+  var back='<p style="margin:0 0 18px"><a href="/meet-our-teaching-artists">\u2190 All teaching artists</a></p>';
+  if(!slug){ host.innerHTML=back+'<p>Pick an artist from the list.</p>'; return; }
+  host.innerHTML='<div style="opacity:.6;padding:24px 0">Loading\u2026</div>';
+  fetch(APP+'/embed/instructor/'+slug+'.json').then(function(r){return r.json()}).then(function(d){
+    var a=d&&d.artist;
+    if(!a){ heading('Teaching artist'); host.innerHTML=back+'<p>We could not find that artist. They may not be on the website yet.</p>'; return; }
+    heading(a.name+(a.pronouns?' ':''));
+    if(h1&&a.pronouns){ h1.innerHTML=esc(a.name)+' <span style="font-size:.45em;font-weight:400;opacity:.7">'+esc(a.pronouns)+'</span>'; }
+    document.title=a.name+' \u00b7 '+(d.title||'Teaching Artists');
+    var links=[['website',a.website],['instagram',a.instagram],['facebook',a.facebook],['tiktok',a.tiktok],['etsy',a.etsy]].filter(function(x){return x[1]});
+    var lab={website:function(u){return esc(u.replace(/^https?:\/\//,'').replace(/\/$/,''))},instagram:function(){return 'Instagram'},facebook:function(){return 'Facebook'},tiktok:function(){return 'TikTok'},etsy:function(){return 'Etsy shop'}};
+    var cls=a.all_classes||[];
+    host.innerHTML=back
+      +'<div style="display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:32px;align-items:start" class="gibby-artist-page">'
+      +'<div>'+(a.img?'<img src="'+APP+a.img+'" alt="'+esc(a.name)+'" style="width:100%;aspect-ratio:4/5;object-fit:cover;object-position:center top;display:block;border-radius:0">':'<div style="width:100%;aspect-ratio:4/5;background:#EDE8DC"></div>')
+      +(a.skills&&a.skills.length?'<div style="font-size:.85em;opacity:.7;margin-top:10px">'+esc(a.skills.join(' \u00b7 '))+'</div>':'')
+      +(links.length?'<p style="margin-top:10px">'+links.map(function(x){return '<a href="'+esc(x[1])+'" target="_blank" rel="noopener">'+lab[x[0]](x[1])+'</a>'}).join(' \u00b7 ')+'</p>':'')+'</div>'
+      +'<div><div style="white-space:pre-wrap;font-size:1.05em;line-height:1.6">'+esc(a.bio)+'</div>'
+      +'<h3 style="margin:28px 0 8px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500)">Upcoming classes with '+esc((a.name||'').split(' ')[0])+'</h3>'
+      +(cls.length?cls.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:block;margin:6px 0;padding:12px 16px;border:1px solid currentColor;text-decoration:none;line-height:1.3"><b>'+esc(c.title)+'</b><br><span style="font-size:.9em;opacity:.8">'+esc(c.when)+' \u00b7 register on Eventbrite \u2192</span></a>'}).join('')
+        :'<p style="opacity:.75">Nothing open for sign-up right now. Check back soon, or see <a href="/art-workshops">all upcoming workshops</a>.</p>')
+      +'</div></div>'
+      +'<style>@media(max-width:640px){.gibby-artist-page{grid-template-columns:1fr!important}}</style>';
+    rep('artist page '+slug);
+  }).catch(function(e){ host.innerHTML=back+'<p>Could not load this artist right now.</p>'; rep('artist fetch failed: '+e); });
 }
 /* One line under the Art Workshops intro pointing at the teaching artists page.
    Placed by this script so the busy workshops page never needs hand editing. */
@@ -326,6 +367,7 @@ function ginit(){
   var onWorkshops=location.pathname.indexOf('artworkshops')!==-1;
   var onHome=location.pathname==='/'||location.pathname==='';
   renderInstructors();
+  renderArtist();
   if(!onWorkshops&&!onHome)return;
   var tries=0;
   function load(){
