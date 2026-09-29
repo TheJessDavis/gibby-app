@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.112.0-nonclass-costs"
+VERSION = "10.113.0-website-page"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -319,6 +319,8 @@ def init_db():
     for col in ("pub_bio", "pub_headshot_web", "pub_headshot_by", "pub_at", "web_review", "web_review_note", "web_pending_at", "pronouns", "web_approved_by"):
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         except Exception: pass
+    try: c.execute("ALTER TABLE users ADD COLUMN web_hidden INTEGER DEFAULT 0")   # Marketing took them off the website page
+    except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")   # also added below; needed here on a fresh database
     except sqlite3.OperationalError: pass
     if not c.execute("SELECT 1 FROM meta WHERE k='web_review_seeded'").fetchone():
@@ -1599,6 +1601,7 @@ My typed signature states that I will be a responsible key code holder and will 
 BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own words
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
 
+ARTISTS_TITLE_DEFAULT = "Meet Our Teaching Artists"
 ARTISTS_INTRO_DEFAULT = ("Meet the artists and instructors who bring The Gibby's creative workshops and classes to life. "
                          "Explore their work, learn a little about the people behind our programs, and discover upcoming opportunities to create with them.")
 
@@ -3802,7 +3805,7 @@ class H(http.server.BaseHTTPRequestHandler):
         c = db()
         rows = [dict(r) for r in c.execute("""SELECT id, name, substr(pub_headshot_web, 1, 12) || substr(pub_headshot_web, -64) AS photo,
                     pub_bio AS bio, skills, social_website, social_instagram, social_etsy, role, pronouns
-                    FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin')
+                    FROM users WHERE deleted_at IS NULL AND must_change_pw=0 AND role IN ('instructor','admin') AND COALESCE(web_hidden,0)=0
                     AND (COALESCE(pub_bio,'')!='' OR COALESCE(pub_headshot_web,'') LIKE 'data:image/%') ORDER BY name""").fetchall()]
         c.close()
         today = datetime.date.today()
@@ -3838,7 +3841,7 @@ class H(http.server.BaseHTTPRequestHandler):
         return out
 
     def embed_instructors_json(self):
-        body = json.dumps({"intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT).strip(), "instructors": self._public_instructors()}).encode()
+        body = json.dumps({"title": (_meta_get("artists_title") or ARTISTS_TITLE_DEFAULT).strip(), "intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT).strip(), "instructors": self._public_instructors()}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -3951,9 +3954,9 @@ class H(http.server.BaseHTTPRequestHandler):
                      "skills":json.loads(r["skills"] or "[]"), "address":r["address"] or "", "phone":r["phone"] or "", "paperwork":{},
                      "headshot_px": r["headshot_px"] or 0, "headshot_by": r["headshot_by"] or "", "bio_words": len((r["bio"] or "").split()),
                      "web_review": r["web_review"] or "", "web_review_note": r["web_review_note"] or "", "bio": r["bio"] or "", "pronouns": r["pronouns"] or "",
-                     "published": bool(r["pub_bio"] or r["pub_headshot_web"]), "pub_at": (r["pub_at"] or "")[:10],
+                     "published": bool(r["pub_bio"] or r["pub_headshot_web"]), "pub_at": (r["pub_at"] or "")[:10], "web_hidden": bool(r["web_hidden"]), "pub_bio": r["pub_bio"] or "",
                      "links": [k for k in ("facebook","instagram","website","etsy","tiktok") if r["social_" + k]]}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,web_review,web_review_note,pub_bio,pub_headshot_web,pub_at,pronouns,
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,web_review,web_review_note,pub_bio,pub_headshot_web,pub_at,pronouns,web_hidden,
                                           social_facebook,social_instagram,social_website,social_etsy,social_tiktok FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             by_id = {r["id"]: r for r in rows}
@@ -4783,6 +4786,7 @@ class H(http.server.BaseHTTPRequestHandler):
                                    "incident_to": ", ".join(incident_to()),
                                    "web_review_to": ", ".join(web_review_to()),
                                    "artists_intro": (_meta_get("artists_intro") or ARTISTS_INTRO_DEFAULT),
+                                   "artists_title": (_meta_get("artists_title") or ARTISTS_TITLE_DEFAULT),
                                    "backup_running": _meta_get("backup_running") == "1",
                                    "backup_stage": _meta_get("backup_stage"),
                                    "compact_running": _meta_get("compact_running") == "1",
@@ -5927,13 +5931,30 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour incident report went to Michelle Truban and Seth Cosans with the completed form attached. "
                 f"Thank you for filing it promptly.\n\nThe Gibby", attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")])
             return self.send_json({"ok":True, "id": rid, "folder": folder_link})
-        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes|requeue)$", p)
+        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes|requeue|edit|hide|show)$", p)
         if mwr:
             u = self.require("admin")
             if not u: return
             uid = int(mwr.group(1)); b = self.read_json(); c = db()
             who = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL", (uid,)).fetchone()
             if not who: c.close(); return self.send_json({"error":"not found"},404)
+            if mwr.group(2) in ("hide", "show"):
+                c.execute("UPDATE users SET web_hidden=? WHERE id=?", (1 if mwr.group(2) == "hide" else 0, uid)); c.commit(); c.close()
+                return self.send_json({"ok":True})
+            if mwr.group(2) == "edit":
+                # Marketing edits the published bio (and pronouns) directly: what is
+                # on the page is what they typed, and the artist keeps a copy.
+                bio = re.sub(r"\s+", " ", str(b.get("bio") or "")).strip()[:1800]
+                if len(bio.split()) < 5: c.close(); return self.send_json({"error":"The bio needs a few words."},400)
+                sets, vals = ["bio=?", "pub_bio=?", "bio_parts=?", "web_review=NULL", "web_review_note=NULL", "web_approved_by=?", "pub_at=?"], [bio, bio, json.dumps([bio, "", ""]), u["name"], now()]
+                if b.get("pronouns") is not None:
+                    sets.append("pronouns=?"); vals.append(re.sub(r"\s+", " ", str(b.get("pronouns") or "")).strip()[:40] or None)
+                vals.append(uid)
+                c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id=?", vals); c.commit(); c.close()
+                mailer.send(who["email"], "Your website bio was updated",
+                    f"Hi {(who['name'] or '').split(' ')[0] or 'there'},\n\nMarketing tidied your bio for The Everett's website. It now reads:\n\n  {bio}\n\n"
+                    f"See it at https://www.theeverett.org/meet-our-teaching-artists. If anything is off, edit it on your profile in the app and it goes back to them.\n\nThe Gibby")
+                return self.send_json({"ok":True})
             if mwr.group(2) == "requeue":
                 # Put a profile back in front of Marketing (it was approved by someone
                 # else, or changed through a path that did not hold it).
@@ -5958,8 +5979,11 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             b = self.read_json()
+            if b.get("title") is not None:
+                _meta_set("artists_title", str(b.get("title") or "").strip()[:120] or ARTISTS_TITLE_DEFAULT)
             if b.get("intro") is not None:
                 _meta_set("artists_intro", str(b.get("intro") or "").strip()[:600])
+            if b.get("intro") is not None or b.get("title") is not None:
                 if b.get("to") is None: return self.send_json({"ok":True})
             to = [e.strip().lower() for e in str(b.get("to") or "").replace(";", ",").split(",") if e.strip()]
             if not to or any(not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", e) for e in to):

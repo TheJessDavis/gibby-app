@@ -236,6 +236,11 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   sets `web_review='pending'` and emails Michelle; a save while status is `changes` is the
   resubmission. `/api/profile/resubmit` sends it back without a change. Admin `requeue` puts a
   published profile back in front of Marketing; `users.web_approved_by` records who approved.
+  Since Sep 29 the More > Reach > Website page screen edits the live page directly (any admin,
+  Michelle included): title (meta `artists_title`), intro, each artist's published bio and pronouns
+  (`/api/admin/web-review/{id}/edit`, which also emails the artist), a replacement headshot, and
+  hide/show (`users.web_hidden`, INTEGER; hidden artists drop out of `/embed/instructors.json`).
+  `site-embed.js` sets the code block's h1 from the feed's `title`.
 - **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
   "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
   Reports", emailed with the PDF to `incident_to()` (default Michelle Truban mtruban@theeverett.org and

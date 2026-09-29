@@ -114,13 +114,14 @@ function renderInstructors(){
   host.setAttribute('data-done','1');
   // Paint the last list at once from this browser's memory, then refresh it.
   var cached=null; try{cached=JSON.parse(localStorage.getItem('gibby-artists')||'null')}catch(e){}
-  if(cached&&cached.instructors&&cached.instructors.length){paintArtists(host,cached.instructors,cached.intro)}
+  if(cached&&cached.instructors&&cached.instructors.length){paintArtists.title=cached.title||'';paintArtists(host,cached.instructors,cached.intro)}
   else{host.innerHTML='<div style="opacity:.6;padding:24px 0">Loading our teaching artists\u2026</div>'}
   fetch(APP+'/embed/instructors.json').then(function(r){return r.json()}).then(function(d){
     try{localStorage.setItem('gibby-artists',JSON.stringify(d))}catch(e){}
     var list=d.instructors||[];
     if(!list.length){host.innerHTML='';return}
     if(cached&&JSON.stringify(cached)===JSON.stringify(d))return;
+    paintArtists.title=d.title||'';
     paintArtists(host,list,d.intro);
     rep('artists='+list.length);
   }).catch(function(e){rep('artists fetch failed: '+e)});
@@ -131,6 +132,7 @@ function paintArtists(host,list,intro){
   try{
     var blk=host.closest('.sqs-block-code')||host.parentElement;
     var h1=blk&&blk.querySelector('h1');
+    if(h1&&paintArtists.title){ h1.textContent=paintArtists.title; }
     if(h1){ h1.style.fontFamily='var(--heading-font-font-family, inherit)'; h1.style.fontWeight='var(--heading-font-font-weight, 500)'; h1.style.fontSize='clamp(2rem, 4vw, 3.4rem)'; h1.style.lineHeight='1.15'; h1.style.margin='0 0 .4em'; }
   }catch(e){}
   {

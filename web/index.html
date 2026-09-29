@@ -712,7 +712,7 @@ async function renderProfile(focus){
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
 const MORE_ITEMS=[['all','\u{1F4CB}','All classes','Classes'],
   ['money','\u{1F4B0}','Money','Money'],['supplies','\u{1F9FA}','Orders','Money'],
-  ['reviews','\u{1F5BC}\uFE0F','Website reviews','Reach'],['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
+  ['reviews','\u{1F5BC}\uFE0F','Website page','Reach'],['marketing','\u{1F4E3}','Marketing','Reach'],['email','\u2709\uFE0F','Email','Reach'],['integrations','\u{1F50C}','Integrations','Reach'],
   ['agreements','\u{1F4DD}','Contracts','Records'],['incidents','\u{1F6A8}','Incidents','Records'],['audit','\u{1F50D}','Audit','Records'],['archive','\u{1F5C3}\uFE0F','Archive','Records']];
 const MORE_GROUPS=['Classes','Money','Reach','Records'];
 /* A tab left open across a deploy keeps old code and can misread new answers.
@@ -1992,17 +1992,37 @@ async function adminReviews(){
         <div class="meta" style="margin-top:6px">${u.headshot_px?`Headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':' (their own)'}`:'No headshot'}${u.bio_words?` \u00b7 bio ${u.bio_words} words`:''}${u.web_review==='changes'?` \u00b7 change requested: \u201C${esc(u.web_review_note||'')}\u201D`:''}</div></div></div>
       ${u.web_review==='pending'?`<div class="two" style="margin-top:10px"><button class="btn ghost" onclick="webReview(${u.id},'changes')">Ask for a change</button><button class="btn dark" onclick="webReview(${u.id},'approve')">Approve for the website</button></div>`
         :u.published&&!u.web_review?`<div class="meta" style="margin-top:6px"><a href="#" onclick="webReview(${u.id},'requeue');return false">Send to Marketing for another look</a></div>`:''}</div>`;
-  $('#tab').innerHTML=`<h2>Website <em>reviews</em></h2>
-    <p class="sub">Bios and headshots artists have saved for theeverett.org/meet-our-teaching-artists. Nothing goes on the page until it is approved here. <a href="/embed/instructors" target="_blank" rel="noopener">See the page as it is now</a>.</p>
-    <label style="margin-top:0">Waiting for approval (${pend.length})</label>${pend.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
+  let s={}; try{ s=await api('/api/integrations'); }catch(_){}
+  const liveCard=u=>`<div class="card ${u.web_hidden?'past':''}" style="padding:12px 16px" id="wl${u.id}"><div style="display:flex;gap:12px;align-items:flex-start">
+      ${u.headshot_px?`<img src="/api/admin/headshot/${u.id}/preview?t=${Date.now()}" alt="" style="width:64px;height:64px;object-fit:cover;flex:none">`:`<div style="width:64px;height:64px;background:var(--paper);flex:none"></div>`}
+      <div style="min-width:0;flex:1"><b>${esc(u.name)}</b>${u.pronouns?` <span class="meta">${esc(u.pronouns)}</span>`:''}<span class="meta"> \u00b7 ${u.web_hidden?'hidden from the page':'on the page since '+esc(u.pub_at||'')}</span>
+        <div class="meta" style="margin-top:6px;white-space:pre-wrap" id="wlbio${u.id}">${esc(u.pub_bio||u.bio||'(no bio)')}</div>
+        <div id="wledit${u.id}" class="hidden"><label>Bio as it should read on the page</label><textarea id="wlt${u.id}" rows="5">${esc(u.pub_bio||u.bio||'')}</textarea>
+          <label>Pronouns</label><input id="wlp${u.id}" value="${esc(u.pronouns||'')}" placeholder="optional">
+          <div class="two" style="margin-top:8px"><button class="btn ghost" onclick="document.getElementById('wledit${u.id}').classList.add('hidden')">Cancel</button><button class="btn dark" onclick="webEditSave(${u.id})">Save to the website</button></div></div>
+        <div class="meta" style="margin-top:8px"><a href="#" onclick="document.getElementById('wledit${u.id}').classList.toggle('hidden');return false">Edit the bio</a> \u00b7 <input type="file" id="ah${u.id}" accept="image/*" class="hidden" onchange="adminHeadshot(${u.id}, event)"><a href="#" onclick="document.getElementById('ah${u.id}').click();return false">Replace the headshot</a> \u00b7 <a href="#" onclick="webReview(${u.id},'${u.web_hidden?'show':'hide'}');return false">${u.web_hidden?'Show on the page':'Hide from the page'}</a>${u.web_hidden?'':` \u00b7 <a href="#" onclick="webReview(${u.id},'requeue');return false">Ask the artist for a change</a>`}</div></div></div></div>`;
+  $('#tab').innerHTML=`<h2>Website <em>page</em></h2>
+    <p class="sub">Everything on theeverett.org/meet-our-teaching-artists comes from here: the title, the intro, and each artist's headshot and bio. Change it here and the site follows within a minute. <a href="/embed/instructors" target="_blank" rel="noopener">See the page as it is now</a>.</p>
+    <label style="margin-top:0">The page itself</label>
+    <div class="card"><label style="margin-top:0">Title</label><input id="wp_title" value="${esc(s.artists_title||'Meet Our Teaching Artists')}">
+      <label>Intro paragraph</label><textarea id="wp_intro" rows="3">${esc(s.artists_intro||'')}</textarea>
+      <button class="btn dark" style="margin-top:10px" onclick="webPageSave()">Save the page text</button></div>
+    <label>Waiting for approval (${pend.length})</label>${pend.map(card).join('')||'<div class="muted">Nothing waiting.</div>'}
     ${back.length?`<label>Change requested (${back.length})</label>${back.map(card).join('')}`:''}
-    ${live.length?`<label>On the website (${live.length})</label>${live.map(u=>`<div class="card" style="padding:10px 16px"><b>${esc(u.name)}</b>${u.pronouns?` <span class="meta">${esc(u.pronouns)}</span>`:''}<span class="meta"> \u00b7 since ${esc(u.pub_at||'')}</span></div>`).join('')}`:''}`;
+    <label>On the website (${live.filter(u=>!u.web_hidden).length}${live.some(u=>u.web_hidden)?', '+live.filter(u=>u.web_hidden).length+' hidden':''})</label>${live.map(liveCard).join('')||'<div class="muted">Nobody yet.</div>'}`;
+}
+async function webPageSave(){
+  try{ await api('/api/admin/web-review-settings','POST',{title:$('#wp_title').value, intro:$('#wp_intro').value}); toast('Saved. The site picks it up within a minute.'); }catch(e){ alert(e.message); }
+}
+async function webEditSave(uid){
+  try{ await api('/api/admin/web-review/'+uid+'/edit','POST',{bio:$('#wlt'+uid).value, pronouns:$('#wlp'+uid).value}); toast('Saved to the website.'); adminReviews(); }catch(e){ alert(e.message); }
 }
 async function webReview(uid, action){
   let note='';
   if(action==='changes'){ note=prompt('What should they change? (they get this by email)'); if(note===null) return; }
   try{ await api('/api/admin/web-review/'+uid+'/'+action,'POST',{note}); }catch(e){ alert(e.message); return; }
-  alert(action==='approve'?'Approved. It is on the website now.':action==='requeue'?'Sent to Marketing for review.':'Sent back with your note.');
+  if(action==='hide'||action==='show'){ toast(action==='hide'?'Hidden from the page.':'Back on the page.'); }
+  else alert(action==='approve'?'Approved. It is on the website now.':action==='requeue'?'Sent to Marketing for review.':'Sent back with your note.');
   if(ADMIN_TAB==='reviews') adminReviews(); else adminPeople();
 }
 let PEOPLE_REVIEW=false;
@@ -5394,7 +5414,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','resubmitProfile','sendContract','rebookWindow','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','resubmitProfile','sendContract','rebookWindow','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','webPageSave','webEditSave','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
