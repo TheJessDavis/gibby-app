@@ -126,6 +126,24 @@ function renderInstructors(){
     rep('artists='+list.length);
   }).catch(function(e){rep('artists fetch failed: '+e)});
 }
+/* Where an artist's own page lives. The app setting is either a folder
+   ("/teaching-artists/", one Squarespace page per artist named by slug) or a
+   single template page ("/teaching-artist", which reads ?artist=slug). */
+function artistHref(i){
+  var p=paintArtists.page||''; if(!p||!i.slug)return '';
+  return p.charAt(p.length-1)==='/' ? p+i.slug : p+'?artist='+i.slug;
+}
+function adminEditLink(host, uid){
+  // Only a signed-in app admin (Michelle, Jess) sees this; everyone else sees nothing.
+  try{
+    fetch(APP+'/api/site-admin',{credentials:'include'}).then(function(r){return r.json()}).then(function(d){
+      if(!d||!d.admin)return;
+      var a=document.createElement('p'); a.style.cssText='margin:14px 0 0;font-size:.85em;opacity:.75';
+      a.innerHTML='<a href="'+APP+(uid?'/#review-'+uid:'/')+'" target="_blank" rel="noopener">\u270e Edit '+(uid?'this artist':'this page')+' in the Gibby app</a>';
+      host.appendChild(a);
+    }).catch(function(){});
+  }catch(e){}
+}
 function paintArtists(host,list,intro){
   // The page title sits in the same Squarespace code block as this list, where
   // headings are not given the site's heading styles. Match the rest of the site.
@@ -139,19 +157,20 @@ function paintArtists(host,list,intro){
     var h=(intro?'<p class="gibby-artists-intro" style="max-width:720px;margin:0 0 28px">'+esc(intro)+'</p>':'')+'<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
     list.forEach(function(i){
       h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
-        +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:100%;max-width:240px;aspect-ratio:4/5;height:auto;border-radius:0;object-fit:cover;object-position:center top;margin-bottom:14px;display:block">'
-               :'<div style="width:100%;max-width:240px;aspect-ratio:4/5;border-radius:0;background:#EDE8DC;margin-bottom:14px"></div>')
+        +(function(){ var pic=i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:100%;max-width:240px;aspect-ratio:4/5;height:auto;border-radius:0;object-fit:cover;object-position:center top;margin-bottom:14px;display:block">'
+               :'<div style="width:100%;max-width:240px;aspect-ratio:4/5;border-radius:0;background:#EDE8DC;margin-bottom:14px"></div>';
+               var href=artistHref(i); return href?'<a href="'+esc(href)+'" style="display:block;width:100%;max-width:240px" aria-label="'+esc(i.name)+'">'+pic+'</a>':pic; })()
         +'<h3 style="margin:0 0 4px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500);font-size:1.35em;line-height:1.2">'
-        +(paintArtists.page&&i.slug?'<a href="'+esc(paintArtists.page)+'?artist='+esc(i.slug)+'" style="text-decoration:none;color:inherit">'+esc(i.name)+'</a>':esc(i.name))
+        +(artistHref(i)?'<a href="'+esc(artistHref(i))+'" style="text-decoration:none;color:inherit">'+esc(i.name)+'</a>':esc(i.name))
         +(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
         +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
         +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
         +((i.classes||[]).length?'<div style="margin-top:12px;font-size:.9em"><b>Upcoming classes</b><div style="height:6px"></div>'+i.classes.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'')
-        +(paintArtists.page&&i.slug?'<p style="margin:10px 0 0"><a href="'+esc(paintArtists.page)+'?artist='+esc(i.slug)+'">More about '+esc((i.name||'').split(' ')[0])+' \u2192</a></p>':'')
         +((i.website||i.etsy||i.instagram)?'<p style="margin-top:8px">'+[['website',i.website],['etsy',i.etsy],['instagram',i.instagram]].filter(function(x){return x[1]}).map(function(x){return '<a href="'+esc(x[1])+'" target="_blank" rel="noopener">'+(x[0]==='website'?esc(x[1].replace(/^https?:\/\//,'').replace(/\/$/,'')):x[0]==='etsy'?'Etsy shop':'Instagram')+'</a>'}).join(' \u00b7 ')+'</p>':'')
         +'</div>';
     });
     host.innerHTML=h+'</div>';
+    adminEditLink(host, 0);
   }
 }
 /* ---------------- one teaching artist ----------------
@@ -162,7 +181,7 @@ function renderArtist(){
   var host=document.getElementById('gibby-artist');
   if(!host||host.getAttribute('data-done'))return;
   host.setAttribute('data-done','1');
-  var slug=(new URLSearchParams(location.search).get('artist')||'').toLowerCase().replace(/[^a-z0-9-]/g,'');
+  var slug=(new URLSearchParams(location.search).get('artist')||location.pathname.replace(/\/+$/,'').split('/').pop()||'').toLowerCase().replace(/[^a-z0-9-]/g,'');
   var blk=host.closest('.sqs-block-code')||host.parentElement;
   var h1=blk&&blk.querySelector('h1');
   function heading(t){ if(h1){ h1.textContent=t; h1.style.fontFamily='var(--heading-font-font-family, inherit)'; h1.style.fontWeight='var(--heading-font-font-weight, 500)'; h1.style.fontSize='clamp(2rem, 4vw, 3.4rem)'; h1.style.lineHeight='1.15'; h1.style.margin='0 0 .4em'; } }
@@ -185,10 +204,13 @@ function renderArtist(){
       +(links.length?'<p style="margin-top:10px">'+links.map(function(x){return '<a href="'+esc(x[1])+'" target="_blank" rel="noopener">'+lab[x[0]](x[1])+'</a>'}).join(' \u00b7 ')+'</p>':'')+'</div>'
       +'<div><div style="white-space:pre-wrap;font-size:1.05em;line-height:1.6">'+esc(a.bio)+'</div>'
       +'<h3 style="margin:28px 0 8px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500)">Upcoming classes with '+esc((a.name||'').split(' ')[0])+'</h3>'
-      +(cls.length?cls.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:block;margin:6px 0;padding:12px 16px;border:1px solid currentColor;text-decoration:none;line-height:1.3"><b>'+esc(c.title)+'</b><br><span style="font-size:.9em;opacity:.8">'+esc(c.when)+' \u00b7 register on Eventbrite \u2192</span></a>'}).join('')
+      +(cls.length?cls.map(function(c){return c.open
+          ? '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:block;margin:6px 0;padding:12px 16px;border:1px solid currentColor;text-decoration:none;line-height:1.3"><b>'+esc(c.title)+'</b><br><span style="font-size:.9em;opacity:.8">'+esc(c.when)+' \u00b7 register on Eventbrite \u2192</span></a>'
+          : '<div style="display:block;margin:6px 0;padding:12px 16px;border:1px dashed currentColor;opacity:.7;line-height:1.3"><b>'+esc(c.title)+'</b><br><span style="font-size:.9em">'+esc(c.when)+' \u00b7 registration closed</span></div>'}).join('')
         :'<p style="opacity:.75">Nothing open for sign-up right now. Check back soon, or see <a href="/art-workshops">all upcoming workshops</a>.</p>')
       +'</div></div>'
       +'<style>@media(max-width:640px){.gibby-artist-page{grid-template-columns:1fr!important}}</style>';
+    adminEditLink(host, a.id);
     rep('artist page '+slug);
   }).catch(function(e){ host.innerHTML=back+'<p>Could not load this artist right now.</p>'; rep('artist fetch failed: '+e); });
 }

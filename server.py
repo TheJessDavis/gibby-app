@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.115.0-artist-pages"
+VERSION = "10.115.1-artist-pages"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -701,8 +701,12 @@ def session_cookies(access, refresh, secure="", remember=True):
     on close) when it is off."""
     keep_a = f"; Max-Age={ACCESS_TTL}" if remember else ""
     keep_r = f"; Max-Age={REFRESH_TTL}" if remember else ""
-    return [f"gibby_session={access}; Path=/; HttpOnly; SameSite=Lax{keep_a}{secure}",
-            f"gibby_refresh={refresh}; Path=/; HttpOnly; SameSite=Lax{keep_r}{secure}"]
+    # Over https the cookies travel cross-site too (SameSite=None), so the public
+    # website can ask the app "is this visitor an admin?" and show an Edit link.
+    # POSTs still need the CSRF token, so this opens nothing else.
+    ss = "None" if secure else "Lax"
+    return [f"gibby_session={access}; Path=/; HttpOnly; SameSite={ss}{keep_a}{secure}",
+            f"gibby_refresh={refresh}; Path=/; HttpOnly; SameSite={ss}{keep_r}{secure}"]
 
 CLEAR_COOKIES = ["gibby_session=; Path=/; Max-Age=0", "gibby_refresh=; Path=/; Max-Age=0"]
 
@@ -1642,6 +1646,7 @@ BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
 
 ARTISTS_TITLE_DEFAULT = "Meet Our Teaching Artists"
+SITE_ORIGINS = {"https://www.theeverett.org", "https://theeverett.org"}
 
 def artist_slug(name, uid):
     """'Jess Kille' -> 'jess-kille': the address of an artist's own page on the site."""
@@ -3871,24 +3876,30 @@ class H(http.server.BaseHTTPRequestHandler):
             except Exception: ext = {}
             if not ext.get("eventbrite_id"): continue
             d = _class_date(cl)
-            # Only classes someone can still sign up for: the first session is still
-            # ahead and registration has not closed. A series already running is out.
-            if not d or d < today: continue
-            if int(cl.get("close_days") or 0) and (d - today).days < int(cl.get("close_days") or 0): continue
+            if not d: continue
+            try: sess = json.loads(cl.get("session_dates") or "[]")
+            except Exception: sess = []
+            # Last session date: a running series still counts as upcoming on the
+            # artist's own page, just not open for sign-up.
+            last = d
+            for s in sess:
+                ds = parse_day(s.get("date"))
+                if ds and ds > last: last = ds
+            if last < today: continue
+            # Open for sign-up: the first session is still ahead and registration has not closed.
+            is_open = d >= today and not (int(cl.get("close_days") or 0) and (d - today).days < int(cl.get("close_days") or 0))
             when = f"{_MON_FULL[d.month-1]} {d.day}"
-            if cl.get("is_series"):
-                try: n = len(json.loads(cl.get("session_dates") or "[]"))
-                except Exception: n = 0
-                if n > 1: when += f", {n}-week course"
-            upcoming.setdefault(cl["instructor_id"], []).append({"title": cl.get("title") or "", "when": when, "date": d.isoformat(),
+            if cl.get("is_series") and len(sess) > 1: when += f", {len(sess)}-week course"
+            upcoming.setdefault(cl["instructor_id"], []).append({"title": cl.get("title") or "", "when": when, "date": d.isoformat(), "open": is_open,
                 "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=site-artists"})
         c2.close()
         for v in upcoming.values(): v.sort(key=lambda x: x["date"])
+        open_only = {k: [x for x in v if x["open"]] for k, v in upcoming.items()}
         out = []
         for r in rows:
             if not (r.get("bio") or "").strip() and r["role"] == "admin": continue   # admins appear only once they write a bio
             out.append({"id": r["id"], "slug": artist_slug(r["name"] or "", r["id"]), "name": r["name"] or "", "pronouns": r.get("pronouns") or "",
-                        "bio": (r.get("bio") or "").strip(), "classes": upcoming.get(r["id"], [])[:limit], "all_classes": upcoming.get(r["id"], []),
+                        "bio": (r.get("bio") or "").strip(), "classes": open_only.get(r["id"], [])[:limit], "all_classes": upcoming.get(r["id"], []),
                         "skills": [s for s in _loads_list(r.get("skills")) if s][:8],
                         "img": (f"/headshot/{r['id']}.jpg?v=" + hashlib.sha1((r.get("photo") or "")[-64:].encode()).hexdigest()[:8]) if (r.get("photo") or "").startswith("data:image/") else "",
                         "website": r.get("social_website") or "", "instagram": r.get("social_instagram") or "", "etsy": r.get("social_etsy") or "",
@@ -3959,6 +3970,15 @@ class H(http.server.BaseHTTPRequestHandler):
                 "posting_live": bool(icfg.get("live")),
                 "eventbrite_token_set": bool(icfg.get("eventbrite_token")),
                 "eventbrite_org_set": bool(icfg.get("eventbrite_org_id"))})
+        if p == "/api/site-admin":
+            # Asked by site-embed.js on theeverett.org: is the visitor a signed-in
+            # admin? Only that yes/no leaves, and only to the site's own origins.
+            origin = self.headers.get("Origin", "")
+            hdrs = {"Vary": "Origin"}
+            if origin in SITE_ORIGINS:
+                hdrs["Access-Control-Allow-Origin"] = origin; hdrs["Access-Control-Allow-Credentials"] = "true"
+            u = self.current_user() if (not origin or origin in SITE_ORIGINS) else None
+            return self.send_json({"admin": bool(u and u["role"] == "admin")}, headers=hdrs)
         if p == "/api/me":
             u = self.current_user()
             if not u: return self.send_json({"user": None, "season_start": SEASON_START})

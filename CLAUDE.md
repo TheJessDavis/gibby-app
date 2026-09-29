@@ -252,8 +252,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - **Individual artist pages** (Sep 29 2026): one Squarespace page holding `<h1>Teaching artist</h1>
   <div id="gibby-artist"></div>` shows the artist named in `?artist=<slug>` (`artist_slug`, e.g.
   jess-kille) from `/embed/instructor/<slug>.json` (headshot, bio, pronouns, links, every upcoming
-  class). The page's path is meta `artist_page` (Website page screen); while it is blank the main
-  list shows no links, once set every name and a "More about" link point there.
+  class, open ones as Eventbrite links, closed or running ones as "registration closed"). The
+  setting meta `artist_page` (Website page screen) is either a folder ("/teaching-artists/": one
+  Squarespace page per artist, slug in the path) or a single page ("/teaching-artist", reads
+  ?artist=slug); blank means no links. The picture and name on the main list link there. Signed-in
+  app admins see an "Edit ... in the Gibby app" link on the site (`/api/site-admin`, CORS with
+  credentials for SITE_ORIGINS; session cookies are SameSite=None over https for that reason).
 - **Incident reports** (`incident_reports`): The Everett 2026 Incident Report filled in the app from
   "Report an incident" on My classes. PDF via `pdfgen.contract_pdf` to Drive under "Gibby Incident
   Reports", emailed with the PDF to `incident_to()` (default Michelle Truban mtruban@theeverett.org and
