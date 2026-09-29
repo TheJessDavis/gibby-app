@@ -139,8 +139,8 @@ function paintArtists(host,list,intro){
     var h=(intro?'<p class="gibby-artists-intro" style="max-width:720px;margin:0 0 28px">'+esc(intro)+'</p>':'')+'<div class="gibby-artists" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:28px 32px">';
     list.forEach(function(i){
       h+='<div class="gibby-artist" style="display:flex;flex-direction:column;align-items:center;text-align:center">'
-        +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:100%;max-width:260px;aspect-ratio:1/1;height:auto;border-radius:0;object-fit:cover;margin-bottom:14px;display:block">'
-               :'<div style="width:100%;max-width:260px;aspect-ratio:1/1;border-radius:0;background:#EDE8DC;margin-bottom:14px"></div>')
+        +(i.img?'<img loading="lazy" src="'+APP+i.img+'" alt="'+esc(i.name)+'" style="width:100%;max-width:240px;aspect-ratio:4/5;height:auto;border-radius:0;object-fit:cover;object-position:center top;margin-bottom:14px;display:block">'
+               :'<div style="width:100%;max-width:240px;aspect-ratio:4/5;border-radius:0;background:#EDE8DC;margin-bottom:14px"></div>')
         +'<h3 style="margin:0 0 4px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500);font-size:1.35em;line-height:1.2">'+esc(i.name)+(i.pronouns?' <span style="font-size:.7em;font-weight:400;opacity:.7">'+esc(i.pronouns)+'</span>':'')+'</h3>'
         +(i.skills&&i.skills.length?'<div style="font-size:.85em;opacity:.7;margin-bottom:8px">'+esc(i.skills.join(' \u00b7 '))+'</div>':'')
         +'<div style="white-space:pre-wrap">'+esc(i.bio)+'</div>'
