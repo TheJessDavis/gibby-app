@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.113.1-rect-photos"
+VERSION = "10.114.0-alcohol-cert"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1504,6 +1504,30 @@ def sweep_master_sheet():
     except Exception as ex:
         print("[sheet] update failed (will retry hourly):", ex)
 
+def resend_expired_invites():
+    """Hourly: anyone invited who never set a password, whose 7-day link has run
+    out, gets a fresh link (once a week at most), so nobody is stranded."""
+    c = db(); sent = []
+    try:
+        nowi = datetime.datetime.now().isoformat()
+        for u in c.execute("SELECT id, name, email FROM users WHERE must_change_pw=1 AND deleted_at IS NULL").fetchall():
+            latest = c.execute("SELECT expires FROM password_resets WHERE user_id=? ORDER BY expires DESC LIMIT 1", (u["id"],)).fetchone()
+            if not latest or latest["expires"] > nowi: continue     # never invited this way, or link still good
+            tok = secrets.token_urlsafe(24)
+            exp = (datetime.datetime.now() + datetime.timedelta(days=7)).isoformat()
+            c.execute("INSERT INTO password_resets(token,user_id,expires) VALUES(?,?,?)", (tok, u["id"], exp))
+            c.commit()
+            first = (u["name"] or "").split(" ")[0] or "there"
+            mailer.send(u["email"], "A fresh sign-in link for the Gibby Class Manager",
+                f"Hi {first},\n\nYour link to choose a password for the Gibby Class Manager ran out before it was used, so here is a new one (good for 7 days):\n\n"
+                f"{mailer.APP_URL}/?reset={tok}\n\nYour username is this email address. After you choose a password, sign in any time at {mailer.APP_URL}\n\nSee you at The Gibby!")
+            sent.append(u["email"])
+    except Exception as ex:
+        record_scheduler_error("expired invites", ex)
+    finally:
+        c.close()
+    return sent
+
 def refresh_unsigned_contract(c, cid):
     """After a date, time or session change: an unsigned contract is rewritten so
     the instructor signs the schedule that is actually booked. Signed ones stay."""
@@ -1570,7 +1594,23 @@ PAPERWORK_KINDS = {
                    "what": "Add a phone number where The Gibby can reach you on class day."},
     "lockbox":    {"label": "Lockbox key code contract",
                    "what": "Read and sign the Lockbox Key Code Holder Contract in the app (a typed signature, one minute). Michelle Truban then emails you the lockbox code."},
+    "alcohol":    {"label": "Alcohol server certification (optional)",
+                   "what": "Optional, for anyone who wants to serve alcohol at a class: take the Delaware Restaurant Association's online alcohol server course (https://www.delawarerestaurant.org/online-alcohol-server-training/), then upload your certificate here. It goes to Michelle Truban for The Everett's records."},
 }
+ALCOHOL_COURSE_URL = "https://www.delawarerestaurant.org/online-alcohol-server-training/"
+ALCOHOL_TO_DEFAULT = "mtruban@theeverett.org"     # Michelle keeps the certificates
+
+def alcohol_to():
+    return [e.strip() for e in (_meta_get("alcohol_to") or ALCOHOL_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
+
+def send_alcohol_cert(owner, fname, fmime, fb64, link):
+    """The certificate itself goes to Michelle, attached, the moment it is uploaded."""
+    try: data = base64.b64decode(fb64)
+    except Exception: data = b""
+    mailer.send(alcohol_to(), f"Alcohol server certificate: {owner['name'] or owner['email']}",
+        f"{owner['name'] or owner['email']} ({owner['email']}) uploaded their alcohol server certificate through the Gibby Class Manager. It is attached"
+        + (f" and filed on Drive: {link}" if link else "") + ".\n\nThe Gibby",
+        attachments=[(fname, data, fmime)] if data else None, reply_to=owner["email"])
 
 def lockbox_paperwork_done(c, user_id):
     """Signing the lockbox contract completes the matching paperwork item, if one was requested."""
@@ -3158,6 +3198,11 @@ def run_scheduler(asof=None):
                     f"Thank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
                                else f"marketing request suppressed for {cls['title']}: {why}")
+    # Invites whose 7-day link ran out unused get a fresh one.
+    try:
+        for e in resend_expired_invites(): actions.append(f"fresh sign-in link sent to {e}")
+    except Exception as ex:
+        record_scheduler_error("expired invites", ex)
     # Classes approved but still in poster review get their Help card now too.
     try:
         for r in c.execute("SELECT * FROM classes WHERE status='graphic_review' AND (needs_volunteer=1 OR needs_childcare=1) AND deleted_at IS NULL").fetchall():
@@ -6309,6 +6354,32 @@ class H(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_go, daemon=True).start()
             return self.send_json({"ok":True, "queued": len(emailed), "names": [u["name"] or u["email"] for u, _ in emailed],
                                    "already_had_it": skipped})
+        if p == "/api/alcohol-cert":
+            # Optional, self-started: an instructor uploads their alcohol server
+            # certificate from their profile. Filed with their paperwork, sent to Michelle.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            b = self.read_json()
+            if not b.get("b64"): return self.send_json({"error":"Attach a photo or PDF of your certificate."},400)
+            fb64 = b["b64"].split(",",1)[1] if "," in b["b64"][:40] else b["b64"]
+            if len(fb64) > 6_000_000: return self.send_json({"error":"That file is too large (4 MB max). A photo of the certificate is fine."},400)
+            fmime = (b.get("mime") or "application/octet-stream")[:80]
+            fname = re.sub(r"[^A-Za-z0-9._-]+", "-", (b.get("name") or "certificate"))[:80]
+            link = None
+            try:
+                res = push_photo_to_drive({"title": u["name"] or u["email"]}, f"Alcohol server certification - {fname}", fb64, fmime, root="Gibby Paperwork")
+                link = res.get("link")
+            except Exception as e:
+                print("[alcohol] drive copy failed:", e)
+            c = db()
+            c.execute("""INSERT INTO paperwork(user_id,kind,status,requested_at,done_at,value,file_name,file_mime,file_b64,drive_link)
+                         VALUES(?,'alcohol','done',?,?,?,?,?,?,?)
+                         ON CONFLICT(user_id,kind) DO UPDATE SET status='done', done_at=excluded.done_at, value=excluded.value,
+                         file_name=excluded.file_name, file_mime=excluded.file_mime, file_b64=excluded.file_b64, drive_link=excluded.drive_link""",
+                      (u["id"], now(), now(), "Uploaded from their profile", fname, fmime, fb64, link))
+            c.commit(); c.close()
+            send_alcohol_cert(u, fname, fmime, fb64, link)
+            return self.send_json({"ok":True, "drive_link": link})
         mpc = re.match(r"^/api/paperwork/(\d+)/(complete|done|reopen)$", p)
         if mpc:
             pid, action = int(mpc.group(1)), mpc.group(2)
@@ -6366,14 +6437,16 @@ class H(http.server.BaseHTTPRequestHandler):
                     link = res.get("link")
                 except Exception as e:
                     print("[paperwork] drive copy failed:", e)
-            elif r["kind"] == "w9" and action == "complete":
-                c.close(); return self.send_json({"error":"Please attach a photo or PDF of your signed W-9."},400)
+            elif r["kind"] in ("w9", "alcohol") and action == "complete":
+                c.close(); return self.send_json({"error":"Please attach a photo or PDF of your signed W-9." if r["kind"] == "w9" else "Please attach a photo or PDF of your certificate."},400)
             was_done = (r["status"] == "done")
             c.execute("""UPDATE paperwork SET status='done', done_at=COALESCE(done_at, ?), value=COALESCE(?,value),
                          file_name=COALESCE(?,file_name), file_mime=COALESCE(?,file_mime), file_b64=COALESCE(?,file_b64),
                          drive_link=COALESCE(?,drive_link) WHERE id=?""",
                       (now(), value or None, fname, fmime, fb64, link, pid))
             c.commit(); c.close()
+            if r["kind"] == "alcohol" and fname and action == "complete":
+                send_alcohol_cert(dict(owner), fname, fmime, fb64, link)
             # Admins hear once, when the item first lands; a re-save or a second tap stays quiet.
             if action == "complete" and u["role"] != "admin" and not was_done:
                 admins = emails_for(db(), "WHERE role='admin'")

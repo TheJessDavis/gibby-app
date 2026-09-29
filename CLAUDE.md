@@ -173,7 +173,15 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   idea with about (description), vision (notes), a date picked from open calendar dates (when_text,
   room). Other artists raise a hand; the proposer (created_by) confirms or declines at the interest
   endpoints, which allow the creator for this kind. Admins see it under Requests > Collab.
-- **Paperwork**: W-9, background check, phone, lockbox contract. Admins request per person; instructors
+- **Alcohol server certification** (optional, Sep 29 2026): a card on the Profile links the Delaware
+  Restaurant Association course (`ALCOHOL_COURSE_URL`) and takes a certificate upload
+  (`/api/alcohol-cert`), stored as paperwork kind `alcohol` (done), filed on Drive, and emailed with the
+  file to `alcohol_to()` (default Michelle). Never added to anyone's to-do list on its own; admins may
+  request it under People like any other kind. The class form's alcohol question carries a hint.
+- **Expired invites**: `resend_expired_invites` (hourly in `run_scheduler`) mints a fresh 7-day
+  set-password link for anyone still on `must_change_pw=1` whose latest link has expired.
+- **Paperwork**: W-9, background check, phone, lockbox contract, alcohol certification (optional).
+  Admins request per person; instructors
   complete in the app; files go to Drive under Gibby Paperwork; reminder after 3 days. The lockbox
   contract (`LOCKBOX_CONTRACT_DEFAULT`, editable in meta) is signed with a typed name into the
   `lockbox` table. The app never holds the code: each signature emails Michelle Truban (meta

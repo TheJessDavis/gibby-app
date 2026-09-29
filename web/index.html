@@ -677,6 +677,12 @@ async function renderProfile(focus){
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">Etsy shop</label><input id="pf_etsy" value="${esc((ME&&ME.socials&&ME.socials.etsy)||'')}" placeholder="etsy.com/shop/yourshop">
     <label style="font-weight:700;font-size:12.5px;margin-top:8px">TikTok</label><input id="pf_tt" value="${esc((ME&&ME.socials&&ME.socials.tiktok)||'')}" placeholder="@yourhandle or link">
     <label>How you sign off</label><input id="pf_sign" value="${esc((ME&&ME.signoff)||'')}" placeholder="e.g. See you in the studio, Harlee">
+    <div class="card" style="margin-top:14px" id="alc_card"><h3 style="font-size:1rem;margin:0">Alcohol server certification <span class="meta">(optional)</span></h3>
+      <div class="meta" style="margin-top:4px">Only if you want to serve alcohol at a class. Take the Delaware Restaurant Association's online course, then upload your certificate here; it goes to Michelle Truban for The Everett's records. Nothing is required otherwise.</div>
+      <a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.delawarerestaurant.org/online-alcohol-server-training/" target="_blank" rel="noopener noreferrer">Open the online course</a>
+      <input type="file" id="alc_file" accept="image/*,application/pdf" style="display:none" onchange="alcoholUpload(event)">
+      <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('alc_file').click()">Upload my certificate (photo or PDF)</button>
+      <div class="meta" id="alc_status" style="margin-top:6px"></div></div>
     ${ME&&ME.web_review==='pending'?`<div class="card waiting" style="margin:10px 0 0;padding:10px 14px"><b>Waiting for Marketing.</b> <span class="meta">Your latest bio or headshot is with Marketing for a look before it goes on the website. You will get an email when it is up.</span></div>`
       :ME&&ME.web_review==='changes'?`<div class="card needs" style="margin:10px 0 0;padding:10px 14px"><b>Marketing asked for a change:</b> <span class="meta">${esc(ME.web_review_note||'')}</span><div class="hint">Update it below and tap Save; it goes straight back to them. Already done? <a href="#" onclick="resubmitProfile();return false">Send it back for review</a>.</div></div>`
       :ME&&ME.web_published?`<div class="meta" style="margin:10px 0 0">\u2713 Your bio and headshot are on The Everett's website. Changes you save here go to Marketing first.</div>`:''}
@@ -707,6 +713,7 @@ async function renderProfile(focus){
     <div style="height:8px"></div>
     <button class="btn ghost" onclick="logout()">Sign out</button>
   </div>`;
+  alcoholStatus();
   if(focus){ const el=$('#pf_'+focus); if(el){ setTimeout(()=>{ el.scrollIntoView({behavior:'smooth',block:'center'}); if(el.tagName==='TEXTAREA'||el.tagName==='INPUT') el.focus(); }, 80); } }
 }
 function goHome(){ PF_PHOTO=null; PF_SKILLS=null; RESUB=null; RESUB_OLD_ID=null; RESCHED=null; ROOM_PICK=null; closeMore(); boot(); }
@@ -1789,7 +1796,7 @@ async function adminPeople(){
         :u.web_review==='changes'?`<div class="meta" style="margin-top:8px">Website: change requested, waiting on ${esc((u.name||'').split(' ')[0])}.</div>`
         :u.published?`<div class="meta" style="margin-top:8px">Website: on the page${u.pub_at?' since '+esc(u.pub_at):''}.</div>`:''}
       ${u.role==='instructor'?`<div class="meta" style="margin-top:8px">Website: ${u.headshot_px?`<span class="pill appr">headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':''}</span> <a href="/api/admin/headshot/${u.id}" style="font-size:12px">download</a>`:'<span class="pill pend">no headshot</span>'} <input type="file" id="ah${u.id}" accept="image/*" class="hidden" onchange="adminHeadshot(${u.id}, event)"><a href="#" onclick="document.getElementById('ah${u.id}').click();return false" style="font-size:12px">upload ours</a> ${u.bio_words?`<span class="pill appr">bio ${u.bio_words} words</span>`:'<span class="pill pend">no bio</span>'} ${(u.links||[]).length?`<span class="pill appr">links: ${u.links.join(', ')}</span>`:'<span class="pill pend">no links</span>'}</div>`:''}
-      ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone','lockbox'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
+      ${u.role==='instructor'?`<div style="margin-top:8px">${['w9','background','phone','lockbox','alcohol'].map(k=>{ const q=(u.paperwork||{})[k]; const lab=(d.paperwork_kinds||{})[k]||k;
           if(!q) return `<span class="pill" style="background:#EDE8DC;color:#6b655a">${esc(lab)}: not asked</span>`;
           if(q.status==='done') return `<span class="pill ${q.self_reported?'pend':'appr'}">${esc(lab)} \u2713${q.self_reported?' (their word, '+esc((q.done_at||'').slice(0,4))+')':''}${k==='phone'&&q.value?' '+esc(q.value):''}</span>${q.file_name?` <a href="/api/paperwork/${q.id}/file" target="_blank" rel="noopener noreferrer" style="font-size:12px">view</a>`:''}${q.drive_link?` <a href="${esc(q.drive_link)}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Drive</a>`:''} ${q.id?`<a href="#" onclick="paperAdmin(${q.id},'reopen');return false" style="font-size:12px">ask again</a>`:''}`;
           return `<span class="pill pend">${esc(lab)}: waiting since ${esc((q.requested_at||'').slice(0,10))}${q.reminded_at?', reminded':''}</span> <a href="#" onclick="paperAdmin(${q.id},'done');return false" style="font-size:12px">mark done</a>`; }).join(' ')}</div>`:''}
@@ -1947,6 +1954,7 @@ async function paperRequest(userId, who){
     <label class="chk"><input type="checkbox" id="pwk_bg" ${BG_PAUSED?'disabled':'checked'}> Background check${BG_PAUSED?' <span class="meta">(paused until the process is settled; untick Paused under People to resume)</span>':' (they mark it done, attach confirmation if any)'}</label>
     <label class="chk"><input type="checkbox" id="pwk_ph" checked> Phone number (skipped for anyone who already has one on file)</label>
     <label class="chk"><input type="checkbox" id="pwk_lb" checked> Lockbox key code contract (they sign it in the app; skipped for anyone who already signed)</label>
+    <label class="chk"><input type="checkbox" id="pwk_al"> Alcohol server certification (optional; only ask people who serve alcohol)</label>
     <label style="margin-top:10px">Who</label>
     <div class="meta" style="margin-bottom:4px"><a href="#" onclick="pwPick('new');return false">never asked</a> · <a href="#" onclick="pwPick('all');return false">everyone</a> · <a href="#" onclick="pwPick('none');return false">nobody</a></div>
     <div id="pw_people" style="max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:6px 10px">
@@ -1962,7 +1970,7 @@ async function paperRequest(userId, who){
 }
 function pwPick(which){ document.querySelectorAll('.pw_u').forEach(cb=>{ cb.checked = which==='all' ? true : which==='none' ? false : cb.dataset.asked!=='1'; }); }
 async function paperSend(){
-  const kinds=[['pwk_w9','w9'],['pwk_bg','background'],['pwk_ph','phone'],['pwk_lb','lockbox']].filter(([i])=>$('#'+i).checked).map(([,k])=>k);
+  const kinds=[['pwk_w9','w9'],['pwk_bg','background'],['pwk_ph','phone'],['pwk_lb','lockbox'],['pwk_al','alcohol']].filter(([i])=>$('#'+i).checked).map(([,k])=>k);
   if(!kinds.length){ alert('Tick at least one thing to ask for.'); return; }
   const ids=[...document.querySelectorAll('.pw_u:checked')].map(cb=>+cb.value);
   if(!ids.length){ alert('Tick at least one person.'); return; }
@@ -4323,7 +4331,7 @@ async function instrMine(){
   agrs.filter(a=>a.my_turn).forEach(a=>todos.push({t:`Sign: ${a.title}`, go:`openAgreement(${a.id})`, k:'\u{1F4DD}'}));
   classes.filter(c=>c.status==='incomplete').forEach(c=>todos.push({t:`Fix and resubmit ${c.title}`, go:`startResubmit(${c.id})`, k:'\u{1F501}'}));
   classes.filter(c=>c.status==='instructor_review').forEach(c=>todos.push({t:`Review the admin's edits to ${c.title}`, go:`jumpTo('#cls${c.id}')`, k:'\u{1F440}'}));
-  paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':x.kind==='lockbox'?'Sign the lockbox key code contract':'Complete your background check', go:x.kind==='lockbox'?'openLockbox()':`jumpTo('#pw${x.id}')`, k:x.kind==='lockbox'?'\u{1F510}':'\u{1F4CB}'}));
+  paperOpen.forEach(x=>todos.push({t:x.kind==='phone'?'Add your phone number':x.kind==='w9'?'Send your W-9':x.kind==='lockbox'?'Sign the lockbox key code contract':x.kind==='alcohol'?'Upload your alcohol server certificate (optional)':'Complete your background check', go:x.kind==='lockbox'?'openLockbox()':`jumpTo('#pw${x.id}')`, k:x.kind==='lockbox'?'\u{1F510}':'\u{1F4CB}'}));
   todo.filter(c=>c.followup_status!=='ready').forEach(c=>todos.push({t:`Write your note to the students of ${c.title}`, go:`jumpTo('#fu${c.id}')`, k:'\u2709\uFE0F'}));
   drafts.filter(d=>d.payload_request_id||d.request_id).forEach(d=>todos.push({t:`Finish your proposal for ${d.title||'a claimed class'}`, go:`resumeDraft(${d.id})`, k:'\u{1F4CC}'}));
   let allReqs=[]; try{ allReqs=(await api('/api/requests')).requests||[]; }catch(_){}
@@ -4349,11 +4357,12 @@ async function instrMine(){
           <button class="btn dark" style="margin-top:8px" onclick="paperComplete(${x.id},'phone')">Save my number</button>
           ${myPhone?`<label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'phone',true,true)"> The number on file (${esc(myPhone)}) is still current</label>`:''}`
         :`${x.kind==='w9'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.irs.gov/pub/irs-pdf/fw9.pdf" target="_blank" rel="noopener noreferrer">Open the blank W-9 form</a>`:''}
+          ${x.kind==='alcohol'?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="https://www.delawarerestaurant.org/online-alcohol-server-training/" target="_blank" rel="noopener noreferrer">Open the online course</a>`:''}
           ${x.kind==='background'&&bgForm?`<a class="btn ghost" style="margin-top:8px;display:block;text-align:center" href="/api/paperwork/background-form" target="_blank" rel="noopener noreferrer">Open the background check form</a>`:''}
           <input type="file" id="pwf${x.id}" accept="image/*,application/pdf" style="display:none" onchange="paperComplete(${x.id},'${x.kind}')">
-          <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('pwf${x.id}').click()">${x.kind==='w9'?'\u{1F4F7} Upload my signed W-9 (photo or PDF)':(bgForm?'\u{1F4F7} Upload my completed form (photo or PDF)':'\u{1F4CE} Attach confirmation and mark done')}</button>
+          <button class="btn dark" style="margin-top:8px" onclick="document.getElementById('pwf${x.id}').click()">${x.kind==='w9'?'\u{1F4F7} Upload my signed W-9 (photo or PDF)':x.kind==='alcohol'?'\u{1F4F7} Upload my certificate (photo or PDF)':(bgForm?'\u{1F4F7} Upload my completed form (photo or PDF)':'\u{1F4CE} Attach confirmation and mark done')}</button>
           ${x.kind==='background'?`<button class="btn ghost" style="margin-top:8px" onclick="paperComplete(${x.id},'background',true)">I have completed it (nothing to attach)</button>`:''}
-          <label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'${x.kind}',true,true)"> I've already ${x.kind==='w9'?'submitted a W-9':'completed a background check'} to The Gibby in ${new Date().getFullYear()}</label>
+          ${x.kind==='alcohol'?'':`<label class="chk" style="margin:10px 0 0"><input type="checkbox" onchange="if(this.checked) paperComplete(${x.id},'${x.kind}',true,true)"> I've already ${x.kind==='w9'?'submitted a W-9':'completed a background check'} to The Gibby in ${new Date().getFullYear()}</label>`}
           <div class="meta" id="pws${x.id}" style="margin-top:6px"></div>`}
       </div>`).join('')}`:''}
     ${reqs.length?`<div class="card" style="margin-bottom:10px"><h3 style="font-size:1rem">\u{1F4CC} ${reqs.length} opportunit${reqs.length===1?'y':'ies'} at The Gibby</h3>
@@ -4623,6 +4632,20 @@ async function sendContract(id){
   if(!confirm('Write the instructor contract for this class and email it to them to sign?')) return;
   try{ const r=await api('/api/classes/'+id+'/send-contract','POST',{}); toast('Contract sent to '+r.to+'.'); renderAdmin('approvals'); }
   catch(e){ alert(e.message); }
+}
+async function alcoholStatus(){
+  try{ const pw=await api('/api/paperwork'); const a=(pw.paperwork||[]).find(x=>x.kind==='alcohol'&&x.status==='done'); const s=$('#alc_status');
+    if(s&&a) s.innerHTML=`Certificate on file since ${esc((a.done_at||'').slice(0,10))}${a.drive_link?` \u00b7 <a href="${esc(a.drive_link)}" target="_blank" rel="noopener">view</a>`:''}. Upload again to replace it.`; }catch(_){}
+}
+async function alcoholUpload(ev){
+  const f=ev.target.files[0]; if(!f) return; const st=$('#alc_status'); if(st) st.textContent='Sending\u2026';
+  const body={};
+  try{
+    if(f.type==='application/pdf'){ if(f.size>4*1024*1024) throw new Error('That PDF is over 4 MB. A photo of the certificate works too.'); body.b64=await fileToB64(f); body.mime='application/pdf'; body.name=f.name; }
+    else { body.b64=await shrinkImage(f,2000,0.88); body.mime='image/jpeg'; body.name=(f.name||'certificate').replace(/\.[^.]+$/,'')+'.jpg'; }
+    await api('/api/alcohol-cert','POST',body);
+    toast('Sent to Michelle. Thank you!'); alcoholStatus();
+  }catch(e){ if(st) st.textContent=e.message; }
 }
 async function needHelp(id, need, what){
   const child=what==='childcare';
@@ -4897,6 +4920,7 @@ function openForm(slot, draftPayload){
     <label>Will alcohol be available for purchase?</label>
     <div class="seg" id="f_alc"><button class="on" data-v="no" onclick="alcSel(this)">No</button>
       <button data-v="yes" onclick="alcSel(this)">Yes</button></div>
+    <div class="hint">Serving alcohol yourself? The alcohol server certification is optional and takes an evening online; the course link and the certificate upload are on your Profile.</div>
 
     <label>Can other resident teaching artists &ldquo;audit&rdquo; this class?</label>
     <div class="seg" id="f_audit"><button class="on" data-v="no" onclick="segPick(this)">No</button>
@@ -5414,7 +5438,7 @@ async function submitClassNow(){
  'saveFollowup','sendFollowup','skipFeedback','skipAllFeedback','filterMine','orderForm','sendOrder','ordAddLine','closeOrder','saveSupplyTo','showThanksCodes','paperComplete','paperRequest','paperSend','paperAdmin','supAdd','ownToggle','saveBgInstr','saveBgPaused','adminHeadshot','uploadBgForm','removeBgForm','thanksPhoto','uploadClassVideo','uploadPhotos','saveDeadline','sendDeadlineNow','pwPick','instrWanted','sendToOrdering','rqToggleSkill','rqCustomSkill','rqEdit','rqCancelEdit','wantFilter','jumpTo','skipFollowup','rebuildMaterials','setDonation','openMoreDetails','wantKind','raiseHand','rqSetKind','interestAct','rqPickFiles','rqRemoveFile','rqNotify','loadSkills','proposalForm','sendProposal','ppPickFiles','ppTotal','shareClass','shareGo','adminRequestsHub','adminEmail','adminIntegrations','saveAsTemplate','ctAskToggle','ctAskSend','startTour','endTour','renderTourStep','returnFollowup','sendFeedback','setCalView',
  'attachPoster','removePoster','shrinkImage','generateSeason','openPricingGuide','closePricingGuide','applyPrev',
  'closeReview','submitClassNow','filterAll','printFlyer','sendAnnouncement','daySheet','addPerson','reinvite','setCalPage',
- 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','resubmitProfile','sendContract','rebookWindow','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','webPageSave','webEditSave','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
+ 'setRoomPick','saveProfile','pfAddSkill','pfRemoveSkill','pfCustomSkill','pfClearPhoto','peopleFilter','askToTeach','goHome','instrPickChanged','startResubmit','startReschedule','submitReschedule','closeResched','openLiveEdit','submitLiveEdit','openContract','closeContract','signContractNow','removeTpl','ageChipsChanged','bioCount','needHelp','alcoholUpload','alcoholStatus','resubmitProfile','sendContract','rebookWindow','openAgreement','signAgreementNow','adminAgreements','sendAgreement','agreementAct','saveSessions','instrReimb','rbDelivery','rbCalc','rbPickFiles','sendReimb','reimbPaid','reimbApprove','saveReimbTo','incidentForm','sendIncident','adminIncidents','saveIncidentTo','webReview','saveWebReviewTo','adminReviews','webPageSave','webEditSave','collabForm','sendCollab','askGibby','needHelpPick','toast','openLockbox','showLockbox','signLockbox','closeLockbox','saveLockboxCode','saveLockboxText','lockboxMark','lockboxRemind','openMore','closeMore','faqAdd','reqTemplate','tplReqAct','videoPick','videoClear','donateToggle','padClear','removePerson','peopleSearch','peoplePick','askPickSkill','askSendNow'
 ].forEach(n=>{ if(typeof window[n]==='function') window[n]=guard('action:'+n, window[n]); });
 
 boot();
