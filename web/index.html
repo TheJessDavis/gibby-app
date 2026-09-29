@@ -4090,8 +4090,8 @@ async function instrReimb(){
     <p class="sub">The Everett's expense reimbursement form, filled in here. It goes to the treasurer with your receipts attached.</p>
     <div class="card">
       <label style="margin-top:0">Which class is this for?</label>
-      <select id="rb_class" onchange="const w=$('#rb_purposewrap'); if(w) w.classList.toggle('hidden', this.value!=='other')"><option value="">Pick a class</option>${(d.classes||[]).map(c=>`<option value="${c.id}">${esc(c.title)} \u00b7 ${esc(c.slot_date||'')}</option>`).join('')}<option value="other">Not for a class (an event, a party, the studio, marketing)</option></select>
-      <div id="rb_purposewrap" class="hidden"><label>What was it for?</label><input id="rb_purpose" placeholder="e.g. Halloween party supplies, October flyers"></div>
+      <select id="rb_class" onchange="const w=$('#rb_purposewrap'); if(w) w.classList.toggle('hidden', this.value!=='other'&&this.value!=='party'); const l=$('#rb_purposelab'), i=$('#rb_purpose'); if(l) l.textContent=this.value==='party'?'Whose party or event, and the date?':'What was it for?'; if(i) i.placeholder=this.value==='party'?'e.g. Smith birthday party 9/27':'e.g. October flyers, studio supplies';"><option value="">Pick a class</option>${(d.classes||[]).map(c=>`<option value="${c.id}">${esc(c.title)} \u00b7 ${esc(c.slot_date||'')}</option>`).join('')}<option value="party">Birthday Party/Private Event</option><option value="other">Not for a class (the studio, marketing, something else)</option></select>
+      <div id="rb_purposewrap" class="hidden"><label id="rb_purposelab">What was it for?</label><input id="rb_purpose" placeholder="e.g. October flyers, studio supplies"></div>
       <div class="hint">Marketing expenses are approved by Lou Booker; everything else by The Gibby's admins.</div>
       <label>What you bought</label>
       <div class="meta" style="margin-top:0">One line per receipt: the date on the receipt, the kind of expense, the amount.</div>
@@ -4132,10 +4132,10 @@ async function rbPickFiles(ev){
 async function sendReimb(){
   const err=$('#rb_err'); err.classList.remove('show');
   const items=rbLines().filter(x=>x.amount>0||x.date);
-  const body={class_id:+$('#rb_class').value||0, purpose:($('#rb_class').value==='other'&&$('#rb_purpose'))?$('#rb_purpose').value.trim():'', items, details:$('#rb_details').value.trim(), advance:+$('#rb_adv').value||0, delivery:RB_DELIV, address:($('#rb_addr')?$('#rb_addr').value.trim():''), files:RB_FILES};
-  const other=$('#rb_class').value==='other';
-  if(!body.class_id && !other){ err.textContent='Pick which class this is for, or choose "Not for a class".'; err.classList.add('show'); return; }
-  if(other && body.purpose.length<3){ err.textContent='Say what it was for, e.g. "Birthday party 9/27".'; err.classList.add('show'); return; }
+  const pick=$('#rb_class').value, ptxt=$('#rb_purpose')?$('#rb_purpose').value.trim():'';
+  const body={class_id:+pick||0, purpose:pick==='party'?('Birthday Party/Private Event'+(ptxt?': '+ptxt:'')):pick==='other'?ptxt:'', items, details:$('#rb_details').value.trim(), advance:+$('#rb_adv').value||0, delivery:RB_DELIV, address:($('#rb_addr')?$('#rb_addr').value.trim():''), files:RB_FILES};
+  if(!body.class_id && pick!=='other' && pick!=='party'){ err.textContent='Pick which class this is for, or choose Birthday Party/Private Event or Not for a class.'; err.classList.add('show'); return; }
+  if(pick==='other' && body.purpose.length<3){ err.textContent='Say what it was for, e.g. "October flyers".'; err.classList.add('show'); return; }
   if(!items.length || items.some(x=>!x.date||!(x.amount>0))){ err.textContent='Each line needs the receipt date and an amount.'; err.classList.add('show'); return; }
   if(!RB_FILES.length){ err.textContent='Attach the receipt: a photo or a PDF.'; err.classList.add('show'); return; }
   const btn=document.querySelector('#tab .btn.dark'); if(btn){ btn.disabled=true; btn.textContent='Sending\u2026'; }
