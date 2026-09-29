@@ -4133,12 +4133,14 @@ async function sendReimb(){
   const err=$('#rb_err'); err.classList.remove('show');
   const items=rbLines().filter(x=>x.amount>0||x.date);
   const body={class_id:+$('#rb_class').value||0, purpose:($('#rb_class').value==='other'&&$('#rb_purpose'))?$('#rb_purpose').value.trim():'', items, details:$('#rb_details').value.trim(), advance:+$('#rb_adv').value||0, delivery:RB_DELIV, address:($('#rb_addr')?$('#rb_addr').value.trim():''), files:RB_FILES};
-  if(!body.class_id){ err.textContent='Pick which class this is for.'; err.classList.add('show'); return; }
+  const other=$('#rb_class').value==='other';
+  if(!body.class_id && !other){ err.textContent='Pick which class this is for, or choose "Not for a class".'; err.classList.add('show'); return; }
+  if(other && body.purpose.length<3){ err.textContent='Say what it was for, e.g. "Birthday party 9/27".'; err.classList.add('show'); return; }
   if(!items.length || items.some(x=>!x.date||!(x.amount>0))){ err.textContent='Each line needs the receipt date and an amount.'; err.classList.add('show'); return; }
   if(!RB_FILES.length){ err.textContent='Attach the receipt: a photo or a PDF.'; err.classList.add('show'); return; }
   const btn=document.querySelector('#tab .btn.dark'); if(btn){ btn.disabled=true; btn.textContent='Sending\u2026'; }
   let r; try{ r=await api('/api/reimb','POST',body); }catch(e){ err.textContent=e.message; err.classList.add('show'); if(btn){ btn.disabled=false; btn.textContent='Send my request'; } return; }
-  alert(`Sent. Your request for $${(+r.total).toFixed(2)} went to Tina Johnson and Michelle Truban with the form and receipts attached, and a copy is in your inbox.`);
+  alert(`Sent. Your request for $${(+r.total).toFixed(2)} is with The Gibby for approval; once approved it goes to the treasurer with the form and receipts. A copy is in your inbox.`);
   instrReimb();
 }
 async function instrOpen(){
