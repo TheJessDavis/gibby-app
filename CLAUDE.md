@@ -136,8 +136,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   returns the bring list and the form's "bring or do before class" note (`pre_class`); both appear as
   "What to bring" / "Before class" on the Eventbrite page body (`_structured_html`, the part that
   actually shows; `_event_description` feeds Facebook and DelawareScene), the calendar entry, the
-  website listing (`/embed.json` desc) and the before-class email. `/api/admin/eventbrite/refresh-notes`
-  re-pushes upcoming listings. Admins edit the bring list on the edit form. Donation-based makes
+  website listing (`/embed.json` desc) and the before-class email. Every public listing (Eventbrite page,
+  Facebook, DelawareScene, website) also ends with "About the instructor" from the Marketing-approved
+  `pub_bio` only (`integrations.instructor_about`, lookup set by server.py as `INSTRUCTOR_LOOKUP`;
+  hidden artists and unapproved drafts never appear). `/api/admin/eventbrite/refresh-notes` (`?all=1`
+  for every upcoming listing) re-pushes Eventbrite pages in a background thread; results in
+  `/api/admin/eventbrite/refresh-log`. Facebook posts and DelawareScene listings already made are not edited. Admins edit the bring list on the edit form. Donation-based makes
   an Eventbrite donation ticket.
 - **Series dates**: `/api/classes/{id}/sessions` (admin) rebuilds a series from its first session with
   `skip` dates, adding make-up weeks at the end (`find_series_sessions`), reclaims slots, updates

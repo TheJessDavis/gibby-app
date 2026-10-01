@@ -300,6 +300,9 @@ def _event_description(cls):
         parts.append("What to bring\n\n" + bring)
     if pre:
         parts.append("Before class\n\n" + pre)
+    about = instructor_about(cls)
+    if about:
+        parts.append(f"About the instructor: {about['name']}" + (f" ({about['pronouns']})" if about.get("pronouns") else "") + "\n\n" + about["bio"].strip())
     try:
         faq = json.loads(cls.get("faq") or "[]")
     except Exception:
@@ -386,6 +389,17 @@ def _details_block(cls):
         row("Registration deadline", f"{close_days} day{'s' if close_days != 1 else ''} before the class")
     return "".join(rows)
 
+# Set by server.py at start-up: instructor_id -> {"name","pronouns","bio"} for the
+# Marketing-approved website bio (None when there is none, or the artist is hidden).
+INSTRUCTOR_LOOKUP = None
+
+def instructor_about(cls):
+    """The instructor's approved bio for public listings, or None."""
+    if not INSTRUCTOR_LOOKUP or not cls.get("instructor_id"): return None
+    try: info = INSTRUCTOR_LOOKUP(cls["instructor_id"])
+    except Exception: return None
+    return info if info and (info.get("bio") or "").strip() else None
+
 def student_notes(cls):
     """What students should bring and do beforehand, as the instructor wrote it:
     (what_to_bring, before_class). Either may be ''. Used by every listing so the
@@ -429,6 +443,10 @@ def _structured_html(cls):
         parts.append("<h3>What to bring</h3>" + "".join(f"<p>{_h.escape(x.strip())}</p>" for x in bring.split("\n") if x.strip()))
     if pre:
         parts.append("<h3>Before class</h3>" + "".join(f"<p>{_h.escape(x.strip())}</p>" for x in pre.split("\n") if x.strip()))
+    about = instructor_about(cls)
+    if about:
+        parts.append(f"<h3>About the instructor: {_h.escape(about['name'])}" + (f" ({_h.escape(about['pronouns'])})" if about.get("pronouns") else "") + "</h3>"
+                     + f"<p>{_h.escape(about['bio'].strip())}</p>")
     # 3. Series schedule, video, FAQ.
     try:
         sessions = json.loads(cls.get("session_dates") or "[]")

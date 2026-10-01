@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.116.3-student-notes"
+VERSION = "10.117.0-instructor-bios"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1646,6 +1646,18 @@ BIO_MIN_WORDS, BIO_MAX_WORDS = 40, 80     # the website bio: short, in their own
 HEADSHOT_MIN_PX = 600                     # smallest square the website will look sharp at
 
 ARTISTS_TITLE_DEFAULT = "Meet Our Teaching Artists"
+
+def _instructor_public(uid):
+    """Marketing-approved bio for public listings (integrations.INSTRUCTOR_LOOKUP)."""
+    c = db()
+    try:
+        r = c.execute("""SELECT name, pronouns, pub_bio FROM users WHERE id=? AND deleted_at IS NULL
+                         AND COALESCE(web_hidden,0)=0""", (uid,)).fetchone()
+    finally:
+        c.close()
+    if not r or not (r["pub_bio"] or "").strip(): return None
+    return {"name": r["name"] or "", "pronouns": r["pronouns"] or "", "bio": r["pub_bio"]}
+integrations.INSTRUCTOR_LOOKUP = _instructor_public
 SITE_ORIGINS = {"https://www.theeverett.org", "https://theeverett.org"}
 
 def artist_slug(name, uid):
@@ -3874,7 +3886,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 "ages": ages,
                 "price": ("Donation-based" if cls.get("donation_based")
                           else (("$%g" % cls["ticket_price"]) if cls.get("ticket_price") else "")),
-                "desc": (cls.get("description") or "") + "".join(f"\n\n{lab}: {txt}" for lab, txt in zip(("What to bring", "Before class"), integrations.student_notes(cls)) if txt),
+                "desc": (cls.get("description") or "") + "".join(f"\n\n{lab}: {txt}" for lab, txt in zip(("What to bring", "Before class"), integrations.student_notes(cls)) if txt)
+                        + (lambda a: f"\n\nAbout the instructor, {a['name']}: {a['bio'].strip()}" if a else "")(integrations.instructor_about(cls)),
                 "img": (f"/class-photo/{cls['id']}"
                         if (cls.get("poster_portrait") or cls.get("photo") or "").startswith("data:image/") else ""),
                 "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=site"})
@@ -5865,17 +5878,25 @@ class H(http.server.BaseHTTPRequestHandler):
             u = self.require("admin")
             if not u: return
             c = db()
-            rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL
-                        AND (COALESCE(bring_list,'')!='' OR COALESCE(pre_class,'')!='')""").fetchall()]
+            only_notes = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("all") or ["0"])[0] != "1"
+            rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL""" + (
+                        """ AND (COALESCE(bring_list,'')!='' OR COALESCE(pre_class,'')!='')""" if only_notes else "")).fetchall()]
             c.close()
-            cfg = integrations.load_config(); today = datetime.date.today(); done = []
-            for cls in rows:
-                d = _class_date(cls)
-                if not d or d < today: continue
-                try: res = integrations.update_eventbrite_details(cls, cfg)
-                except Exception as e: res = f"failed: {e}"
-                done.append({"id": cls["id"], "title": cls["title"], "result": res})
-            return self.send_json({"ok": True, "updated": done})
+            today = datetime.date.today()
+            todo = [cls for cls in rows if (lambda d: d and d >= today)(_class_date(cls)) and json.loads(cls.get("external_ids") or "{}").get("eventbrite_id")]
+            def _run(todo=todo):
+                cfg = integrations.load_config(); out = []
+                for cls in todo:
+                    try: res = integrations.update_eventbrite_details(cls, cfg)
+                    except Exception as e: res = f"failed: {e}"
+                    out.append(f"{cls['id']} {cls['title']}: {res}")
+                _meta_set("eb_refresh_log", now() + "\n" + "\n".join(out))
+            threading.Thread(target=_run, daemon=True).start()
+            return self.send_json({"ok": True, "queued": len(todo)})
+        if p == "/api/admin/eventbrite/refresh-log":
+            u = self.require("admin")
+            if not u: return
+            return self.send_json({"log": _meta_get("eb_refresh_log") or ""})
         msc = re.match(r"^/api/classes/(\d+)/send-contract$", p)
         if msc:
             # An approved class that skipped the contract step (an imported Eventbrite
