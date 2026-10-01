@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.116.2-artist-class-lines"
+VERSION = "10.116.3-student-notes"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2189,6 +2189,8 @@ def instructor_email_template(c, cls, instr, template):
         bring = "Please bring: " + " ".join((cls.get("bring_list") or "").split())
     else:
         bring = ("Please bring: " + ", ".join(str(x) for x in sup)) if cls.get("own_materials") and sup else "All materials are provided; just bring yourself."
+    _pre = integrations.student_notes(cls)[1]
+    if _pre: bring += "\n  \u2022 Before class: " + " ".join(_pre.split())
     subj = EMAIL_TEMPLATES.get(template, "{title}").format(title=title)
     if template == "comeback":
         body = (f"Hi there,\n\nThank you again for taking {title} with me. I have new classes coming up at The Gibby "
@@ -3872,7 +3874,7 @@ class H(http.server.BaseHTTPRequestHandler):
                 "ages": ages,
                 "price": ("Donation-based" if cls.get("donation_based")
                           else (("$%g" % cls["ticket_price"]) if cls.get("ticket_price") else "")),
-                "desc": cls.get("description") or "",
+                "desc": (cls.get("description") or "") + "".join(f"\n\n{lab}: {txt}" for lab, txt in zip(("What to bring", "Before class"), integrations.student_notes(cls)) if txt),
                 "img": (f"/class-photo/{cls['id']}"
                         if (cls.get("poster_portrait") or cls.get("photo") or "").startswith("data:image/") else ""),
                 "url": f"https://www.eventbrite.com/e/{ext['eventbrite_id']}?aff=site"})
@@ -5857,6 +5859,23 @@ class H(http.server.BaseHTTPRequestHandler):
                         gcal_result = "rebuilt"
                 except Exception as e: gcal_result = f"failed: {e}"
             return self.send_json({"ok":True, "sessions": sessions, "slot_time": fresh["slot_time"], "class_time": fresh["class_time"], "eventbrite": eb_result, "calendar": gcal_result})
+        if p == "/api/admin/eventbrite/refresh-notes":
+            # Push the current page body to every upcoming published class that has a
+            # bring list or a before-class note, so older listings catch up.
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL
+                        AND (COALESCE(bring_list,'')!='' OR COALESCE(pre_class,'')!='')""").fetchall()]
+            c.close()
+            cfg = integrations.load_config(); today = datetime.date.today(); done = []
+            for cls in rows:
+                d = _class_date(cls)
+                if not d or d < today: continue
+                try: res = integrations.update_eventbrite_details(cls, cfg)
+                except Exception as e: res = f"failed: {e}"
+                done.append({"id": cls["id"], "title": cls["title"], "result": res})
+            return self.send_json({"ok": True, "updated": done})
         msc = re.match(r"^/api/classes/(\d+)/send-contract$", p)
         if msc:
             # An approved class that skipped the contract step (an imported Eventbrite

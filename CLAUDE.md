@@ -132,9 +132,12 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
   frees its own slots first.
 - **Pricing**: instructor enters what they hope to make per student; ticket = materials + that / 0.6.
   Supply links (url, price, qty, name) are required unless they buy their own, or students bring
-  their own (`students_bring` + `bring_list`, Sep 24 2026: no cost, no order; the list goes under
-  "What to bring" in the Eventbrite description and into the before-class email; admins edit it on
-  the edit form). Donation-based makes
+  their own (`students_bring` + `bring_list`, Sep 24 2026: no cost, no order). `integrations.student_notes`
+  returns the bring list and the form's "bring or do before class" note (`pre_class`); both appear as
+  "What to bring" / "Before class" on the Eventbrite page body (`_structured_html`, the part that
+  actually shows; `_event_description` feeds Facebook and DelawareScene), the calendar entry, the
+  website listing (`/embed.json` desc) and the before-class email. `/api/admin/eventbrite/refresh-notes`
+  re-pushes upcoming listings. Admins edit the bring list on the edit form. Donation-based makes
   an Eventbrite donation ticket.
 - **Series dates**: `/api/classes/{id}/sessions` (admin) rebuilds a series from its first session with
   `skip` dates, adding make-up weeks at the end (`find_series_sessions`), reclaims slots, updates

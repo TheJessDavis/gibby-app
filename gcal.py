@@ -360,7 +360,8 @@ def create_event(cls, cfg):
                 title = f"{cls['title']} ({room})" if room else cls["title"]
             desc = (f"Instructor: {cls.get('instructor_name','')}\nRoom: {cls.get('room','')}\n"
                     f"{__import__('integrations').ages_open_line(cls) or cls.get('age_range','')}\nTicket: ${cls.get('ticket_price','')}"
-                    + (f"\nSession {i} of {n}" if n > 1 else "") + f"\n\n{cls.get('description','')}")
+                    + (f"\nSession {i} of {n}" if n > 1 else "") + f"\n\n{cls.get('description','')}"
+                    + "".join(f"\n\n{lab}: {txt}" for lab, txt in zip(("What to bring", "Before class"), __import__('integrations').student_notes(cls)) if txt))
             # Timezone-aware ISO strings: unambiguous for both the Apps Script
             # webhook (new Date(...) honours the offset) and the Calendar API.
             events.append({"title": title, "description": desc,

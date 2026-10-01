@@ -295,9 +295,11 @@ def _event_description(cls):
         parts.append(f"A {len(sessions)}-week course. One ticket covers all "
                      f"{len(sessions)} sessions:\n{lines}")
     parts.append(cls.get("description", "") or "")
-    bring = (cls.get("bring_list") or "").strip() if cls.get("students_bring") else ""
+    bring, pre = student_notes(cls)
     if bring:
         parts.append("What to bring\n\n" + bring)
+    if pre:
+        parts.append("Before class\n\n" + pre)
     try:
         faq = json.loads(cls.get("faq") or "[]")
     except Exception:
@@ -384,6 +386,15 @@ def _details_block(cls):
         row("Registration deadline", f"{close_days} day{'s' if close_days != 1 else ''} before the class")
     return "".join(rows)
 
+def student_notes(cls):
+    """What students should bring and do beforehand, as the instructor wrote it:
+    (what_to_bring, before_class). Either may be ''. Used by every listing so the
+    Eventbrite page, Facebook, DelawareScene, the calendar and the website agree."""
+    bring = (cls.get("bring_list") or "").strip() if cls.get("students_bring") else ""
+    pre = (cls.get("pre_class") or "").strip()
+    if pre and bring and pre.lower() == bring.lower(): pre = ""
+    return bring, pre
+
 def _structured_html(cls):
     """Real HTML for the Eventbrite page body via structured content (the legacy
     description field escapes tags AND collapses newlines).
@@ -412,6 +423,12 @@ def _structured_html(cls):
     details = _details_block(cls)
     if details:
         parts.append("<h3>Class details</h3>" + details)
+    # 2b. What students bring, and anything to do before class (instructor's words).
+    bring, pre = student_notes(cls)
+    if bring:
+        parts.append("<h3>What to bring</h3>" + "".join(f"<p>{_h.escape(x.strip())}</p>" for x in bring.split("\n") if x.strip()))
+    if pre:
+        parts.append("<h3>Before class</h3>" + "".join(f"<p>{_h.escape(x.strip())}</p>" for x in pre.split("\n") if x.strip()))
     # 3. Series schedule, video, FAQ.
     try:
         sessions = json.loads(cls.get("session_dates") or "[]")
