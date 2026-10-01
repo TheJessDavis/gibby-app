@@ -231,6 +231,24 @@ function renderArtistClasses(host, slug){
     rep('artist classes '+slug);
   }).catch(function(e){ host.innerHTML=''; rep('artist classes failed: '+e); });
 }
+/* Native artist list: under each artist Michelle places a Code block with
+   <div class="gibby-artist-classes" data-artist="jess-kille"></div>; this fills
+   it with that artist's next three classes open for sign-up, or nothing. One
+   fetch for the whole page. */
+function renderArtistClassLines(){
+  var hosts=document.querySelectorAll('.gibby-artist-classes:not([data-done])');
+  if(!hosts.length)return;
+  for(var k=0;k<hosts.length;k++)hosts[k].setAttribute('data-done','1');
+  fetch(APP+'/embed/instructors.json').then(function(r){return r.json()}).then(function(d){
+    var by={}; (d.instructors||[]).forEach(function(i){by[i.slug]=i});
+    for(var k=0;k<hosts.length;k++){
+      var h=hosts[k], a=by[(h.getAttribute('data-artist')||'').toLowerCase()];
+      var cls=(a&&a.classes)||[];
+      h.innerHTML=cls.length?'<div style="font-size:.9em"><b>Upcoming classes</b><div style="height:6px"></div>'+cls.map(function(c){return '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:inline-block;margin:3px 2px;padding:7px 14px;border:1px solid currentColor;border-radius:999px;text-decoration:none;line-height:1.3">'+esc(c.title)+' \u00b7 '+esc(c.when)+' \u2192</a>'}).join('')+'</div>':'';
+    }
+    rep('artist class lines='+hosts.length);
+  }).catch(function(e){rep('artist class lines failed: '+e)});
+}
 /* One line under the Art Workshops intro pointing at the teaching artists page.
    Placed by this script so the busy workshops page never needs hand editing. */
 function artistsLink(){
@@ -407,6 +425,7 @@ function ginit(){
   var onHome=location.pathname==='/'||location.pathname==='';
   renderInstructors();
   renderArtist();
+  renderArtistClassLines();
   if(!onWorkshops&&!onHome)return;
   var tries=0;
   function load(){
