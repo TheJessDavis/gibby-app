@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.116.0-native-artist-pages"
+VERSION = "10.116.1-no-paste-email"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6081,8 +6081,6 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by,
                              pub_at=?, web_review=NULL, web_review_note=NULL, web_approved_by=? WHERE id=?""", (now(), u["name"], uid))
                 c.commit(); c.close()
-                try: send_site_update(dict(who), u["name"])
-                except Exception as ex: print("[web] site update email failed:", ex)
                 mailer.send(who["email"], "Your website profile is live",
                     f"Hi {(who['name'] or '').split(' ')[0] or 'there'},\n\nMarketing approved your bio and headshot. They are now on The Everett's website: "
                     f"https://www.theeverett.org/meet-our-teaching-artists\n\nThe Gibby")
