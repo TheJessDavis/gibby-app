@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.115.3-party-option"
+VERSION = "10.116.0-native-artist-pages"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -1788,6 +1788,34 @@ def push_agreement_to_drive(ag, signers, pdf_bytes):
     except Exception as ex:
         print("[agreement] Drive filing failed:", ex)
     return None
+
+def send_site_update(who, approver):
+    """The artist pages are ordinary Squarespace content now (Michelle edits them
+    there), so an approval sends her what to paste: the bio as approved, the
+    pronouns, links and skills, and the headshot attached."""
+    c = db(); r = c.execute("SELECT * FROM users WHERE id=?", (who["id"],)).fetchone(); c.close()
+    if not r: return
+    r = dict(r)
+    slug = artist_slug(r["name"] or "", r["id"])
+    links = [f"{k.title()}: {r.get('social_' + k)}" for k in ("website", "instagram", "facebook", "tiktok", "etsy") if r.get("social_" + k)]
+    skills = ", ".join(s for s in _loads_list(r.get("skills")) if s)
+    page = f"https://www.theeverett.org/teaching-artists/{slug}"
+    body = (f"{approver} approved {r['name']}'s website profile in the Gibby app. Here is what to put on their page in Squarespace "
+            f"(Pages > Not Linked > {r['name']}; the address is {page}).\n\n"
+            f"NAME: {r['name']}" + (f"   ({r['pronouns']})" if r.get("pronouns") else "") + "\n\n"
+            f"BIO:\n{r.get('pub_bio') or r.get('bio') or '(no bio)'}\n\n"
+            + (f"SKILLS: {skills}\n\n" if skills else "")
+            + (("LINKS:\n" + "\n".join(links) + "\n\n") if links else "")
+            + "The headshot is attached. The Upcoming classes list on the page updates itself.\n\n"
+            "New artist? In Squarespace duplicate any artist page, rename it, set the URL slug to "
+            f"teaching-artists/{slug}, replace the photo and text, and add their photo to the main Meet Our Teaching Artists page linking to {page}.")
+    atts = []
+    hs = r.get("pub_headshot_web") or r.get("headshot") or ""
+    m = re.match(r"^data:(image/[a-z]+);base64,(.*)$", hs, re.S)
+    if m:
+        try: atts = [(f"{slug}.jpg", base64.b64decode(m.group(2)), m.group(1))]
+        except Exception: atts = []
+    mailer.send(web_review_to(), f"Update the website: {r['name']}", body, attachments=atts or None, origin="user")
 
 def reimb_email_body(row, items, folder_link=None, instr_email=None):
     """The plain summary of a reimbursement request for the treasurer's email:
@@ -6053,6 +6081,8 @@ class H(http.server.BaseHTTPRequestHandler):
                 c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by,
                              pub_at=?, web_review=NULL, web_review_note=NULL, web_approved_by=? WHERE id=?""", (now(), u["name"], uid))
                 c.commit(); c.close()
+                try: send_site_update(dict(who), u["name"])
+                except Exception as ex: print("[web] site update email failed:", ex)
                 mailer.send(who["email"], "Your website profile is live",
                     f"Hi {(who['name'] or '').split(' ')[0] or 'there'},\n\nMarketing approved your bio and headshot. They are now on The Everett's website: "
                     f"https://www.theeverett.org/meet-our-teaching-artists\n\nThe Gibby")

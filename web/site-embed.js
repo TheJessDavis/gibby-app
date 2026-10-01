@@ -181,7 +181,8 @@ function renderArtist(){
   var host=document.getElementById('gibby-artist');
   if(!host||host.getAttribute('data-done'))return;
   host.setAttribute('data-done','1');
-  var slug=(new URLSearchParams(location.search).get('artist')||location.pathname.replace(/\/+$/,'').split('/').pop()||'').toLowerCase().replace(/[^a-z0-9-]/g,'');
+  var slug=(host.getAttribute('data-artist')||new URLSearchParams(location.search).get('artist')||location.pathname.replace(/\/+$/,'').split('/').pop()||'').toLowerCase().replace(/[^a-z0-9-]/g,'');
+  if(host.getAttribute('data-part')==='classes'){ return renderArtistClasses(host, slug); }
   var blk=host.closest('.sqs-block-code')||host.parentElement;
   var h1=blk&&blk.querySelector('h1');
   function heading(t){ if(h1){ h1.textContent=t; h1.style.fontFamily='var(--heading-font-font-family, inherit)'; h1.style.fontWeight='var(--heading-font-font-weight, 500)'; h1.style.fontSize='clamp(2rem, 4vw, 3.4rem)'; h1.style.lineHeight='1.15'; h1.style.margin='0 0 .4em'; } }
@@ -213,6 +214,22 @@ function renderArtist(){
     adminEditLink(host, a.id);
     rep('artist page '+slug);
   }).catch(function(e){ host.innerHTML=back+'<p>Could not load this artist right now.</p>'; rep('artist fetch failed: '+e); });
+}
+/* Classes only: the rest of an artist's page is ordinary Squarespace content
+   Michelle edits; this block keeps the list of upcoming classes current. */
+function renderArtistClasses(host, slug){
+  if(!slug){ host.innerHTML=''; return; }
+  host.innerHTML='<div style="opacity:.6;padding:12px 0">Loading classes\u2026</div>';
+  fetch(APP+'/embed/instructor/'+slug+'.json').then(function(r){return r.json()}).then(function(d){
+    var a=d&&d.artist; var cls=(a&&a.all_classes)||[];
+    var first=a?(a.name||'').split(' ')[0]:'';
+    host.innerHTML='<h3 style="margin:0 0 8px;font-family:var(--heading-font-font-family,inherit);font-weight:var(--heading-font-font-weight,500)">Upcoming classes'+(first?' with '+esc(first):'')+'</h3>'
+      +(cls.length?cls.map(function(c){return c.open
+          ? '<a href="'+esc(c.url)+'" target="_blank" rel="noopener" style="display:block;margin:6px 0;padding:12px 16px;border:1px solid currentColor;text-decoration:none;line-height:1.3"><b>'+esc(c.title)+'</b><br><span style="font-size:.9em;opacity:.8">'+esc(c.when)+' \u00b7 register on Eventbrite \u2192</span></a>'
+          : '<div style="display:block;margin:6px 0;padding:12px 16px;border:1px dashed currentColor;opacity:.7;line-height:1.3"><b>'+esc(c.title)+'</b><br><span style="font-size:.9em">'+esc(c.when)+' \u00b7 registration closed</span></div>'}).join('')
+        :'<p style="opacity:.75">Nothing open for sign-up right now. Check back soon, or see <a href="/art-workshops">all upcoming workshops</a>.</p>');
+    rep('artist classes '+slug);
+  }).catch(function(e){ host.innerHTML=''; rep('artist classes failed: '+e); });
 }
 /* One line under the Art Workshops intro pointing at the teaching artists page.
    Placed by this script so the busy workshops page never needs hand editing. */
