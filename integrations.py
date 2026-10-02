@@ -528,13 +528,21 @@ def update_eventbrite_details(cls, cfg):
         return "skipped: never published to Eventbrite"
     if not cfg["live"]:
         return f"dry-run (would update event {eid})"
+    # An imported event was written by a person on Eventbrite: the app owns its
+    # price, capacity and times, NEVER its page body or summary (Oct 2 2026: a
+    # refresh replaced real descriptions with one-line stubs).
+    # ...unless someone wrote a real description in the app (an admin repairing a
+    # page, or editing the class on purpose): then the body is pushed like any other.
+    desc_words = len((cls.get("description") or "").split())
+    stub = desc_words < 20 or (cls.get("description") or "").strip() == (cls.get("summary") or "").strip()
+    imported = (bool(cls.get("imported")) or bool(ext.get("imported"))) and stub
     # description stays EMPTY: the page body comes from structured content, and
     # filling this legacy field makes Eventbrite print the text twice on the
     # listing (a truncated copy above the real one).
-    ev_body = {"name": {"html": cls["title"]},
-               "description": {"html": ""},
-               "summary": event_summary(cls),
-               "capacity": cls.get("max_p")}
+    ev_body = {"name": {"html": cls["title"]}, "capacity": cls.get("max_p")}
+    if not imported:
+        ev_body["description"] = {"html": ""}
+        ev_body["summary"] = event_summary(cls)
     if cfg.get("eventbrite_venue_id"):   # heals older events that said 'Location TBD'
         ev_body["venue_id"] = cfg["eventbrite_venue_id"]
     _req(f"https://www.eventbriteapi.com/v3/events/{eid}/", token=cfg["eventbrite_token"],
@@ -557,6 +565,8 @@ def update_eventbrite_details(cls, cfg):
                  token=cfg["eventbrite_token"], json_body={"ticket_class": tc_body})
     except Exception as e:
         print("[eventbrite] ticket update failed (event details updated):", e)
+    if imported:
+        return "updated (price, capacity and times only: imported event, page body left alone)"
     _push_structured_content(eid, cls, cfg)
     return "updated"
 

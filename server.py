@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.117.2-photo-reminder"
+VERSION = "10.117.3-imported-guard"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -2817,7 +2817,20 @@ def import_eventbrite_event(c, ev, instructor_id, admin_id, sessions=None):
     slot_date = day_label(d) if d else ""
     span = f"{_fmt_clock(start)} – {_fmt_clock(end)}" if start and end else _fmt_clock(start)
     ext = {"eventbrite_id": str(ev["id"]), "eventbrite_url": ev.get("url"), "imported": True}
-    desc = (ev.get("description") or "").strip() or (ev.get("summary") or "").strip()
+    desc = (ev.get("description") or "").strip()
+    if len(desc.split()) < 20:
+        # Pages built in Eventbrite's editor keep their text in structured content,
+        # not the legacy description field: read it so the app holds the real words.
+        try:
+            cfg = integrations.load_config()
+            sc = integrations._req(f"https://www.eventbriteapi.com/v3/events/{ev['id']}/structured_content/", method="GET", token=cfg["eventbrite_token"])
+            raw = "".join((m.get("data", {}).get("body", {}).get("text", "") or "") for m in (sc.get("modules") or []))
+            txt = html.unescape(re.sub(r"</p>|<br\s*/?>|</li>", "\n", raw)); txt = re.sub(r"<[^>]+>", "", txt)
+            txt = re.sub(r"\n{3,}", "\n\n", txt).strip()
+            if len(txt.split()) >= 20: desc = txt
+        except Exception as e:
+            print("[import] structured content read failed:", e)
+    desc = desc or (ev.get("summary") or "").strip()
     sess_json, is_series, n_sess = "[]", 0, 1
     if sessions and len(sessions) > 1:
         sess = []
@@ -5895,7 +5908,7 @@ class H(http.server.BaseHTTPRequestHandler):
             if not u: return
             c = db()
             only_notes = (urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("all") or ["0"])[0] != "1"
-            rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL""" + (
+            rows = [dict(r) for r in c.execute("""SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(imported,0)=0""" + (
                         """ AND (COALESCE(bring_list,'')!='' OR COALESCE(pre_class,'')!='')""" if only_notes else "")).fetchall()]
             c.close()
             today = datetime.date.today()
