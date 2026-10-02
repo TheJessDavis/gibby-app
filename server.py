@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.117.0-instructor-bios"
+VERSION = "10.117.1-review-ready"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -323,6 +323,12 @@ def init_db():
     except sqlite3.OperationalError: pass
     try: c.execute("ALTER TABLE users ADD COLUMN deleted_at TEXT")   # also added below; needed here on a fresh database
     except sqlite3.OperationalError: pass
+    if not c.execute("SELECT 1 FROM meta WHERE k='web_review_nobio_cleared'").fetchone():
+        # Oct 2026: profiles held for review with no bio and nothing published had
+        # nothing for Marketing to approve; they wait quietly until a bio arrives.
+        c.execute("""UPDATE users SET web_review=NULL, web_pending_at=NULL WHERE web_review='pending'
+                     AND COALESCE(TRIM(bio),'')='' AND COALESCE(pub_bio,'')='' AND COALESCE(pub_headshot_web,'')=''""")
+        c.execute("INSERT INTO meta(k,v) VALUES('web_review_nobio_cleared','1')")
     if not c.execute("SELECT 1 FROM meta WHERE k='web_review_seeded'").fetchone():
         # Everything already on the page counts as approved, so the page does not go blank.
         c.execute("""UPDATE users SET pub_bio=bio, pub_headshot_web=COALESCE(headshot_web, headshot), pub_headshot_by=headshot_by, pub_at=?
@@ -1672,16 +1678,21 @@ WEB_REVIEW_TO_DEFAULT = "mtruban@theeverett.org"   # Michelle Truban reviews web
 def web_review_to():
     return [e.strip() for e in (_meta_get("web_review_to") or WEB_REVIEW_TO_DEFAULT).replace(";", ",").split(",") if e.strip()]
 
-def mark_web_pending(c, uid, what):
+def mark_web_pending(c, uid, what, renotify=False):
     """The artist changed something the website shows: hold it for Marketing and
-    tell them once (not again while it is already waiting)."""
+    tell them. While it is already waiting, a further change emails again only
+    when it touches the bio or the photo (renotify), so Marketing hears when the
+    piece they were waiting for arrives."""
     row = c.execute("SELECT name, web_review FROM users WHERE id=?", (uid,)).fetchone()
     already = row and row["web_review"] == "pending"
     c.execute("UPDATE users SET web_review='pending', web_pending_at=?, web_review_note=NULL WHERE id=?", (now(), uid))
-    if not already:
-        mailer.send(web_review_to(), f"Website profile waiting for review: {row['name'] if row else 'an artist'}",
-            f"{row['name'] if row else 'An artist'} updated their {what} in the Gibby app. Nothing changes on theeverett.org until it is approved.\n\n"
-            f"An admin approves it under People in the app: {mailer.APP_URL}\n\n(Every change an artist makes to their bio or headshot waits here first.)")
+    if not already or renotify:
+        name = row["name"] if row else "An artist"
+        mailer.send(web_review_to(), f"Website profile {'updated again' if already else 'waiting for review'}: {name}",
+            f"{name} updated their {what} in the Gibby app. Nothing changes on theeverett.org until it is approved.\n\n"
+            f"Review it under More > Reach > Website page in the app: {mailer.APP_URL}\n\n"
+            "You get a new email if they change their bio or photo again before you review it, and nothing comes to you until an artist has written a bio.",
+            origin="user")
 
 INCIDENT_TO_DEFAULT = "mtruban@theeverett.org, scosans@everetttheatre.com"   # Michelle Truban and Seth Cosans
 INCIDENT_LOCATIONS = ["Theatre", "Annex", "Gibby"]
@@ -5331,7 +5342,7 @@ class H(http.server.BaseHTTPRequestHandler):
                         return self.send_json({"error": f"Your bio is {nwords} word{'' if nwords == 1 else 's'} in all; it needs to be between {BIO_MIN_WORDS} and {BIO_MAX_WORDS} words for the website."},400)
                 if bio != (u.get("bio") or ""):
                     c.execute("UPDATE users SET bio=?, bio_parts=? WHERE id=?", (bio or None, json.dumps(parts) if bio else None, u["id"]))
-                    if bio: mark_web_pending(c, u["id"], "bio")
+                    pass
             if b.get("headshot") is not None:
                 hs = str(b.get("headshot") or "")
                 if hs and not hs.startswith("data:image/"):
@@ -5343,7 +5354,7 @@ class H(http.server.BaseHTTPRequestHandler):
                     c.close(); return self.send_json({"error": f"That photo is only {px}px across. The website needs at least {HEADSHOT_MIN_PX}px; please choose a larger, sharper photo."},400)
                 hw = str(b.get("headshot_web") or "")
                 c.execute("UPDATE users SET headshot=?, headshot_px=?, headshot_by=?, headshot_web=? WHERE id=?", (hs or None, px if hs else None, "artist" if hs else None, hw if (hs and hw.startswith("data:image/") and len(hw) < 400_000) else None, u["id"]))
-                if hs: mark_web_pending(c, u["id"], "headshot")
+                pass
             if b.get("phone") is not None:
                 c.execute("UPDATE users SET phone=? WHERE id=?", (re.sub(r"[^0-9+() .-]", "", str(b.get("phone") or ""))[:30].strip() or None, u["id"]))
             # Every change to what the website could show goes to Marketing, however
@@ -5353,10 +5364,15 @@ class H(http.server.BaseHTTPRequestHandler):
                        "social_facebook", "social_instagram", "social_tiktok", "social_website", "social_etsy")
             after = dict(c.execute("SELECT * FROM users WHERE id=?", (u["id"],)).fetchone())
             changed = [k for k in watched if (after.get(k) or "") != (u.get(k) or "")]
-            if changed or (u.get("web_review") or "") == "changes":
-                mark_web_pending(c, u["id"], ", ".join(changed) or "profile")
+            # Nothing goes to Marketing until there is something to put on the site:
+            # a bio, or a profile that is already published. A brand-new artist saving
+            # their name or photo first waits quietly until the bio arrives.
+            ready = bool((after.get("bio") or "").strip()) or bool(after.get("pub_bio") or after.get("pub_headshot_web"))
+            send = ready and (changed or (u.get("web_review") or "") == "changes")
+            if send:
+                mark_web_pending(c, u["id"], ", ".join(changed) or "profile", renotify=any(k in changed for k in ("bio", "headshot", "photo")))
             c.commit(); c.close()
-            return self.send_json({"ok":True, "review": bool(changed or (u.get("web_review") or "") == "changes")})
+            return self.send_json({"ok":True, "review": bool(send)})
         if p == "/api/profile/resubmit":
             # "Done, send it back": the artist answers Marketing's request without
             # changing anything the app tracks (or after fixing it elsewhere).

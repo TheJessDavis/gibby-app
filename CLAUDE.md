@@ -249,7 +249,10 @@ in the `meta` table (thank-you settings, deadline reminders, supply ordering add
 - **Marketing review, every change**: `/api/profile` compares the saved row against the user's row
   before the save (name, pronouns, bio, headshot, photo, skills, sign-off, links) and any difference
   sets `web_review='pending'` and emails Michelle; a save while status is `changes` is the
-  resubmission. `/api/profile/resubmit` sends it back without a change. Admin `requeue` puts a
+  resubmission. Since Oct 2 2026 nothing goes to Marketing until the artist has a bio or is already
+  published (a new artist saving a name or photo waits quietly), and while a profile waits, a further
+  bio or photo change emails Marketing again ("updated again"); other fields stay silent.
+  `/api/profile/resubmit` sends it back without a change. Admin `requeue` puts a
   published profile back in front of Marketing; `users.web_approved_by` records who approved.
   Since Sep 29 the More > Reach > Website page screen edits the live page directly (any admin,
   Michelle included): title (meta `artists_title`), intro, each artist's published bio and pronouns
