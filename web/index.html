@@ -1999,6 +1999,7 @@ async function adminReviews(){
         <div class="meta" style="margin-top:6px;white-space:pre-wrap">${esc(u.bio||'(no bio yet)')}</div>
         <div class="meta" style="margin-top:6px">${u.headshot_px?`Headshot ${u.headshot_px}px${u.headshot_by==='gibby'?' (Gibby)':' (their own)'}`:'No headshot'}${u.bio_words?` \u00b7 bio ${u.bio_words} words`:''}${u.web_review==='changes'?` \u00b7 change requested: \u201C${esc(u.web_review_note||'')}\u201D`:''}</div></div></div>
       ${u.web_review==='pending'?`<div class="two" style="margin-top:10px"><button class="btn ghost" onclick="webReview(${u.id},'changes')">Ask for a change</button><button class="btn dark" onclick="webReview(${u.id},'approve')">Approve for the website</button></div>`
+        :u.web_review==='changes'?`<div class="meta" style="margin-top:6px"><a href="#" onclick="webReview(${u.id},'remind');return false">Remind them</a></div>`
         :u.published&&!u.web_review?`<div class="meta" style="margin-top:6px"><a href="#" onclick="webReview(${u.id},'requeue');return false">Send to Marketing for another look</a></div>`:''}</div>`;
   let s={}; try{ s=await api('/api/integrations'); }catch(_){}
   const liveCard=u=>`<div class="card ${u.web_hidden?'past':''}" style="padding:12px 16px" id="wl${u.id}"><div style="display:flex;gap:12px;align-items:flex-start">
@@ -2032,6 +2033,7 @@ async function webReview(uid, action){
   if(action==='changes'){ note=prompt('What should they change? (they get this by email)'); if(note===null) return; }
   try{ await api('/api/admin/web-review/'+uid+'/'+action,'POST',{note}); }catch(e){ alert(e.message); return; }
   if(action==='hide'||action==='show'){ toast(action==='hide'?'Hidden from the page.':'Back on the page.'); }
+  else if(action==='remind'){ toast('Reminder sent.'); }
   else alert(action==='approve'?'Approved. It is on the website now.':action==='requeue'?'Sent to Marketing for review.':'Sent back with your note.');
   if(ADMIN_TAB==='reviews') adminReviews(); else adminPeople();
 }

@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.117.1-review-ready"
+VERSION = "10.117.2-photo-reminder"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6104,13 +6104,27 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"Hi {(u['name'] or '').split(' ')[0] or 'there'},\n\nYour incident report went to Michelle Truban and Seth Cosans with the completed form attached. "
                 f"Thank you for filing it promptly.\n\nThe Gibby", attachments=[(f"Incident report #{rid}.pdf", pdf_bytes, "application/pdf")])
             return self.send_json({"ok":True, "id": rid, "folder": folder_link})
-        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes|requeue|edit|hide|show)$", p)
+        mwr = re.match(r"^/api/admin/web-review/(\d+)/(approve|changes|requeue|edit|hide|show|remind)$", p)
         if mwr:
             u = self.require("admin")
             if not u: return
             uid = int(mwr.group(1)); b = self.read_json(); c = db()
             who = c.execute("SELECT * FROM users WHERE id=? AND deleted_at IS NULL", (uid,)).fetchone()
             if not who: c.close(); return self.send_json({"error":"not found"},404)
+            if mwr.group(2) == "remind":
+                # A nudge to an artist Marketing sent back: what is still missing, in plain words.
+                missing = []
+                if not (who["headshot"] or "").startswith("data:image/"): missing.append("a headshot (a clear photo of your face, at least 600px across)")
+                if not (who["bio"] or "").strip(): missing.append("your bio (the three short prompts on your profile)")
+                need = " and ".join(missing) or "the change Marketing asked for"
+                note = (who["web_review_note"] or "").strip()
+                first = (who["name"] or "").split(" ")[0] or "there"
+                c.close()
+                mailer.send(who["email"], f"Reminder: your website profile still needs {'a photo' if missing and missing[0].startswith('a headshot') else 'a change'}",
+                    f"Hi {first},\n\nYour profile for The Everett's Meet Our Teaching Artists page is almost ready. It still needs {need}.\n\n"
+                    + (f"Marketing's note: {note}\n\n" if note else "")
+                    + f"Open the app, tap Profile, add it and save. It goes to Marketing for a quick look and then on to the website.\n{mailer.APP_URL}\n\nThank you,\nThe Gibby", origin="user")
+                return self.send_json({"ok":True, "to": who["email"], "missing": missing})
             if mwr.group(2) in ("hide", "show"):
                 c.execute("UPDATE users SET web_hidden=? WHERE id=?", (1 if mwr.group(2) == "hide" else 0, uid)); c.commit(); c.close()
                 return self.send_json({"ok":True})
