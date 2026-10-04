@@ -424,8 +424,9 @@ def _structured_html(cls):
     #    we drop it here rather than show it to the reader twice.
     body = (cls.get("description") or "").strip()
     summary = event_summary(cls)
-    borrowed = not (cls.get("summary") or "").strip()   # teaser came from the description
-    if borrowed and summary and body.startswith(summary):
+    # (Whether the teaser was borrowed from the description or typed to match its
+    # first line, the reader should see that sentence once.)
+    if summary and body.startswith(summary):
         rest = body[len(summary):].strip()
         if len(rest.split()) >= 12:      # never leave the listing with a stub
             body = rest
