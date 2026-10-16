@@ -71,16 +71,17 @@ Useful reads: `/api/dashboard`, `/api/classes/all`, `/api/report/money`, `/api/e
 The app cannot use Google APIs directly, so two Apps Scripts act as bridges. The `.gs` files in
 `scripts/` are mirrors; the deployed code lives in the Google accounts.
 
-- **Gibby Calendar Bridge**: calendar events, Drive filing (contracts, class photos, paperwork,
-  reimbursements, backups), the Materials and Treasurer spreadsheets. It lived on
-  jdavis@everetttheatre.com until that account was turned off in Oct 2026 (the app ran on the
-  Aug 18 busy-times snapshot `web/gibby-busy.ics` and Drive filing failed from about Oct 5); it is
-  being redeployed on gibby@theeverett.org from `scripts/gcal-webhook.gs` (Version 20 mirror:
-  sheet with name/tab, contract with pdf, backup, list, photo with root, create, delete). Setup
-  files for Jess are in ~/Downloads/gibby-bridge-move. After the move: set GCAL_WEBHOOK_URL,
-  GCAL_WEBHOOK_KEY, GCAL_ICS_URL on Render, run `POST /api/admin/gcal/backfill` (posts approved
-  classes that missed the calendar), and clear the temporary `closed_months` pause (all months
-  Oct 2026 to Aug 2027 were closed on Oct 16 so nobody books against the stale snapshot).
+- **Gibby Calendar Bridge** on gibby@everetttheatre.com (the Gibby Arts Center Workspace account, also
+  gibby@theeverett.org; Apps Script project 17g71zqZZY5wQFwbJUd4gZkneLzfa4_VSNFK5XsIptbBRxJAuUf5uGEuv,
+  deployed Oct 16 2026 as Version 1 from `scripts/gcal-webhook.gs` v20 with the real key): calendar
+  events, Drive filing (contracts, class photos, paperwork, reimbursements, backups), the Materials and
+  Treasurer spreadsheets. It lived on jdavis@everetttheatre.com until that account was turned off in
+  Oct 2026 (the app ran on the Aug 18 snapshot `web/gibby-busy.ics` from about Oct 5 to Oct 16; the
+  old Drive folders are still owned by the dead account until a Workspace admin transfers them). Drive
+  folders are created fresh under the Gibby account the first time each root is used. Admin repair
+  tools: `POST /api/admin/gcal/backfill` (classes that missed the calendar) and
+  `POST /api/admin/reimb/{id}/refile` (file a reimbursement on Drive again). Settings files are in
+  ~/Downloads/gibby-bridge-move/render-settings.txt.
 - **Gibby Mail Bridge** on gibby@everetttheatre.com: sends every email as that mailbox. Version 2.
 
 To change one: edit in the Apps Script editor, save, Deploy > Manage deployments > pencil > New
