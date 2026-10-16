@@ -82,6 +82,11 @@ The app cannot use Google APIs directly, so two Apps Scripts act as bridges. The
   tools: `POST /api/admin/gcal/backfill` (classes that missed the calendar) and
   `POST /api/admin/reimb/{id}/refile` (file a reimbursement on Drive again). Settings files are in
   ~/Downloads/gibby-bridge-move/render-settings.txt.
+- **Backups**: the nightly Drive backup cannot run at the current database size (about 118 MB
+  stripped, 85 MB gzipped; Apps Script takes 45 MB at most), so it stops early with "too big" and
+  the real backup is Render's daily disk snapshot (kept seven days, Disk page) plus a manual
+  `POST /api/admin/export-db` now and then. The backup and export paths stream through temp files;
+  never load a whole database copy into memory, the host has 512 MB and did crash that way.
 - **Gibby Mail Bridge** on gibby@everetttheatre.com: sends every email as that mailbox. Version 2.
 
 To change one: edit in the Apps Script editor, save, Deploy > Manage deployments > pencil > New
