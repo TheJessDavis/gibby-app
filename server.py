@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.118.0-bridge-move"
+VERSION = "10.118.1-db-import"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6063,6 +6063,31 @@ class H(http.server.BaseHTTPRequestHandler):
                 _meta_set("eb_refresh_log", now() + "\n" + "\n".join(out))
             threading.Thread(target=_run, daemon=True).start()
             return self.send_json({"ok": True, "queued": len(todo)})
+        if p == "/api/admin/import-db":
+            # Restore a database copy made by export-db onto a fresh service (moving
+            # hosts). Refused once the service holds real data, so it cannot wipe a
+            # live install by accident. Body: raw gzip bytes. Restarts afterwards.
+            u = self.require("admin")
+            if not u: return
+            import gzip
+            c = db(); n = c.execute("SELECT COUNT(*) FROM classes").fetchone()[0]; c.close()
+            if n > 10 and os.environ.get("ALLOW_DB_IMPORT") != "1":
+                return self.send_json({"error": f"This service already holds {n} classes; import is only allowed onto a fresh service (or set ALLOW_DB_IMPORT=1)."}, 400)
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > 400_000_000: return self.send_json({"error":"send the gzip file as the request body"}, 400)
+            raw = gzip.decompress(self.rfile.read(length))
+            if not raw.startswith(b"SQLite format 3"): return self.send_json({"error":"that is not a SQLite database"}, 400)
+            tmp = DB + ".import"
+            open(tmp, "wb").write(raw)
+            v = sqlite3.connect(tmp); ok = v.execute("PRAGMA integrity_check").fetchone()[0]
+            counts = {t: v.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("classes", "users", "registrations")}; v.close()
+            if ok != "ok": os.remove(tmp); return self.send_json({"error": f"integrity check failed: {ok}"}, 400)
+            os.replace(tmp, DB)
+            for ext in ("-wal", "-shm"):
+                try: os.remove(DB + ext)
+                except OSError: pass
+            threading.Timer(1.5, lambda: os._exit(0)).start()   # the host restarts the service on a clean DB
+            return self.send_json({"ok": True, "imported": counts, "restarting": True})
         if p == "/api/admin/export-db":
             # A full copy of the database (gzip), for moving the app or for a safe copy
             # when the Drive backup cannot run. Admin only; never cached.
