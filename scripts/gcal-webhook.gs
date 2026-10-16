@@ -2,7 +2,8 @@
  * Gibby Class Manager <-> Google Calendar + Drive bridge.
  *
  * This is the readable mirror of the script deployed as "Gibby Calendar Bridge"
- * on the jdavis@everetttheatre.com account (the live copy is minified onto one
+ * on the gibby@everetttheatre.com account since Oct 2026 (before that jdavis@everetttheatre.com,
+ * which was turned off). The live copy is minified onto one
  * line; keep this file in sync when the live one changes).
  *
  * Why this exists: the everetttheatre.com Workspace blocks service account keys,
@@ -23,7 +24,7 @@
  * One-time setup (about 3 minutes):
  *   1. Go to script.google.com while signed in as the Everett account and
  *      create a New project. Delete the sample code, paste this whole file.
- *   2. Change SHARED_KEY below to a long random phrase. Save.
+ *   2. Set SHARED_KEY below to the phrase in render-settings.txt (same as GCAL_WEBHOOK_KEY on Render). Save.
  *   3. Deploy -> New deployment -> type: Web app.
  *      Execute as: Me. Who has access: Anyone. Click Deploy and Authorize.
  *      IMPORTANT: on the consent screen make sure the FULL Drive permission
@@ -41,7 +42,7 @@
  *        GCAL_LIVE         = true
  */
 
-var SHARED_KEY = 'CHANGE-ME-to-a-long-random-phrase';
+var SHARED_KEY = 'PASTE-THE-KEY-FROM-render-settings.txt';   // must match GCAL_WEBHOOK_KEY on Render
 var CALENDAR_ID = 'everetttheatre.com_ck9si1lmol1aqpmdaqn075us7o@group.calendar.google.com';
 // How far the busy feed looks: the whole season plus a little slack.
 var FEED_START = new Date('2026-08-01T00:00:00-04:00');
@@ -103,25 +104,60 @@ function doPost(e) {
   if (!body.key || body.key !== SHARED_KEY) return reply({ error: 'wrong key' });
 
   if (body.action === 'sheet') {
-    // Rewrite the master worksheet wholesale: one row per class, idempotent.
+    // Rewrite one tab of a named spreadsheet wholesale (idempotent). body.name picks
+    // the spreadsheet ('Gibby Classes Master Sheet' by default; the app also keeps
+    // 'Gibby Materials' and 'Gibby Treasurer Sheet'); body.tab picks the sheet tab.
+    var ssName = String(body.name || 'Gibby Classes Master Sheet');
     var ss;
-    var fs = DriveApp.getFilesByName('Gibby Classes Master Sheet');
-    ss = fs.hasNext() ? SpreadsheetApp.open(fs.next())
-                      : SpreadsheetApp.create('Gibby Classes Master Sheet');
-    var sh = ss.getSheets()[0];
+    var fs = DriveApp.getFilesByName(ssName);
+    ss = fs.hasNext() ? SpreadsheetApp.open(fs.next()) : SpreadsheetApp.create(ssName);
+    var sh;
+    if (body.tab) {
+      sh = ss.getSheetByName(String(body.tab)) || ss.insertSheet(String(body.tab));
+    } else {
+      sh = ss.getSheets()[0];
+    }
     sh.clearContents();
     var data = [body.headers].concat(body.rows || []);
-    sh.getRange(1, 1, data.length, body.headers.length).setValues(data);
+    if (data.length && body.headers && body.headers.length) {
+      sh.getRange(1, 1, data.length, body.headers.length).setValues(data);
+    }
     return reply({ ok: true, link: ss.getUrl(), rows: (body.rows || []).length });
   }
 
   if (body.action === 'contract') {
+    // A signed contract or agreement: the app sends a ready PDF (body.pdf, base64)
+    // and an HTML copy as a fallback for older payloads.
     var folder;
     var it = DriveApp.getFoldersByName('Gibby Contracts');
     folder = it.hasNext() ? it.next() : DriveApp.createFolder('Gibby Contracts');
-    var f = folder.createFile(String(body.filename || 'contract.html'),
-                              String(body.html || ''), 'text/html');
+    var f;
+    if (body.pdf) {
+      var pdfBlob = Utilities.newBlob(Utilities.base64Decode(String(body.pdf)), 'application/pdf',
+                                      String(body.filename || 'contract.pdf'));
+      f = folder.createFile(pdfBlob);
+    } else {
+      f = folder.createFile(String(body.filename || 'contract.html'), String(body.html || ''), 'text/html');
+    }
     return reply({ ok: true, id: f.getId(), link: f.getUrl() });
+  }
+
+  if (body.action === 'backup') {
+    // Nightly database backup: a gzip file into 'Gibby Backups'; copies older
+    // than body.keep_days are trashed so the folder does not grow forever.
+    var bit = DriveApp.getFoldersByName('Gibby Backups');
+    var bfolder = bit.hasNext() ? bit.next() : DriveApp.createFolder('Gibby Backups');
+    var bblob = Utilities.newBlob(Utilities.base64Decode(String(body.data || '')),
+      String(body.mime || 'application/gzip'), String(body.filename || 'gibby-backup.db.gz'));
+    var bf = bfolder.createFile(bblob);
+    var trashed = 0, keep = Number(body.keep_days || 30);
+    var cutoff = new Date(Date.now() - keep * 86400000);
+    var files = bfolder.getFiles();
+    while (files.hasNext()) {
+      var old = files.next();
+      if (old.getId() !== bf.getId() && old.getDateCreated() < cutoff) { old.setTrashed(true); trashed++; }
+    }
+    return reply({ ok: true, id: bf.getId(), link: bf.getUrl(), trashed: trashed });
   }
 
   if (body.action === 'list') {
@@ -217,6 +253,11 @@ function reply(o) {
 // authDrive asks for (at least) read access; authDrive2 forces the FULL Drive
 // scope the contract action needs. Harmless to leave in place.
 function authDrive() { Logger.log(DriveApp.getRootFolder().getName()); }
+// Forces the consent prompt for the Calendar scope (the feed, create, delete and list actions).
+function authCalendar() {
+  var cal = CalendarApp.getCalendarById(CALENDAR_ID);
+  Logger.log(cal ? ('calendar OK: ' + cal.getName()) : 'CALENDAR NOT FOUND: share the Gibby calendar with this account (Make changes to events) or fix CALENDAR_ID');
+}
 function authDrive2() {
   var f = DriveApp.createFolder('AUTH TEST safe to delete');
   Logger.log(f.getId());

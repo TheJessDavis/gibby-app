@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.117.4-no-double-teaser"
+VERSION = "10.118.0-bridge-move"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -252,6 +252,17 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS lockbox(
         id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, name TEXT, signed_at TEXT,
         via TEXT DEFAULT 'app', by_admin INTEGER, ip TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS work_logs(
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, class_id INTEGER, title TEXT, role TEXT,
+        work_date TEXT, start TEXT, end TEXT, hours REAL, rate_kind TEXT, rate_amount REAL, amount REAL,
+        note TEXT, status TEXT DEFAULT 'submitted', created TEXT, approved_by TEXT, approved_at TEXT,
+        admin_note TEXT, statement_id INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS pay_statements(
+        id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, month TEXT, total REAL, created TEXT,
+        sent_to TEXT, pdf_link TEXT, paid_at TEXT, paid_by TEXT)""")
+    for col, typ in (("pay_rate_kind", "TEXT"), ("pay_rate_amount", "REAL"), ("pay_rate_note", "TEXT")):
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        except sqlite3.OperationalError: pass
     c.execute("""CREATE TABLE IF NOT EXISTS agreements(
         id INTEGER PRIMARY KEY, title TEXT, text TEXT, class_id INTEGER, created_by INTEGER, created TEXT,
         status TEXT DEFAULT 'open', completed_at TEXT, drive_link TEXT)""")
@@ -784,6 +795,7 @@ RATE_LIMITS = {                 # name: (max requests, window seconds)
     "approve": (20, 3600),      # approval decisions, per admin
     "claim":   (24, 3600),      # slot claim attempts, per instructor (a claim precedes every submission)
     "reimb":   (10, 3600),      # reimbursement requests, per instructor
+    "work":    (30, 3600),      # work logs, per person
 }
 RATE_LABEL = {"submit": "class submissions", "approve": "approval decisions",
               "claim": "slot claims", "reimb": "reimbursement requests"}
@@ -1839,6 +1851,91 @@ def send_site_update(who, approver):
         try: atts = [(f"{slug}.jpg", base64.b64decode(m.group(2)), m.group(1))]
         except Exception: atts = []
     mailer.send(web_review_to(), f"Update the website: {r['name']}", body, attachments=atts or None, origin="user")
+
+# ---- Work logs: assistants, coordinators and anyone on an agreed rate log what
+# they worked; an admin approves; once a month each person who has approved work
+# gets ONE statement sent to the treasurer (Jess, Oct 5 2026).
+WORK_ROLES = ["Class assistant", "Open studio cover", "Event help", "Event coordinator", "Other"]
+RATE_KINDS = {"class": "per class", "hour": "per hour", "flat": "flat amount"}
+
+def rate_phrase(kind, amount):
+    if not kind or amount is None: return ""
+    return f"${float(amount):g} {RATE_KINDS.get(kind, kind)}"
+
+def work_amount(kind, rate, hours):
+    """What one log is worth under the person's agreed rate, or None when no rate is set."""
+    if not kind or rate is None: return None
+    if kind == "hour": return round(float(rate) * float(hours or 0), 2)
+    return round(float(rate), 2)          # per class, or a flat stipend
+
+def work_hours(start, end):
+    try:
+        m = tmin(end) - tmin(start)
+        return round(m / 60.0, 2) if m > 0 else 0.0
+    except Exception:
+        return 0.0
+
+def statement_text(person, month_label, logs):
+    L = ["THE GIBBY CENTER FOR THE ARTS", "Payment statement for work performed", "",
+         f"Pay to: {person['name']}", f"Email: {person['email']}",
+         f"Address: {person.get('address') or 'not on file'}", f"Period: {month_label}", "",
+         "Date         Work                                         Rate            Amount"]
+    for g in logs:
+        what = (f"{g['role']}: {g['title']}" + (f" ({g['start']} to {g['end']})" if g.get("start") and g.get("end") else ""))[:44]
+        L.append(f"{(g['work_date'] or '')[:10]:<12} {what:<44} {rate_phrase(g['rate_kind'], g['rate_amount']):<15} ${float(g['amount'] or 0):>8.2f}")
+        L.append(f"             approved by {g['approved_by']} on {(g['approved_at'] or '')[:10]}")
+    L += ["", f"TOTAL DUE: ${sum(float(g['amount'] or 0) for g in logs):.2f}", "",
+          "Each line was approved by a Gibby admin in the Gibby Class Manager.",
+          "Date paid: __________   Check #: __________"]
+    return "\n".join(L)
+
+def send_pay_statements(through=None, actor="The Gibby app"):
+    """One statement per person for every approved work log not yet on a statement
+    and dated on or before `through` (default: the end of last month). People with
+    nothing approved get nothing. Returns [(name, total)]."""
+    today = datetime.date.today()
+    through = through or (today.replace(day=1) - datetime.timedelta(days=1))
+    c = db(); out = []
+    try:
+        people = [r["user_id"] for r in c.execute("""SELECT DISTINCT user_id FROM work_logs WHERE status='approved'
+                    AND statement_id IS NULL AND work_date<=?""", (through.isoformat(),)).fetchall()]
+        for uid in people:
+            person = dict(c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone())
+            logs = [dict(r) for r in c.execute("""SELECT * FROM work_logs WHERE user_id=? AND status='approved' AND statement_id IS NULL
+                        AND work_date<=? ORDER BY work_date, id""", (uid, through.isoformat())).fetchall()]
+            if not logs: continue
+            total = round(sum(float(g["amount"] or 0) for g in logs), 2)
+            label = through.strftime("%B %Y")
+            c.execute("INSERT INTO pay_statements(user_id, month, total, created, sent_to) VALUES(?,?,?,?,?)",
+                      (uid, through.strftime("%Y-%m"), total, now(), ", ".join(reimb_to())))
+            sid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            c.execute(f"UPDATE work_logs SET statement_id=? WHERE id IN ({','.join('?' * len(logs))})", [sid] + [g["id"] for g in logs])
+            c.commit()
+            text = statement_text(person, label, logs)
+            pdf = pdfgen.contract_pdf(text, None, [f"Statement #{sid}", f"Prepared {now()[:10]} by {actor}"])
+            link = None
+            try:
+                res = push_photo_to_drive({"title": f"{person['name']} - {through.strftime('%Y-%m')}"}, f"Pay statement #{sid} - {person['name']}.pdf",
+                                          base64.b64encode(pdf).decode(), "application/pdf", root="Gibby Pay Statements")
+                link = res.get("link")
+                c.execute("UPDATE pay_statements SET pdf_link=? WHERE id=?", (link, sid)); c.commit()
+            except Exception as e:
+                print("[statement] drive filing failed:", e)
+            w9 = c.execute("SELECT 1 FROM paperwork WHERE user_id=? AND kind='w9' AND status='done'", (uid,)).fetchone()
+            lines = "\n".join(f"  {(g['work_date'] or '')[:10]}  {g['role']}: {g['title']}  ${float(g['amount'] or 0):.2f}  (approved by {g['approved_by']})" for g in logs)
+            body = (f"Payment statement for {person['name']}, {label}.\n\n{lines}\n\n  TOTAL DUE: ${total:.2f}\n\n"
+                    f"Pay to: {person['name']}\nAddress: {person.get('address') or 'not on file (ask them)'}\nW-9 on file: {'yes' if w9 else 'NO, please collect before paying'}\n\n"
+                    "Every line was approved by a Gibby admin. The statement is attached" + (f" and filed on Drive: {link}" if link else "") + ".\n\n"
+                    f"Reply to this email to reach {person['name']} directly ({person['email']}).")
+            atts = [(f"Pay statement #{sid} - {person['name']}.pdf", pdf, "application/pdf")]
+            mailer.send(reimb_to(), f"Pay statement: ${total:.2f} for {person['name']} ({label})", body, attachments=atts, reply_to=person["email"], origin="user")
+            mailer.send(person["email"], f"Your {label} pay statement from The Gibby: ${total:.2f}",
+                f"Hi {(person['name'] or '').split(' ')[0] or 'there'},\n\nYour approved work for {label} has gone to the treasurer for payment:\n\n{lines}\n\n  TOTAL: ${total:.2f}\n\n"
+                "A copy of the statement is attached. Thank you for everything you do at The Gibby!", attachments=atts, origin="user")
+            out.append((person["name"], total))
+    finally:
+        c.close()
+    return out
 
 def reimb_email_body(row, items, folder_link=None, instr_email=None):
     """The plain summary of a reimbursement request for the treasurer's email:
@@ -3274,6 +3371,14 @@ def run_scheduler(asof=None):
                     f"Thank you,\nThe Gibby", today, cfg)
                 actions.append(f"asked {instr_row['name']} for marketing photos: {cls['title']}" if sent
                                else f"marketing request suppressed for {cls['title']}: {why}")
+    # Monthly pay statements: once, in the first days of each month, for last month's approved work.
+    try:
+        tday = datetime.date.today(); key = "statements_sent_" + tday.strftime("%Y-%m")
+        if tday.day <= 5 and not _meta_get(key):
+            _meta_set(key, now())
+            for nm, tot in send_pay_statements(): actions.append(f"pay statement sent for {nm}: ${tot:.2f}")
+    except Exception as ex:
+        record_scheduler_error("pay statements", ex)
     # Invites whose 7-day link ran out unused get a fresh one.
     try:
         for e in resend_expired_invites(): actions.append(f"fresh sign-in link sent to {e}")
@@ -4110,8 +4215,9 @@ class H(http.server.BaseHTTPRequestHandler):
                      "headshot_px": r["headshot_px"] or 0, "headshot_by": r["headshot_by"] or "", "bio_words": len((r["bio"] or "").split()),
                      "web_review": r["web_review"] or "", "web_review_note": r["web_review_note"] or "", "bio": r["bio"] or "", "pronouns": r["pronouns"] or "",
                      "published": bool(r["pub_bio"] or r["pub_headshot_web"]), "pub_at": (r["pub_at"] or "")[:10], "web_hidden": bool(r["web_hidden"]), "pub_bio": r["pub_bio"] or "",
+                     "pay_rate_kind": r["pay_rate_kind"] or "", "pay_rate_amount": r["pay_rate_amount"], "pay_rate_note": r["pay_rate_note"] or "",
                      "links": [k for k in ("facebook","instagram","website","etsy","tiktok") if r["social_" + k]]}
-                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,web_review,web_review_note,pub_bio,pub_headshot_web,pub_at,pronouns,web_hidden,
+                    for r in c.execute("""SELECT id,name,email,role,must_change_pw,photo,skills,address,phone,headshot_px,headshot_by,bio,web_review,web_review_note,pub_bio,pub_headshot_web,pub_at,pronouns,web_hidden,pay_rate_kind,pay_rate_amount,pay_rate_note,
                                           social_facebook,social_instagram,social_website,social_etsy,social_tiktok FROM users
                                           WHERE deleted_at IS NULL ORDER BY role, name""").fetchall()]
             by_id = {r["id"]: r for r in rows}
@@ -4766,6 +4872,41 @@ class H(http.server.BaseHTTPRequestHandler):
             for r in reqs: r["receipts"] = _loads_list(r.get("receipts"))
             return self.send_json({"classes": mine, "requests": reqs, "categories": REIMB_CATEGORIES, "delivery": REIMB_DELIVERY,
                                    "address": u.get("address") or "", "to": ", ".join(reimb_to())})
+        if p == "/api/work":
+            # My work logs, my agreed rate, and the classes I might have worked.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            c = db()
+            me = dict(c.execute("SELECT pay_rate_kind, pay_rate_amount, pay_rate_note FROM users WHERE id=?", (u["id"],)).fetchone())
+            logs = [dict(r) for r in c.execute("SELECT * FROM work_logs WHERE user_id=? ORDER BY work_date DESC, id DESC LIMIT 100", (u["id"],)).fetchall()]
+            stm = [dict(r) for r in c.execute("SELECT id, month, total, created, paid_at, pdf_link FROM pay_statements WHERE user_id=? ORDER BY id DESC", (u["id"],)).fetchall()]
+            today = datetime.date.today(); classes = []
+            for r in c.execute("SELECT id, title, slot_date, class_time, slot_time, session_dates, is_series FROM classes WHERE status='approved' AND deleted_at IS NULL").fetchall():
+                r = dict(r)
+                try: sess = json.loads(r.get("session_dates") or "[]")
+                except Exception: sess = []
+                days = [s.get("date") for s in sess if s.get("date")] or [r.get("slot_date")]
+                tm = r.get("class_time") or r.get("slot_time") or ""
+                for lab in days:
+                    d = parse_day(lab)
+                    if d and -45 <= (d - today).days <= 1:
+                        classes.append({"id": r["id"], "title": r["title"], "date": d.isoformat(), "label": lab, "time": tm})
+            classes.sort(key=lambda x: x["date"], reverse=True)
+            w9 = bool(c.execute("SELECT 1 FROM paperwork WHERE user_id=? AND kind='w9' AND status='done'", (u["id"],)).fetchone())
+            c.close()
+            return self.send_json({"logs": logs, "statements": stm, "classes": classes, "roles": WORK_ROLES, "w9": w9,
+                                   "rate": {"kind": me["pay_rate_kind"] or "", "amount": me["pay_rate_amount"], "note": me["pay_rate_note"] or "",
+                                            "phrase": rate_phrase(me["pay_rate_kind"], me["pay_rate_amount"])}})
+        if p == "/api/admin/work":
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            logs = [dict(r) for r in c.execute("""SELECT w.*, us.name AS person, us.email AS person_email FROM work_logs w JOIN users us ON us.id=w.user_id
+                        ORDER BY w.status='submitted' DESC, w.work_date DESC, w.id DESC LIMIT 300""").fetchall()]
+            stm = [dict(r) for r in c.execute("""SELECT s.*, us.name AS person FROM pay_statements s JOIN users us ON us.id=s.user_id ORDER BY s.id DESC LIMIT 100""").fetchall()]
+            c.close()
+            through = datetime.date.today().replace(day=1) - datetime.timedelta(days=1)
+            return self.send_json({"logs": logs, "statements": stm, "last_month": through.strftime("%B %Y"), "to": ", ".join(reimb_to())})
         if p == "/api/admin/reimb":
             u = self.require("admin")
             if not u: return
@@ -5922,6 +6063,49 @@ class H(http.server.BaseHTTPRequestHandler):
                 _meta_set("eb_refresh_log", now() + "\n" + "\n".join(out))
             threading.Thread(target=_run, daemon=True).start()
             return self.send_json({"ok": True, "queued": len(todo)})
+        if p == "/api/admin/export-db":
+            # A full copy of the database (gzip), for moving the app or for a safe copy
+            # when the Drive backup cannot run. Admin only; never cached.
+            u = self.require("admin")
+            if not u: return
+            import gzip, tempfile
+            fd, vt = tempfile.mkstemp(suffix=".db"); os.close(fd)
+            try:
+                src = db(); dst = sqlite3.connect(vt); src.backup(dst); dst.close(); src.close()
+                blob = gzip.compress(open(vt, "rb").read(), 6)
+            finally:
+                try: os.remove(vt)
+                except OSError: pass
+            fname = f"gibby-export-{datetime.date.today().isoformat()}.db.gz"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+            self.send_header("Content-Length", str(len(blob)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers(); self.wfile.write(blob); return
+        if p == "/api/admin/gcal/backfill":
+            # After a bridge outage: put every approved, app-created class that has no
+            # calendar event onto the calendar. Safe to run twice; skips what exists.
+            u = self.require("admin")
+            if not u: return
+            gcfg = gcal.load_gcal_config()
+            if not gcal.can_write(gcfg): return self.send_json({"error":"The calendar bridge is not connected yet."},400)
+            c = db(); today = datetime.date.today(); done, skipped = [], []
+            rows = [dict(r) for r in c.execute("SELECT * FROM classes WHERE status='approved' AND deleted_at IS NULL AND COALESCE(imported,0)=0").fetchall()]
+            for cls in rows:
+                try: ext = json.loads(cls.get("external_ids") or "{}")
+                except Exception: ext = {}
+                d = _class_date(cls)
+                if ext.get("gcal_event_id") or not d or d < today - datetime.timedelta(days=1): continue
+                instr = c.execute("SELECT name FROM users WHERE id=?", (cls["instructor_id"],)).fetchone()
+                try:
+                    gid = gcal.create_event({**cls, "instructor_name": instr["name"] if instr else ""}, gcfg)
+                except Exception as e:
+                    skipped.append(f"{cls['title']}: {e}"); continue
+                if gid: merge_external(cls["id"], {"gcal_event_id": gid}); done.append(cls["title"])
+                else: skipped.append(f"{cls['title']}: nothing created")
+            c.close()
+            return self.send_json({"ok": True, "posted": done, "skipped": skipped})
         if p == "/api/admin/eventbrite/refresh-log":
             u = self.require("admin")
             if not u: return
@@ -6513,6 +6697,98 @@ class H(http.server.BaseHTTPRequestHandler):
             threading.Thread(target=_go, daemon=True).start()
             return self.send_json({"ok":True, "queued": len(emailed), "names": [u["name"] or u["email"] for u, _ in emailed],
                                    "already_had_it": skipped})
+        if p == "/api/work":
+            # Log a shift: the amount comes from the person's agreed rate, never typed by them.
+            u = self.current_user()
+            if not u: return self.send_json({"error":"not signed in"},401)
+            if self.rate_limited("work", u["id"]): return
+            b = self.read_json(); c = db()
+            cls = c.execute("SELECT id, title FROM classes WHERE id=? AND deleted_at IS NULL", (int(b.get("class_id") or 0),)).fetchone() if b.get("class_id") else None
+            title = (cls["title"] if cls else str(b.get("title") or "").strip())[:140]
+            if len(title) < 3: c.close(); return self.send_json({"error":"Pick the class you worked, or say what the work was."},400)
+            role = b.get("role") if b.get("role") in WORK_ROLES else "Other"
+            wd = str(b.get("work_date") or "")[:10]
+            try: wdd = datetime.date.fromisoformat(wd)
+            except ValueError: c.close(); return self.send_json({"error":"Pick the date you worked."},400)
+            if wdd > datetime.date.today(): c.close(); return self.send_json({"error":"Log the work after it happens."},400)
+            st, en = str(b.get("start") or "").strip()[:10], str(b.get("end") or "").strip()[:10]
+            hours = work_hours(st, en) if st and en else 0.0
+            me = c.execute("SELECT pay_rate_kind, pay_rate_amount FROM users WHERE id=?", (u["id"],)).fetchone()
+            kind, rate = me["pay_rate_kind"] or "", me["pay_rate_amount"]
+            if kind == "hour" and hours <= 0: c.close(); return self.send_json({"error":"Your rate is hourly, so add the start and end times."},400)
+            if c.execute("SELECT 1 FROM work_logs WHERE user_id=? AND work_date=? AND title=? AND status!='declined'", (u["id"], wd, title)).fetchone():
+                c.close(); return self.send_json({"error":"You already logged that one."},400)
+            amount = work_amount(kind, rate, hours)
+            c.execute("""INSERT INTO work_logs(user_id,class_id,title,role,work_date,start,end,hours,rate_kind,rate_amount,amount,note,status,created)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'submitted',?)""",
+                      (u["id"], cls["id"] if cls else None, title, role, wd, st, en, hours, kind, rate, amount, str(b.get("note") or "").strip()[:500], now()))
+            wid = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+            c.commit(); c.close()
+            mailer.send([a for a in emails_for(db(), "WHERE role='admin'") if a.lower() != (u.get("email") or "").lower()],
+                f"Approve? Work log from {u['name']}: {title} ({wd})",
+                f"{u['name']} logged work for payment.\n\n  {role}: {title}\n  {wd}" + (f", {st} to {en}" if st and en else "") + "\n  "
+                + (f"Amount at their rate ({rate_phrase(kind, rate)}): ${amount:.2f}" if amount is not None else "No rate is set for them yet: you set the amount when you approve.")
+                + (f"\n  Note: {b.get('note')}" if b.get("note") else "")
+                + f"\n\nApprove or decline it under More > Money in the app: {mailer.APP_URL}\nApproved work goes to the treasurer on one statement per person each month.")
+            return self.send_json({"ok":True, "id": wid, "amount": amount})
+        mwk = re.match(r"^/api/admin/work/(\d+)/(approve|decline|reopen)$", p)
+        if mwk:
+            u = self.require("admin")
+            if not u: return
+            wid = int(mwk.group(1)); b = self.read_json(); c = db()
+            g = c.execute("SELECT w.*, us.name AS person, us.email AS person_email FROM work_logs w JOIN users us ON us.id=w.user_id WHERE w.id=?", (wid,)).fetchone()
+            if not g: c.close(); return self.send_json({"error":"not found"},404)
+            if g["statement_id"]: c.close(); return self.send_json({"error":"That one is already on a statement to the treasurer."},400)
+            if mwk.group(2) == "reopen":
+                c.execute("UPDATE work_logs SET status='submitted', approved_by=NULL, approved_at=NULL WHERE id=?", (wid,)); c.commit(); c.close()
+                return self.send_json({"ok":True})
+            first = (g["person"] or "").split(" ")[0] or "there"
+            if mwk.group(2) == "decline":
+                note = str(b.get("note") or "").strip()[:500]
+                c.execute("UPDATE work_logs SET status='declined', approved_by=?, approved_at=?, admin_note=? WHERE id=?", (u["name"], now(), note, wid)); c.commit(); c.close()
+                mailer.send(g["person_email"], f"About your work log for {g['title']}",
+                    f"Hi {first},\n\nWe could not approve the work you logged for \"{g['title']}\" on {g['work_date']}.\n\n" + (f"  {note}\n\n" if note else "")
+                    + "Reply to this email if you have a question.\n\nThe Gibby", reply_to=u.get("email"))
+                return self.send_json({"ok":True})
+            amount = g["amount"]
+            if b.get("amount") not in (None, ""):
+                try: amount = round(float(b.get("amount")), 2)
+                except (TypeError, ValueError): c.close(); return self.send_json({"error":"That amount is not a number."},400)
+            if amount is None or amount <= 0 or amount > 5000:
+                c.close(); return self.send_json({"error":"Set the amount to pay (no rate is on file for this person).", "need_amount": True},400)
+            c.execute("UPDATE work_logs SET status='approved', amount=?, approved_by=?, approved_at=? WHERE id=?", (amount, u["name"], now(), wid)); c.commit(); c.close()
+            mailer.send(g["person_email"], f"Approved: your work for {g['title']} (${amount:.2f})",
+                f"Hi {first},\n\n{u['name']} approved the work you logged for \"{g['title']}\" on {g['work_date']}: ${amount:.2f}.\n\n"
+                "It goes to the treasurer on your statement at the start of next month, along with anything else approved for this month.\n\nThank you!\nThe Gibby")
+            return self.send_json({"ok":True, "amount": amount})
+        mpr = re.match(r"^/api/admin/pay-rate/(\d+)$", p)
+        if mpr:
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json(); kind = b.get("kind") if b.get("kind") in RATE_KINDS else ""
+            try: amt = round(float(b.get("amount")), 2) if kind else None
+            except (TypeError, ValueError): return self.send_json({"error":"Enter the rate as a number."},400)
+            if kind and (amt is None or amt <= 0 or amt > 5000): return self.send_json({"error":"Enter a rate between $1 and $5,000."},400)
+            c = db(); c.execute("UPDATE users SET pay_rate_kind=?, pay_rate_amount=?, pay_rate_note=? WHERE id=?",
+                                (kind or None, amt, str(b.get("note") or "").strip()[:200] or None, int(mpr.group(1)))); c.commit(); c.close()
+            return self.send_json({"ok":True, "phrase": rate_phrase(kind, amt)})
+        if p == "/api/admin/work/statements/send":
+            # Send now instead of waiting for the first of the month. `through` = today
+            # includes this month's approved work; default is through the end of last month.
+            u = self.require("admin")
+            if not u: return
+            b = self.read_json()
+            through = datetime.date.today() if b.get("include_this_month") else None
+            sent = send_pay_statements(through, u["name"])
+            return self.send_json({"ok":True, "sent": [{"name": n, "total": t} for n, t in sent]})
+        mps = re.match(r"^/api/admin/work/statements/(\d+)/(paid|unpaid)$", p)
+        if mps:
+            u = self.require("admin")
+            if not u: return
+            c = db()
+            if mps.group(2) == "paid": c.execute("UPDATE pay_statements SET paid_at=?, paid_by=? WHERE id=?", (now(), u["name"], int(mps.group(1))))
+            else: c.execute("UPDATE pay_statements SET paid_at=NULL, paid_by=NULL WHERE id=?", (int(mps.group(1)),))
+            c.commit(); c.close(); return self.send_json({"ok":True})
         if p == "/api/alcohol-cert":
             # Optional, self-started: an instructor uploads their alcohol server
             # certificate from their profile. Filed with their paperwork, sent to Michelle.
