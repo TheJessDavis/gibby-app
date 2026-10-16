@@ -7,6 +7,14 @@ DelawareScene, then runs the emails, paperwork, orders and money on its own.
 
 Live: https://gibby-app-zrz7.onrender.com (Render, Docker, persistent disk at /data).
 Owner: Jess Davis (jdavis@theeverett.org). Emails go out as gibby@everetttheatre.com.
+The Google account for everything on this project is gibby@theeverett.org (owner's rule, Oct 2026).
+
+Hosting moved on Oct 16, 2026: the Render service now lives in a new Render account
+(jlbdavis613@gmail.com, service srv-db953orbc2fs73bo348g, 0.5c-512mb plan, 1 GB disk at /data,
+deploys from the public repo on push). The old host gibby-app-ddjo.onrender.com still runs the same
+code but `mailer.RETIRED` (matched on RENDER_EXTERNAL_HOSTNAME) makes it answer every request with a
+302 to the new host and start no scheduler or queue worker. The database was moved with
+`POST /api/admin/export-db` and `POST /api/admin/import-db` (copy in ~/Downloads/gibby-bridge-move).
 
 ## Stack
 
@@ -67,7 +75,7 @@ The app cannot use Google APIs directly, so two Apps Scripts act as bridges. The
   reimbursements, backups), the Materials and Treasurer spreadsheets. It lived on
   jdavis@everetttheatre.com until that account was turned off in Oct 2026 (the app ran on the
   Aug 18 busy-times snapshot `web/gibby-busy.ics` and Drive filing failed from about Oct 5); it is
-  being redeployed on gibby@everetttheatre.com from `scripts/gcal-webhook.gs` (Version 20 mirror:
+  being redeployed on gibby@theeverett.org from `scripts/gcal-webhook.gs` (Version 20 mirror:
   sheet with name/tab, contract with pdf, backup, list, photo with root, create, delete). Setup
   files for Jess are in ~/Downloads/gibby-bridge-move. After the move: set GCAL_WEBHOOK_URL,
   GCAL_WEBHOOK_KEY, GCAL_ICS_URL on Render, run `POST /api/admin/gcal/backfill` (posts approved
