@@ -5,7 +5,7 @@ Instructors book studio time, submit classes, sign contracts, and follow up with
 Admins approve, and the app publishes to Eventbrite, Facebook, the website, Google Calendar and
 DelawareScene, then runs the emails, paperwork, orders and money on its own.
 
-Live: https://gibby-app-ddjo.onrender.com (Render, Docker, persistent disk at /data).
+Live: https://gibby-app-zrz7.onrender.com (Render, Docker, persistent disk at /data).
 Owner: Jess Davis (jdavis@theeverett.org). Emails go out as gibby@everetttheatre.com.
 
 ## Stack
@@ -51,7 +51,7 @@ mark false positives with `# pragma: allowlist secret`.
 ## Admin API for checks
 
 ```bash
-curl -s -c jar -H 'Content-Type: application/json' -d '{"email":"...","password":"..."}' https://gibby-app-ddjo.onrender.com/api/login
+curl -s -c jar -H 'Content-Type: application/json' -d '{"email":"...","password":"..."}' https://gibby-app-zrz7.onrender.com/api/login
 ```
 
 The reply carries `csrf_token`; send it as `X-CSRF-Token` with the cookie jar on every POST.

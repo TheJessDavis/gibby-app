@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.118.1-db-import"
+VERSION = "10.119.0-new-host"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -3509,6 +3509,7 @@ def reconcile_calendar_slots(open_slots):
     c.commit(); c.close()
     return {"added": added, "removed": removed, "restored": restored, "open": len(open_slots)}
 
+LAST_SYNC_ERROR = None
 def sync_calendar():
     global LAST_SYNC_ERROR
     try:
@@ -3660,7 +3661,19 @@ class H(http.server.BaseHTTPRequestHandler):
         return u
 
     # -- routing --
+    def retired_redirect(self):
+        """The old Render host (October 2026 move): send everything to the new one."""
+        p = self.path
+        if p.startswith("/api/version"): return False
+        self.send_response(302)
+        self.send_header("Location", mailer.CURRENT_URL + p)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return True
+
     def do_GET(self):
+        if mailer.RETIRED and self.retired_redirect(): return
         p = urllib.parse.urlparse(self.path).path
         if p == "/embed.json": return self.embed_json()
         if p == "/embed/instructors.json": return self.embed_instructors_json()
@@ -3714,6 +3727,7 @@ class H(http.server.BaseHTTPRequestHandler):
         return self.static(p)
 
     def do_POST(self):
+        if mailer.RETIRED and self.retired_redirect(): return
         p = urllib.parse.urlparse(self.path).path
         if not p.startswith("/api/"): return self.send_error(404)
         self._body_read = False
@@ -9228,8 +9242,11 @@ if __name__ == "__main__":
     except Exception as e:
         print("[email] could not load the saved mail bridge:", e)
     init_db()
-    threading.Thread(target=scheduler_loop, daemon=True).start()   # daily lifecycle automations
-    threading.Thread(target=queue_worker, daemon=True).start()     # outbound posting + retries
+    if mailer.RETIRED:
+        print(f"RETIRED HOST: redirecting everything to {mailer.CURRENT_URL}; automations off")
+    else:
+        threading.Thread(target=scheduler_loop, daemon=True).start()   # daily lifecycle automations
+        threading.Thread(target=queue_worker, daemon=True).start()     # outbound posting + retries
     print(f"Gibby Class Manager running:  http://localhost:{PORT}   (data: {DB})")
     print("Sign in as admin:      jess@theeverett.org")
     print("Sign in as instructor: christin.smiertka@theeverett.org  (first.last of any roster name)")

@@ -36,7 +36,12 @@ def load_email_config():
             print("[email:config] could not read config.json:", e)
     return cfg
 
-APP_URL = os.environ.get("APP_URL", "https://gibby-app-ddjo.onrender.com")
+APP_URL = os.environ.get("APP_URL", "https://gibby-app-zrz7.onrender.com")
+# Hosts the app used to live on. A copy still running there redirects here and
+# runs no automations, so two installs never both send email or post.
+RETIRED_HOSTS = ("gibby-app-ddjo.onrender.com",)
+RETIRED = any(h in APP_URL for h in RETIRED_HOSTS)
+CURRENT_URL = "https://gibby-app-zrz7.onrender.com"
 
 LOGO_URL = os.environ.get("EMAIL_LOGO_URL", APP_URL + "/gibby-logo.jpg")   # the Gibby Center for the Arts logo
 

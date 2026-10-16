@@ -6,7 +6,7 @@
    Both obey an editor-authored GIBBY OVERRIDES text block (see below).
 
    Squarespace loads this via a single header-injection line:
-     <script src="https://gibby-app-ddjo.onrender.com/site-embed.js" defer></script>
+     <script src="https://gibby-app-zrz7.onrender.com/site-embed.js" defer></script>
 
    Overrides block: a normal Squarespace TEXT block anywhere on the page whose
    first line is "GIBBY OVERRIDES". Visitors never see it (this script hides it);
@@ -36,7 +36,7 @@
    entries), restores lazy images the dead Squarespace loader never loaded, and
    drives the arrows itself with a flex track. */
 (function(){
-var APP='https://gibby-app-ddjo.onrender.com';
+var APP='https://gibby-app-zrz7.onrender.com';
 function rep(m){try{fetch(APP+'/api/client-error',{method:'POST',mode:'no-cors',headers:{'Content-Type':'text/plain'},body:JSON.stringify({section:'site-embed',message:m,agent:navigator.userAgent,path:location.pathname})})}catch(e){}}
 var MM={january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
 function pdate(txt){var m=/(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})/i.exec(txt||'');if(!m)return null;var mo=MM[m[1].toLowerCase()],dy=+m[2];return(mo>=8?2026:2027)*10000+mo*100+dy}
