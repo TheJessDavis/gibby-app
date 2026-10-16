@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.119.2-reimb-refile"
+VERSION = "10.119.3-backup-memory"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6107,21 +6107,26 @@ class H(http.server.BaseHTTPRequestHandler):
             # when the Drive backup cannot run. Admin only; never cached.
             u = self.require("admin")
             if not u: return
-            import gzip, tempfile
+            import gzip, tempfile, shutil
             fd, vt = tempfile.mkstemp(suffix=".db"); os.close(fd)
+            gzp = vt + ".gz"
             try:
                 src = db(); dst = sqlite3.connect(vt); src.backup(dst); dst.close(); src.close()
-                blob = gzip.compress(open(vt, "rb").read(), 6)
+                with open(vt, "rb") as fin, gzip.open(gzp, "wb", compresslevel=6) as gz:
+                    shutil.copyfileobj(fin, gz, 1 << 20)       # on disk, never a whole copy in memory
+                fname = f"gibby-export-{datetime.date.today().isoformat()}.db.gz"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                self.send_header("Content-Length", str(os.path.getsize(gzp)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(gzp, "rb") as f: shutil.copyfileobj(f, self.wfile, 1 << 20)
             finally:
-                try: os.remove(vt)
-                except OSError: pass
-            fname = f"gibby-export-{datetime.date.today().isoformat()}.db.gz"
-            self.send_response(200)
-            self.send_header("Content-Type", "application/gzip")
-            self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
-            self.send_header("Content-Length", str(len(blob)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers(); self.wfile.write(blob); return
+                for x in (vt, gzp):
+                    try: os.remove(x)
+                    except OSError: pass
+            return
         if p == "/api/admin/gcal/backfill":
             # After a bridge outage: put every approved, app-created class that has no
             # calendar event onto the calendar. Safe to run twice; skips what exists.
@@ -9052,8 +9057,9 @@ def _db_snapshot_gz():
         try:
             cp.execute("DROP TRIGGER IF EXISTS audit_no_update")
             cp.execute("DROP TRIGGER IF EXISTS audit_no_delete")
-            for rid, snap in cp.execute("SELECT id, snapshot FROM audit_log").fetchall():
-                if not snap or len(snap) < 100_000: continue
+            big = cp.execute("SELECT id FROM audit_log WHERE length(snapshot) >= 100000").fetchall()
+            for (rid,) in big:                      # one row at a time, never the whole log
+                snap = cp.execute("SELECT snapshot FROM audit_log WHERE id=?", (rid,)).fetchone()[0]
                 try: obj = json.loads(snap)
                 except Exception: continue
                 obj = {k: (f"[{len(v)//1024}KB image omitted from backup]"
@@ -9073,13 +9079,15 @@ def _db_snapshot_gz():
             cp.close()
 
         raw_len = os.path.getsize(tmp)
-        buf = io.BytesIO()              # stream through gzip: never hold two copies
-        with open(tmp, "rb") as fin, gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as gz:
+        # Stream to a gzip FILE: the database is bigger than the memory this
+        # host has to spare, so nothing here may hold a whole copy in RAM.
+        gzpath = tmp + ".gz"
+        with open(tmp, "rb") as fin, gzip.open(gzpath, "wb", compresslevel=6) as gz:
             while True:
                 chunk = fin.read(1 << 20)
                 if not chunk: break
                 gz.write(chunk)
-        return buf.getvalue(), raw_len
+        return gzpath, raw_len
     finally:
         try: os.remove(tmp)
         except OSError: pass
@@ -9100,37 +9108,47 @@ def backup_to_drive():
         return {"ok": False, "error": "the Drive bridge is not configured"}
     _meta_set("backup_stage", "snapshotting")
     try:
-        blob, raw_len = _db_snapshot_gz()
+        gzpath, raw_len = _db_snapshot_gz()
     except Exception as e:
         return {"ok": False, "error": f"could not snapshot the database: {e}"}
-    # A backup nobody has opened is not a backup. Decompress the exact bytes
-    # about to be uploaded and confirm SQLite can read them.
-    _meta_set("backup_stage", "verifying")
     try:
-        import gzip, tempfile
-        fd, vt = tempfile.mkstemp(suffix=".db"); os.close(fd)
+        gz_len = os.path.getsize(gzpath)
+        fname = f"gibby-backup-{datetime.date.today().isoformat()}.db.gz"
+        b64_len = (gz_len + 2) // 3 * 4
+        if b64_len > 45_000_000:            # Apps Script refuses payloads near 50MB
+            # Checked BEFORE anything is read into memory: on a 512MB host the
+            # old in-memory path was the thing that crashed the app (Oct 2026).
+            _meta_set("backup_stage", "too big")
+            return {"ok": False, "error": f"the snapshot is too big to upload ({gz_len//1048576}MB compressed; "
+                                         f"the Render disk snapshot is the backup until the database is slimmed)"}
+        # A backup nobody has opened is not a backup. Decompress the exact bytes
+        # about to be uploaded, on disk, and confirm SQLite can read them.
+        _meta_set("backup_stage", "verifying")
         try:
-            with open(vt, "wb") as f:
-                f.write(gzip.decompress(blob))
-            v = sqlite3.connect(vt)
+            import gzip, tempfile, shutil
+            fd, vt = tempfile.mkstemp(suffix=".db"); os.close(fd)
             try:
-                ok = v.execute("PRAGMA integrity_check").fetchone()[0]
-                if ok != "ok":
-                    return {"ok": False, "error": f"the snapshot failed its integrity check ({ok})"}
-                counts = {t: v.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-                          for t in ("classes", "registrations", "users", "audit_log")}
+                with gzip.open(gzpath, "rb") as fin, open(vt, "wb") as f:
+                    shutil.copyfileobj(fin, f, 1 << 20)
+                v = sqlite3.connect(vt)
+                try:
+                    ok = v.execute("PRAGMA integrity_check").fetchone()[0]
+                    if ok != "ok":
+                        return {"ok": False, "error": f"the snapshot failed its integrity check ({ok})"}
+                    counts = {t: v.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+                              for t in ("classes", "registrations", "users", "audit_log")}
+                finally:
+                    v.close()
             finally:
-                v.close()
-        finally:
-            try: os.remove(vt)
-            except OSError: pass
-    except Exception as e:
-        return {"ok": False, "error": f"the snapshot could not be verified: {e}"}
-    _meta_set("backup_stage", f"uploading {len(blob)//1024}KB (from {raw_len//1024}KB)")
-    fname = f"gibby-backup-{datetime.date.today().isoformat()}.db.gz"
-    b64_len = (len(blob) + 2) // 3 * 4
-    if b64_len > 45_000_000:            # Apps Script refuses payloads near 50MB
-        return {"ok": False, "error": f"the snapshot is too big to upload ({len(blob)//1048576}MB compressed)"}
+                try: os.remove(vt)
+                except OSError: pass
+        except Exception as e:
+            return {"ok": False, "error": f"the snapshot could not be verified: {e}"}
+        _meta_set("backup_stage", f"uploading {gz_len//1024}KB (from {raw_len//1024}KB)")
+        with open(gzpath, "rb") as f: blob = f.read()
+    finally:
+        try: os.remove(gzpath)
+        except OSError: pass
     try:
         payload = json.dumps({"key": cfg.get("webhook_key",""), "action": "backup",
                               "filename": fname, "mime": "application/gzip",
