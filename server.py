@@ -43,7 +43,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # password is published in this repository.
 SEED_PW = os.environ.get("SEED_PASSWORD") or ("gen-" + secrets.token_urlsafe(12))
 SEED_PW_GENERATED = not os.environ.get("SEED_PASSWORD")
-VERSION = "10.119.1-new-host"
+VERSION = "10.119.2-reimb-refile"
 
 # ---------------------------------------------------------------- database ----
 def db():
@@ -6532,7 +6532,35 @@ class H(http.server.BaseHTTPRequestHandler):
                 f"once approved it goes to the treasurer with the form and your receipt{'s' if len(files) != 1 else ''} attached, and you will hear about the check ({delivery.lower()}).\n\n"
                 + (f"Your copy on Drive: {folder_link}\n\n" if folder_link else "") + "Thank you,\nThe Gibby", attachments=atts[:1])
             return self.send_json({"ok":True, "id": rid, "total": total, "folder": folder_link})
-        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid|approve|decline|resend)$", p)
+        mrp2 = re.match(r"^/api/admin/reimb/(\d+)/(paid|unpaid|approve|decline|resend|refile)$", p)
+        if mrp2 and mrp2.group(2) == "refile":
+            # File a request on Drive again (for requests submitted while the Drive
+            # bridge was down). Makes a fresh folder; the request itself is untouched.
+            u = self.require("admin")
+            if not u: return
+            rid = int(mrp2.group(1)); c = db()
+            r = c.execute("SELECT * FROM reimb_requests WHERE id=?", (rid,)).fetchone()
+            if not r: c.close(); return self.send_json({"error":"not found"},404)
+            row = dict(r); files = [dict(x) for x in c.execute("SELECT name, mime, b64 FROM reimb_files WHERE req_id=? ORDER BY id", (rid,)).fetchall()]
+            c.close()
+            try: items = json.loads(row.get("items") or "[]")
+            except Exception: items = []
+            ctitle = (row.get("class_title") or "Not for a class").strip()
+            pdf_bytes = pdfgen.contract_pdf(reimb_pdf_text(row, items, files), None, [f"Request #{rid}", f"Submitted {row['created'][:16].replace('T',' ')} by {row['name']}"])
+            folder_title = f"{row['name']} - {row['created'][:10]} - {ctitle}"
+            try:
+                res = push_photo_to_drive({"title": folder_title}, f"Reimbursement request #{rid}.pdf", base64.b64encode(pdf_bytes).decode(), "application/pdf", root="Gibby Reimbursements")
+                links = []
+                for i, f in enumerate(files, 1):
+                    ext = "pdf" if f["mime"] == "application/pdf" else "jpg"
+                    r2 = push_photo_to_drive({"title": folder_title}, f"Receipt {i} - {f['name'].rsplit('.',1)[0][:40]}.{ext}", f["b64"], f["mime"], root="Gibby Reimbursements")
+                    links.append({"name": f["name"], "link": r2.get("link")})
+            except Exception as e:
+                return self.send_json({"error": f"Drive filing failed: {e}"}, 502)
+            c = db()
+            c.execute("UPDATE reimb_requests SET drive_folder=?, pdf_link=?, receipts=? WHERE id=?", (res.get("folder"), res.get("link"), json.dumps(links), rid))
+            c.commit(); c.close()
+            return self.send_json({"ok": True, "folder": res.get("folder"), "pdf": res.get("link"), "receipts": links})
         if mrp2 and mrp2.group(2) == "resend":
             # Send an already-approved request to the treasurer again (for requests
             # that went out before the approval step existed, or got lost).
