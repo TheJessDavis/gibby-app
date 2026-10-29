@@ -1432,7 +1432,7 @@ async function adminDashboard(){
         <div style="font-weight:800;font-size:13.5px">${esc(c.title)}</div>
         <div class="meta" style="margin-top:2px">${esc(c.instructor_name)} · filled ${c.enrolled} of ${c.max_p} seats${c.rating_n?` · ★ ${c.rating_avg} (${c.rating_n})`:''} · last ran ${esc(c.slot_date||'')}</div>
         <button class="btn ghost" style="margin-top:8px;padding:8px 14px" onclick="rerunClass(${i})">Run it again</button></div>`).join('')}</div>`:''}
-    <div class="meta" style="margin:16px 2px 0"><a href="#" onclick="renderAdmin('connections');return false">Platform connections</a> · Eventbrite, Website, Facebook, Descene, Canva</div>`;
+    <div class="meta" style="margin:16px 2px 0"><a href="#" onclick="renderAdmin('connections');return false">Platform connections</a> · Eventbrite, Website, Facebook, DE Scene, Canva</div>`;
 }
 function classLastDate(c){
   const lbl=(c.sessions&&c.sessions.length)?c.sessions[c.sessions.length-1].date:c.slot_date;
